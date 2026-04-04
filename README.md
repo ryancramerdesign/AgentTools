@@ -243,3 +243,9 @@ echo "- $name has been applied\n";
 - The applied migrations registry is stored in the database (not in a file), so it
   is never overwritten when you rsync migration files to a server
 
+---
+
+## Community resources
+
+- **[processwire-ai-docs](https://github.com/gebeer/processwire-ai-docs)** by gebeer — A collection of AI agent skills for ProcessWire, including an AgentTools skill with a DDEV wrapper script (`pw-at.sh`) that automatically routes `--at-*` commands into the DDEV container when appropriate.
+
