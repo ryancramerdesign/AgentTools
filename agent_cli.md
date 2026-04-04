@@ -36,6 +36,26 @@ All commands are run from the ProcessWire root directory (where `index.php` live
 | `php index.php --at-migrations-list` | List migrations and their status |
 | `php index.php --at-migrations-test` | Preview pending without applying |
 
+### When to use `--at-eval` vs `--at-stdin`
+
+`--at-eval` is convenient for simple expressions but is subject to shell escaping
+rules — single quotes, double quotes, dollar signs, and backticks in the PHP code
+can conflict with the shell. For anything beyond a simple one-liner, prefer
+`--at-stdin` with a single-quoted heredoc, which passes PHP code verbatim:
+
+~~~~~
+cat <<'PHP' | php index.php --at-stdin
+$items = $pages->find("template=blog-post, sort=-modified, limit=10");
+foreach($items as $item) {
+    $date = date('Y-m-d', $item->modified);
+    echo "{$date} | {$item->title} | {$item->url}\n";
+}
+PHP
+~~~~~
+
+The single-quoted delimiter (`<<'PHP'`) prevents the shell from interpreting
+`$variables`, so PHP variables pass through untouched.
+
 ---
 
 ## agent_cli.php
