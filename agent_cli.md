@@ -80,16 +80,6 @@ available. They are documented with PHPDoc at the top of the file.
   before attempting to fix it.
 - For quick one-off operations, prefer `--at-eval` or `--at-stdin` over editing
   `agent_cli.php`.
-- Use `--at-eval` for simple single-line expressions only. For anything involving
-  variables, loops, or multiple statements, use `--at-stdin` instead.
-- When using `--at-stdin`, use single-quoted strings in your shell heredoc to
-  prevent the shell from expanding `$variable` syntax before it reaches PHP:
-~~~~~
-echo '
-$count = $pages->count();
-echo "Pages: $count\n";
-' | php index.php --at-stdin
-~~~~~
 
 ---
 
