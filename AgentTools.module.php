@@ -17,7 +17,7 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 			'title' => 'Agent Tools',
 			'summary' => 'Enables AI coding agents to access ProcessWire’s API and provides a database migration system.',
 			'icon' => 'asterisk',
-			'version' => 1,
+			'version' => 2,
 			'author' => 'Ryan Cramer and Claude (Anthropic)',
 			'requires' => 'ProcessWire>=3.0.255',
 			'installs' => 'ProcessAgentTools',
@@ -91,7 +91,7 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 				echo "// agent_cli.php: $file\n";
 				$success = include($file);
 			} else {
-				$this->error('Unable to locate agent_cli.php file');
+				echo "ERROR: Unable to locate agent_cli.php file\n";
 			}
 
 		} else if($atAction === 'eval' && !empty($GLOBALS['argv'][2])) {
@@ -260,15 +260,26 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 	public function getModuleConfigInputfields(InputfieldWrapper $inputfields) {
 
 		// Handle _install_skill action on config save
-		if($this->wire()->input->requestMethod('POST') && $this->wire()->input->post('_install_skill')) {
+		if($this->wire()->input->post('_install_skill')) {
 			$this->doInstallSkill();
 		}
 
+		$skillPath = $this->getSkillPath();
 		$f = $inputfields->InputfieldCheckbox;
 		$f->attr('name', '_install_skill');
-		$f->label = $this->_('Install agent skill to project');
-		$f->description = $this->_('Copies the AgentTools skill files to .agents/skills/processwire-agenttools/ in the project root.');
+		$f->label = $this->_('Install agent skill to project?');
+		$f->description = sprintf($this->_('Copies the AgentTools skill files to: %s'), $skillPath);
 		$f->val(0);
+		$f->themeOffset = 1; 
+		if(is_dir($skillPath)) {
+			$f->collapsed = Inputfield::collapsedYes; 
+			$f->notes = $this->_('Note that the skill files are already installed. This would re-install it.');
+			$f->label2 = $f->label;
+			$f->label = $this->_('Skill files are installed!'); 
+			$f->icon = 'check';
+		} else {
+			$f->notes = $this->_('Installation recommended in dev environments.'); 
+		}
 		$inputfields->add($f);
 
 		$f = $inputfields->InputfieldToggle;
@@ -281,27 +292,57 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 	}
 
 	/**
+	 * Get the path for AgentTools skill
+	 * 
+	 * @param bool $getSrc Get source path for skill rather than destination?
+	 * @return string
+	 * 
+	 */
+	protected function getSkillPath($getSrc = false) {
+		$dir = 'agents/skills/processwire-agenttools/';
+		if($getSrc) {
+			$path = __DIR__ . "/$dir";
+		} else {
+			$path = $this->wire()->config->paths->root . ".$dir";
+		}
+		return $path;
+	}
+	
+	/**
 	 * Copy agent skill files to the project root
 	 *
 	 */
 	protected function doInstallSkill() {
-		$srcDir = __DIR__ . '/agents/skills/processwire-agenttools/';
+		$srcDir = $this->getSkillPath(true); 
 		if(!is_dir($srcDir)) {
-			$this->error($this->_('Skill source directory not found in module.'));
+			$this->error($this->_('Skill source directory not found in module:') . " $srcDir");
 			return;
 		}
 
-		$destDir = $this->wire()->config->paths->root . '.agents/skills/processwire-agenttools/';
+		$destDir = $this->getSkillPath();
 		$files = $this->wire()->files;
 
-		if(!is_dir(dirname($destDir))) {
-			$files->mkdir(dirname($destDir), true);
-		}
-
-		if($files->copy($srcDir, $destDir)) {
-			$this->message($this->_('Agent skill installed to .agents/skills/processwire-agenttools/'));
+		if(!is_dir($destDir)) {
+			$writable = $files->mkdir(dirname($destDir), true);
 		} else {
-			$this->error($this->_('Failed to install agent skill files.'));
+			$writable = is_writable($destDir);
+		}
+		
+		$howTo = sprintf(
+			$this->_('To install agent skill, please manually copy %1$s to %2$s'),
+			$srcDir, $destDir
+		);
+		
+		if(!$writable) {
+			$this->error($this->_('ProcessWire root directory is not writable.') . " $howTo");
+
+		} else if($files->copy($srcDir, $destDir)) {
+			$this->wire()->session->message(sprintf(
+				$this->_('Agent skill installed to: %s'), 
+				$destDir
+			));
+		} else {
+			$this->error($this->_('Failed to copy agent skill files.') . " $howTo"); 
 		}
 	}
 
@@ -313,7 +354,7 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 	 *
 	 */
 	public function ___upgrade($fromVersion, $toVersion) {
-		$destDir = $this->wire()->config->paths->root . '.agents/skills/processwire-agenttools/';
+		$destDir = $this->getSkillPath();
 		if(is_dir($destDir)) $this->doInstallSkill();
 	}
 
