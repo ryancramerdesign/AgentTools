@@ -4,7 +4,7 @@
  * Agent CLI file
  *
  * This file is for AI coding agents (e.g. Claude Code) to edit.
- * Please see agent_cli.md for instructions.
+ * Write code after the AGENT marker below. All PW API variables are available.
  *
  */
 

@@ -241,6 +241,19 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 	 *
 	 */
 	public function getModuleConfigInputfields(InputfieldWrapper $inputfields) {
+
+		// Handle installSkill action on config save
+		if($this->wire()->input->requestMethod('POST') && $this->wire()->input->post('installSkill')) {
+			$this->doInstallSkill();
+		}
+
+		$f = $inputfields->InputfieldCheckbox;
+		$f->attr('name', 'installSkill');
+		$f->label = $this->_('Install agent skill to project');
+		$f->description = $this->_('Copies the AgentTools skill files to .agents/skills/processwire-agenttools/ in the project root.');
+		if($this->installSkill) $f->attr('checked', 'checked');
+		$inputfields->add($f);
+
 		$f = $inputfields->InputfieldToggle;
 		$f->attr('name', '_uninstall_files');
 		$f->label = $this->_('Also delete AgentTools files in /site/assets/at/');
@@ -248,6 +261,42 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 		$f->showIf = 'uninstall=AgentTools';
 		$f->val(0);
 		$inputfields->add($f);
+	}
+
+	/**
+	 * Copy agent skill files to the project root
+	 *
+	 */
+	protected function doInstallSkill() {
+		$srcDir = __DIR__ . '/agents/skills/processwire-agenttools/';
+		if(!is_dir($srcDir)) {
+			$this->error($this->_('Skill source directory not found in module.'));
+			return;
+		}
+
+		$destDir = $this->wire()->config->paths->root . '.agents/skills/processwire-agenttools/';
+		$files = $this->wire()->files;
+
+		if(!is_dir(dirname($destDir))) {
+			$files->mkdir(dirname($destDir), true);
+		}
+
+		if($files->copy($srcDir, $destDir)) {
+			$this->message($this->_('Agent skill installed to .agents/skills/processwire-agenttools/'));
+		} else {
+			$this->error($this->_('Failed to install agent skill files.'));
+		}
+	}
+
+	/**
+	 * Upgrade module
+	 *
+	 * @param int|string $fromVersion
+	 * @param int|string $toVersion
+	 *
+	 */
+	public function ___upgrade($fromVersion, $toVersion) {
+		if($this->installSkill) $this->doInstallSkill();
 	}
 
 	/**
