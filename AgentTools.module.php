@@ -10,6 +10,7 @@
  * Copyright 2026 Ryan Cramer and Claude (Anthropic) | MIT
  * 
  * @property AgentToolsMigrations $migrations
+ * @property AgentToolsSiteMap $sitemap
  *
  */
 class AgentTools extends WireData implements Module, ConfigurableModule {
@@ -41,8 +42,9 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 	 * 
 	 */
 	protected $helpers = [
-		'migrations' => null, 
-		'skills' => null, 
+		'migrations' => null,
+		'skills' => null,
+		'sitemap' => null,
 	];
 
 	/**

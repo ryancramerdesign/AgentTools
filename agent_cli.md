@@ -35,6 +35,7 @@ All commands are run from the ProcessWire root directory (where `index.php` live
 | `php index.php --at-migrations-apply` | Apply all pending migrations |
 | `php index.php --at-migrations-list` | List migrations and their status |
 | `php index.php --at-migrations-test` | Preview pending without applying |
+| `php index.php --at-sitemap-generate` | Generate a JSON site map to `site/assets/at/site-map.json` |
 
 ### When to use `--at-eval` vs `--at-stdin`
 
@@ -55,6 +56,22 @@ PHP
 
 The single-quoted delimiter (`<<'PHP'`) prevents the shell from interpreting
 `$variables`, so PHP variables pass through untouched.
+
+---
+
+## Site map
+
+Running `--at-sitemap-generate` writes a JSON file to `site/assets/at/site-map.json`
+covering the full scope of the installation:
+
+- **templates** — name, label, fields list, parent/child template restrictions
+- **fields** — name, label, fieldtype
+- **pages** — hierarchical tree (3 levels deep by default), with `children_count`
+  at each node so deeper branches are visible without being expanded
+- **modules** — all installed non-core modules
+
+Run this at the start of a session on an unfamiliar site to get a complete
+picture of its structure before making any changes.
 
 ---
 
