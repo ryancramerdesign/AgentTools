@@ -74,6 +74,13 @@ The agent may modify anything in `agent_cli.php` **after** the marker line:
 After that marker, ProcessWire is fully booted and all API variables are
 available. They are documented with PHPDoc at the top of the file.
 
+When `--at-cli` starts, the first line of output indicates which file is active:
+~~~~~
+// agent_cli.php: /path/to/site/modules/AgentTools/agent_cli.php
+~~~~~
+Always edit the file indicated in that output. On servers where the modules
+directory is not writable, the active file will be in `site/assets/at/` instead.
+
 ### Notes
 
 - If something doesn't appear to be working correctly, report the error and ask

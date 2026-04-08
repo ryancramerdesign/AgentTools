@@ -75,7 +75,24 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 		extract($fuel);
 
 		if($atAction === 'cli') {
-			$success = include(__DIR__ . '/agent_cli.php');
+			$name = 'agent_cli.php';
+			$srcFile = __DIR__ . "/$name";
+			if(is_writable($srcFile)) {
+				// site/modules/AgentTools/agent_cli.php
+				$file = $srcFile;
+			} else {
+				// site/assets/at/agent_cli.php
+				$file = $this->getFilesPath() . $name;
+				if(!file_exists($file)) {
+					$this->wire()->files->copy($srcFile, $file);
+				}
+			}
+			if(file_exists($file)) {
+				echo "// agent_cli.php: $file\n";
+				$success = include($file);
+			} else {
+				$this->error('Unable to locate agent_cli.php file');
+			}
 
 		} else if($atAction === 'eval' && !empty($GLOBALS['argv'][2])) {
 			$success = $this->cliEval($GLOBALS['argv'][2], $fuel);
