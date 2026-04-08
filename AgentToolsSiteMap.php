@@ -110,11 +110,31 @@ class AgentToolsSiteMap extends AgentToolsHelper {
 			];
 			if($template->noChildren) $entry['noChildren'] = true;
 			if($template->noParents) $entry['noParents'] = (int) $template->noParents;
-			if(count($template->childTemplates)) $entry['childTemplates'] = $template->childTemplates;
-			if(count($template->parentTemplates)) $entry['parentTemplates'] = $template->parentTemplates;
+			if(count($template->childTemplates)) {
+				$entry['childTemplates'] = $this->templateIdsToNames($template->childTemplates);
+			}
+			if(count($template->parentTemplates)) {
+				$entry['parentTemplates'] = $this->templateIdsToNames($template->parentTemplates);
+			}
 			$data[] = $entry;
 		}
 		return $data;
+	}
+
+	/**
+	 * Convert an array of template IDs to template names
+	 *
+	 * @param array $ids
+	 * @return array
+	 *
+	 */
+	protected function templateIdsToNames(array $ids) {
+		$names = [];
+		foreach($ids as $id) {
+			$t = $this->wire()->templates->get((int) $id);
+			if($t) $names[] = $t->name;
+		}
+		return $names;
 	}
 
 	/**
