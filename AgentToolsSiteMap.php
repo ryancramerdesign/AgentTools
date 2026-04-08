@@ -64,10 +64,13 @@ class AgentToolsSiteMap extends AgentToolsHelper {
 
 		echo "Generating site map…\n";
 
+		$pageCounts = $this->getPageCountsByTemplate();
+
 		$data = [
 			'generated' => date('Y-m-d H:i:s'),
 			'processwire' => $this->wire()->config->version,
-			'templates' => $this->getTemplatesData(),
+			'site' => $this->getSiteData(),
+			'templates' => $this->getTemplatesData($pageCounts),
 			'fields' => $this->getFieldsData(),
 			'pages' => $this->getPagesData($depth),
 			'modules' => $this->getModulesData(),
@@ -96,12 +99,49 @@ class AgentToolsSiteMap extends AgentToolsHelper {
 	}
 
 	/**
-	 * Get templates data
+	 * Get site info data
 	 *
 	 * @return array
 	 *
 	 */
-	protected function getTemplatesData() {
+	protected function getSiteData() {
+		$config = $this->wire()->config;
+		$scheme = $config->https ? 'https' : 'http';
+		$homepage = $this->wire()->pages->get('/');
+		return [
+			'name' => ((string) $homepage->get('title')) ?: $config->httpHost,
+			'url' => $scheme . '://' . $config->httpHost . $config->urls->root,
+			'admin' => $config->urls->admin,
+			'multilanguage' => $this->wire()->modules->isInstalled('LanguageSupport'),
+		];
+	}
+
+	/**
+	 * Get page counts indexed by template ID (single query)
+	 *
+	 * @return array [ templateId => count ]
+	 *
+	 */
+	protected function getPageCountsByTemplate() {
+		$database = $this->wire()->database;
+		$trashStatus = Page::statusTrash;
+		$stmt = $database->prepare("SELECT templates_id, COUNT(*) AS cnt FROM pages WHERE status < :trashStatus GROUP BY templates_id");
+		$stmt->execute([':trashStatus' => $trashStatus]);
+		$counts = [];
+		while($row = $stmt->fetch(\PDO::FETCH_NUM)) {
+			$counts[(int) $row[0]] = (int) $row[1];
+		}
+		return $counts;
+	}
+
+	/**
+	 * Get templates data
+	 *
+	 * @param array $pageCounts Page counts indexed by template ID
+	 * @return array
+	 *
+	 */
+	protected function getTemplatesData(array $pageCounts = []) {
 		$data = [];
 		foreach($this->wire()->templates as $template) {
 			if($template->flags & Template::flagSystem) continue;
@@ -113,7 +153,12 @@ class AgentToolsSiteMap extends AgentToolsHelper {
 				'name' => $template->name,
 				'label' => $template->label ?: $template->name,
 				'fields' => $fields,
+				'page_count' => $pageCounts[$template->id] ?? 0,
 			];
+			$filename = $template->filename();
+			if($filename && is_file($filename)) {
+				$entry['file'] = str_replace($this->wire()->config->paths->root, '', $filename);
+			}
 			if(count($template->childTemplates)) {
 				$entry['childTemplates'] = $this->templateIdsToNames($template->childTemplates);
 			}
