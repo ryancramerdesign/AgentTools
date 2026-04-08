@@ -242,16 +242,16 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 	 */
 	public function getModuleConfigInputfields(InputfieldWrapper $inputfields) {
 
-		// Handle installSkill action on config save
-		if($this->wire()->input->requestMethod('POST') && $this->wire()->input->post('installSkill')) {
+		// Handle _install_skill action on config save
+		if($this->wire()->input->requestMethod('POST') && $this->wire()->input->post('_install_skill')) {
 			$this->doInstallSkill();
 		}
 
 		$f = $inputfields->InputfieldCheckbox;
-		$f->attr('name', 'installSkill');
+		$f->attr('name', '_install_skill');
 		$f->label = $this->_('Install agent skill to project');
 		$f->description = $this->_('Copies the AgentTools skill files to .agents/skills/processwire-agenttools/ in the project root.');
-		if($this->installSkill) $f->attr('checked', 'checked');
+		$f->val(0);
 		$inputfields->add($f);
 
 		$f = $inputfields->InputfieldToggle;
@@ -296,7 +296,8 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 	 *
 	 */
 	public function ___upgrade($fromVersion, $toVersion) {
-		if($this->installSkill) $this->doInstallSkill();
+		$destDir = $this->wire()->config->paths->root . '.agents/skills/processwire-agenttools/';
+		if(is_dir($destDir)) $this->doInstallSkill();
 	}
 
 	/**

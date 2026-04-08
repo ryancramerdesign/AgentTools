@@ -60,24 +60,23 @@ export PATH=/Applications/MAMP/bin/php/php8.2.26/bin:$PATH
 Chances are you won't have to do anything like that though. Next, please continue with connecting 
 Claude Code (below).
 
-### Connecting your AI coding agent
+### Connecting Claude Code:
 
-1. In the module config (Modules > AgentTools), check "Install agent skill to project" and submit.
-   This copies the AgentTools skill to `.agents/skills/processwire-agenttools/` in your project root.
-2. Most AI coding agents discover skills from `.agents/skills/` automatically. If yours doesn't
-   (e.g. Claude Code uses `.claude/skills/`), symlink the skill directory into the location your
-   agent expects.
-3. Test by asking your agent what your 3 newest pages are!
+1. Open Claude Code in the root of your website directory.
+2. Ask Claude Code to read the `/site/modules/AgentTools/CLAUDE.md` file.
+3. Claude should also read the `/site/modules/AgentTools/agent_cli.md` file automatically, but maybe ask to confirm, especially if using something other than Claude Code.
+4. Now you are ready to use Claude Code with ProcessWire! Test things out by asking Claude what your 3 newest pages are, or whatever suits your fancy!
 
-If your agent doesn't support skills, have it read `/site/modules/AgentTools/CLAUDE.md` for
-a basic command reference.
+### Agent skill (optional)
 
-### Agent skill
+The module ships with an agent skill in `agents/skills/processwire-agenttools/` — a set of
+markdown docs that teach AI coding agents how to use the CLI and migration system. Agents that
+support the `.agents/skills/` convention will discover it automatically once installed.
 
-The module ships with an agent skill in `agents/skills/processwire-agenttools/` that teaches
-AI coding agents how to use the CLI and migration system correctly. The skill is installed to
-your project root via the module config checkbox and is automatically updated on module upgrades
-when enabled.
+To install the skill to your project root, check "Install agent skill to project" in the module
+config (Modules > AgentTools) and submit. This copies the skill files to
+`.agents/skills/processwire-agenttools/` in your project root, and will keep them updated
+automatically on future module upgrades.
 
 ### Migrations feature
 
@@ -178,7 +177,7 @@ echo "Created template: " . $t->name . "\n";
 
 **`--at-cli`** opens an interactive session where Claude can write code to `agent_cli.php`
 and run it, with full access to all ProcessWire API variables (`$pages`, `$templates`,
-`$fields`, `$modules`, etc.). See the agent skill's `cli.md` for full details.
+`$fields`, `$modules`, etc.). See `agent_cli.md` for full details.
 
 ---
 
