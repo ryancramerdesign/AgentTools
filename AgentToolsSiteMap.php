@@ -22,6 +22,12 @@ class AgentToolsSiteMap extends AgentToolsHelper {
 	const defaultDepth = 3;
 
 	/**
+	 * Max children to show per page node (remaining noted via children_count)
+	 *
+	 */
+	const childSample = 5;
+
+	/**
 	 * Get array of CLI help [ 'syntax' => 'description' ]
 	 *
 	 * @return array
@@ -190,10 +196,13 @@ class AgentToolsSiteMap extends AgentToolsHelper {
 		$data['children_count'] = $childCount;
 
 		if($depth > 0 && $childCount > 0) {
-			$children = $page->children('include=all, status<' . Page::statusTrash);
+			$children = $page->children('include=all, status<' . Page::statusTrash . ', limit=' . self::childSample);
 			$data['children'] = [];
 			foreach($children as $child) {
 				$data['children'][] = $this->getPageData($child, $depth - 1);
+			}
+			if($childCount > self::childSample) {
+				$data['children_shown'] = self::childSample;
 			}
 		}
 
