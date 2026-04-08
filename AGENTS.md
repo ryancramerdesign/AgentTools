@@ -31,3 +31,7 @@ so it is never overwritten by rsync or file transfers.
 
 Migrations can also be applied from the ProcessWire admin at **Setup > Agent Tools**.
 
+
+## Further reading
+
+- `agent_cli.md` — full details on migrations, `--at-cli` session usage, and conventions
