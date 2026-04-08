@@ -114,8 +114,6 @@ class AgentToolsSiteMap extends AgentToolsHelper {
 				'label' => $template->label ?: $template->name,
 				'fields' => $fields,
 			];
-			if($template->noChildren) $entry['noChildren'] = true;
-			if($template->noParents) $entry['noParents'] = (int) $template->noParents;
 			if(count($template->childTemplates)) {
 				$entry['childTemplates'] = $this->templateIdsToNames($template->childTemplates);
 			}
