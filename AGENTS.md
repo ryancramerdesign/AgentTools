@@ -19,7 +19,17 @@ Run from the ProcessWire root directory (where `index.php` lives):
 | `php index.php --at-migrations-apply` | Apply all pending migrations |
 | `php index.php --at-migrations-list` | List migrations and their status |
 | `php index.php --at-migrations-test` | Preview pending without applying |
+| `php index.php --at-sitemap-generate` | Generate a JSON site map to `site/assets/at/site-map.json` |
 | `php index.php --at-cli` | Open an interactive agent CLI session |
+
+## Getting oriented on a new site
+
+If you are working on a site for the first time, run:
+```
+php index.php --at-sitemap-generate
+```
+Then read `site/assets/at/site-map.json` to get a complete picture of the site's
+templates, fields, page tree, and installed modules before making any changes.
 
 ## Migrations
 
