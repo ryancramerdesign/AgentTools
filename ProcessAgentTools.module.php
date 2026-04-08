@@ -75,7 +75,7 @@ class ProcessAgentTools extends Process {
 
 		$pendingCount = 0;
 		foreach($migrationFiles as $file) {
-			if(!$at->isMigrationApplied($file)) $pendingCount++;
+			if(!$at->migrations->isApplied($file)) $pendingCount++;
 		}
 
 		/** @var MarkupAdminDataTable $table */
@@ -91,7 +91,7 @@ class ProcessAgentTools extends Process {
 		$labelPending = $this->_('Pending');
 
 		foreach($migrationFiles as $file) {
-			$applied = $at->isMigrationApplied($file);
+			$applied = $at->migrations->isApplied($file);
 			$status = $applied
 				? "<span class='ui-priority-secondary'>$labelApplied</span>"
 				: "<strong class='ui-priority-primary'>$labelPending</strong>";
@@ -143,7 +143,7 @@ class ProcessAgentTools extends Process {
 
 		$pending = [];
 		foreach($migrationFiles as $file) {
-			if(!$at->isMigrationApplied($file)) $pending[] = $file;
+			if(!$at->migrations->isApplied($file)) $pending[] = $file;
 		}
 
 		if(empty($pending)) {
@@ -163,7 +163,7 @@ class ProcessAgentTools extends Process {
 			try {
 				include($file);
 				$fileOutput = ob_get_clean();
-				$at->addAppliedMigration($file);
+				$at->migrations->addApplied($file);
 				$passCount++;
 				$results[] = [
 					'file' => basename($file),

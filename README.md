@@ -223,7 +223,7 @@ Every migration follows this structure:
 ```php
 <?php namespace ProcessWire;
 
-$name = wire('at')->getMigrationName(__FILE__);
+$name = wire('at')->migrations->getName(__FILE__);
 echo "# $name\n\n";
 
 // Idempotency check — skip if change already exists

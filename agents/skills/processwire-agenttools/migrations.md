@@ -27,7 +27,7 @@ Description uses page-name format (lowercase, hyphens). Sanitize with `$sanitize
 ```php
 <?php namespace ProcessWire;
 
-$name = wire('at')->getMigrationName(__FILE__);
+$name = wire('at')->migrations->getName(__FILE__);
 echo "# $name\n\n";
 
 // Idempotency — skip if already done

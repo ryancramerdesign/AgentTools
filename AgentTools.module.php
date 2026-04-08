@@ -8,6 +8,8 @@
  * across environments.
  *
  * Copyright 2026 Ryan Cramer and Claude (Anthropic) | MIT
+ * 
+ * @property AgentToolsMigrations $migrations
  *
  */
 class AgentTools extends WireData implements Module, ConfigurableModule {
@@ -31,6 +33,17 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 	 *
 	 */
 	const name = 'at';
+
+	/**
+	 * Helpers indexed by name
+	 * 
+	 * @var array|AgentToolsHelper[] 
+	 * 
+	 */
+	protected $helpers = [
+		'migrations' => null, 
+		'skills' => null, 
+	];
 
 	/**
 	 * Called when module is wired to API
@@ -101,13 +114,21 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 			$code = file_get_contents('php://stdin');
 			if(strlen(trim($code))) $success = $this->cliEval($code, $fuel);
 
-		} else if(strpos($atAction, 'migrations-') === 0) {
-			$atAction = str_replace('migrations-', '', $atAction);
-			$success = include(__DIR__ . '/agent_migrate.php');
-
 		} else {
-			echo "Unrecognized AgentTools action: $atAction\n";
-			$success = false;
+			$found = false;
+			foreach(array_keys($this->helpers) as $name) {
+				if(strpos($atAction, "$name-") !== 0) continue;
+				$act = str_replace("$name-", '', $atAction);
+				$helper = $this->getHelper($name);
+				if(!$helper) continue;
+				$success = $helper->cliExecute($act); 
+				$found = true;
+				break;
+			}
+			if(!$found) {
+				echo "Unrecognized AgentTools action: $atAction\n";
+				$success = false;
+			}
 		}
 
 		chdir($originalDir);
@@ -144,72 +165,83 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 	}
 
 	/**
+	 * Get array of CLI help [ 'syntax' => 'description' ]
+	 *
+	 * @return array
+	 *
+	 */
+	protected function cliHelp() {
+		$help = [
+			"php index.php --at-cli" => "Used by AI agents to work with the ProcessWire API",
+			"php index.php --at-eval 'CODE'" => "Evaluate a PHP expression",
+			"echo 'CODE' | php index.php --at-stdin" => "Evaluate PHP code from stdin",
+		];
+		foreach($this->getHelpers() as $helper) {
+			$help += $helper->cliHelp(); 
+		}
+		return $help;	
+	}
+
+	/**
 	 * Render CLI summary of available commands
 	 *
 	 * @return string
 	 *
 	 */
-	protected function renderHelp() {
-		return
-			"\nProcessWire AgentTools:\n" .
-			str_repeat('=', 60) . "\n\n" .
-			"Usage:\n" .
-			"  php index.php --at-cli                    Used by AI agents to work with the ProcessWire API\n" .
-			"  php index.php --at-eval 'CODE'            Evaluate a PHP expression\n" .
-			"  echo 'CODE' | php index.php --at-stdin    Evaluate PHP code from stdin\n" .
-			"  php index.php --at-migrations-apply       Apply all pending migrations\n" .
-			"  php index.php --at-migrations-list        List migrations and their status\n" .
-			"  php index.php --at-migrations-test        Preview pending without applying\n" .
-			"\n";
-	}
-
-	/**
-	 * Get the migration name from its filename
-	 *
-	 * @param string $file Full path or basename of migration file
-	 * @return string e.g. "add-blog-post-template"
-	 *
-	 */
-	public function getMigrationName($file) {
-		[, $name] = explode('_', basename($file, '.php'), 2);
-		return $name;
-	}
-
-	/**
-	 * Get applied migrations registry from module config
-	 *
-	 * @return array Array of applied migration basenames
-	 *
-	 */
-	public function getAppliedMigrations() {
-		$applied = $this->wire()->modules->getConfig($this, 'appliedMigrations');
-		return is_array($applied) ? $applied : [];
-	}
-
-	/**
-	 * Is the given migration already applied?
-	 *
-	 * @param string $file Full path or basename of migration file
-	 * @return bool
-	 *
-	 */
-	public function isMigrationApplied($file) {
-		return in_array(basename($file), $this->getAppliedMigrations());
-	}
-
-	/**
-	 * Record a migration as applied in the registry
-	 *
-	 * @param string $file Full path or basename of migration file
-	 *
-	 */
-	public function addAppliedMigration($file) {
-		$applied = $this->getAppliedMigrations();
-		$basename = basename($file);
-		if(!in_array($basename, $applied)) {
-			$applied[] = $basename;
-			$this->wire()->modules->saveConfig($this, 'appliedMigrations', $applied);
+	public function renderHelp(array $help = [], $label = 'Usage') {
+		if(empty($help)) $help = $this->cliHelp();
+		$maxCodeLength = 0; 
+		
+		foreach($help as $code => $desc) {
+			$length = strlen($code);
+			if($length > $maxCodeLength) $maxCodeLength = $length;
 		}
+		
+		$maxCodeLength += 3; 
+		
+		$out = 
+			"\nProcessWire AgentTools" . 
+			"\n======================" . 
+			"\n$label:\n";
+		
+		foreach($help as $code => $desc) {
+			while(strlen($code) < $maxCodeLength) $code .= ' ';
+			$out .= "  $code $desc\n";
+		}
+	
+		return $out;
+	}
+
+	/**
+	 * Get all AgentTools helpers
+	 * 
+	 * @return AgentToolsHelper[] Indexed by helper name
+	 * 
+	 */
+	protected function getHelpers() {
+		foreach($this->helpers as $name => $helper) {
+			if($helper === null) $this->getHelper($name);
+		}
+		return $this->helpers; 
+	}
+
+	/**
+	 * Get helper by name
+	 * 
+	 * @param string $name
+	 * @return AgentToolsHelper|null
+	 * 
+	 */
+	protected function getHelper($name) {
+		if(isset($this->helpers[$name])) return $this->helpers[$name];
+		if(!array_key_exists($name, $this->helpers)) return null;
+		$class = 'AgentTools' . ucfirst($name);
+		$file = __DIR__ . "/$class.php";
+		include_once(__DIR__ . '/AgentToolsHelper.php');
+		include_once($file);
+		$class = wireClassName($class, true);
+		$this->helpers[$name] = new $class($this);
+		return $this->helpers[$name];
 	}
 
 	/**
@@ -258,29 +290,10 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 	 *
 	 */
 	public function getModuleConfigInputfields(InputfieldWrapper $inputfields) {
-
-		// Handle _install_skill action on config save
-		if($this->wire()->input->post('_install_skill')) {
-			$this->doInstallSkill();
+		
+		foreach($this->getHelpers() as $helper) {
+			$helper->getConfigInputfields($inputfields);
 		}
-
-		$skillPath = $this->getSkillPath();
-		$f = $inputfields->InputfieldCheckbox;
-		$f->attr('name', '_install_skill');
-		$f->label = $this->_('Install agent skill to project?');
-		$f->description = sprintf($this->_('Copies the AgentTools skill files to: %s'), $skillPath);
-		$f->val(0);
-		$f->themeOffset = 1; 
-		if(is_dir($skillPath)) {
-			$f->collapsed = Inputfield::collapsedYes; 
-			$f->notes = $this->_('Note that the skill files are already installed. This would re-install it.');
-			$f->label2 = $f->label;
-			$f->label = $this->_('Skill files are installed!'); 
-			$f->icon = 'check';
-		} else {
-			$f->notes = $this->_('Installation recommended in dev environments.'); 
-		}
-		$inputfields->add($f);
 
 		$f = $inputfields->InputfieldToggle;
 		$f->attr('name', '_uninstall_files');
@@ -292,58 +305,16 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 	}
 
 	/**
-	 * Get the path for AgentTools skill
+	 * Get property
 	 * 
-	 * @param bool $getSrc Get source path for skill rather than destination?
-	 * @return string
+	 * @param string $key
+	 * @return mixed
 	 * 
 	 */
-	protected function getSkillPath($getSrc = false) {
-		$dir = 'agents/skills/processwire-agenttools/';
-		if($getSrc) {
-			$path = __DIR__ . "/$dir";
-		} else {
-			$path = $this->wire()->config->paths->root . ".$dir";
-		}
-		return $path;
-	}
-	
-	/**
-	 * Copy agent skill files to the project root
-	 *
-	 */
-	protected function doInstallSkill() {
-		$srcDir = $this->getSkillPath(true); 
-		if(!is_dir($srcDir)) {
-			$this->error($this->_('Skill source directory not found in module:') . " $srcDir");
-			return;
-		}
-
-		$destDir = $this->getSkillPath();
-		$files = $this->wire()->files;
-
-		if(!is_dir($destDir)) {
-			$writable = $files->mkdir(dirname($destDir), true);
-		} else {
-			$writable = is_writable($destDir);
-		}
-		
-		$howTo = sprintf(
-			$this->_('To install agent skill, please manually copy %1$s to %2$s'),
-			$srcDir, $destDir
-		);
-		
-		if(!$writable) {
-			$this->error($this->_('ProcessWire root directory is not writable.') . " $howTo");
-
-		} else if($files->copy($srcDir, $destDir)) {
-			$this->wire()->session->message(sprintf(
-				$this->_('Agent skill installed to: %s'), 
-				$destDir
-			));
-		} else {
-			$this->error($this->_('Failed to copy agent skill files.') . " $howTo"); 
-		}
+	public function get($key) {
+		$helper = $this->getHelper($key);
+		if($helper) return $helper; 
+		return parent::get($key);
 	}
 
 	/**
@@ -354,8 +325,9 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 	 *
 	 */
 	public function ___upgrade($fromVersion, $toVersion) {
-		$destDir = $this->getSkillPath();
-		if(is_dir($destDir)) $this->doInstallSkill();
+		foreach($this->getHelpers() as $helper) {
+			$helper->upgrade($fromVersion, $toVersion);
+		}
 	}
 
 	/**
@@ -376,5 +348,58 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 			$path = $this->getFilesPath();
 			$this->wire()->files->rmdir($path, true);
 		}
+	}
+
+	/**
+	 * MIGRATIONS METHODS (deprecated/moved to AgentToolsMigrations)
+	 * 
+	 */
+	
+	/**
+	 * Get the migration name from its filename
+	 *
+	 * @param string $file Full path or basename of migration file
+	 * @return string e.g. "add-blog-post-template"
+	 * @deprecated use $at->migrations->getName() instead
+	 *
+	 */
+	public function getMigrationName($file) {
+		return $this->migrations->getName($file);
+	}
+
+	/**
+	 * Get applied migrations registry from module config
+	 *
+	 * @return array Array of applied migration basenames
+	 * @deprecated use $at->migrations->getApplied() instead
+	 *
+	 */
+	public function getAppliedMigrations() {
+		return $this->migrations->getApplied();
+	}
+
+	/**
+	 * Is the given migration already applied?
+	 *
+	 * @param string $file Full path or basename of migration file
+	 *
+	 * @return bool
+	 * @deprecated use $at->migrations->isApplied() instead
+	 *
+	 */
+	public function isMigrationApplied($file) {
+		return $this->migrations->isApplied($file);
+	}
+
+	/**
+	 * Record a migration as applied in the registry
+	 *
+	 * @param string $file Full path or basename of migration file
+	 *
+	 * @deprecated use $at->migrations->addApplied() instead
+	 *
+	 */
+	public function addAppliedMigration($file) {
+		$this->migrations->addApplied($file);
 	}
 }

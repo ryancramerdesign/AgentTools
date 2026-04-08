@@ -147,7 +147,7 @@ Every migration should follow this structure:
 ~~~~~
 <?php namespace ProcessWire;
 
-$name = wire('at')->getMigrationName(__FILE__);
+$name = wire('at')->migrations->getName(__FILE__);
 echo "# $name\n\n";
 
 // Secondary state check (optional but recommended)
@@ -161,8 +161,8 @@ if($templates->get('blog-post')) {
 echo "- $name has been applied\n";
 ~~~~~
 
-The `getMigrationName()` function (and other helper functions) are defined in
-`agent_migrate.php` and are available to all migration files at runtime.
+The `migrations->getName()` method is available via the `$at` API variable
+(`wire('at')->migrations->getName(__FILE__)`).
 
 ### Dependency check
 

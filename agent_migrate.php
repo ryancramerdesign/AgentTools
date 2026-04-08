@@ -55,7 +55,7 @@ sort($migrationFiles); // timestamp prefix ensures chronological order
 $pending = [];
 
 foreach($migrationFiles as $file) {
-	if(!$at->isMigrationApplied($file)) $pending[] = $file;
+	if(!$at->migrations->isApplied($file)) $pending[] = $file;
 }
 
 // ----------------------------------------------------------------
@@ -66,7 +66,7 @@ if($listOnly) {
 	echo "\nMigration status\n";
 	echo str_repeat('-', 60) . "\n";
 	foreach($migrationFiles as $file) {
-		$status = $at->isMigrationApplied($file) ? '[applied]' : '[pending]';
+		$status = $at->migrations->isApplied($file) ? '[applied]' : '[pending]';
 		echo "  $status  " . basename($file) . "\n";
 	}
 	echo "\n" . (count($migrationFiles) - count($pending)) . " applied, " . count($pending) . " pending.\n\n";
@@ -116,7 +116,7 @@ foreach($pending as $file) {
 		$output = ob_get_clean();
 		if(strlen(trim($output))) echo $output;
 
-		$at->addAppliedMigration($file);
+		$at->migrations->addApplied($file);
 		$passCount++;
 
 	} catch(\Throwable $e) {
