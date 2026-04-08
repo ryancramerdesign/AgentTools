@@ -74,7 +74,7 @@ a basic command reference.
 
 ### Agent skill
 
-The module ships with an agent skill in `.agents/skills/processwire-agenttools/` that teaches
+The module ships with an agent skill in `agents/skills/processwire-agenttools/` that teaches
 AI coding agents how to use the CLI and migration system correctly. The skill is installed to
 your project root via the module config checkbox and is automatically updated on module upgrades
 when enabled.

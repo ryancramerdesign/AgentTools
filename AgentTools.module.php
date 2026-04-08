@@ -268,7 +268,7 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 	 *
 	 */
 	protected function doInstallSkill() {
-		$srcDir = __DIR__ . '/.agents/skills/processwire-agenttools/';
+		$srcDir = __DIR__ . '/agents/skills/processwire-agenttools/';
 		if(!is_dir($srcDir)) {
 			$this->error($this->_('Skill source directory not found in module.'));
 			return;
