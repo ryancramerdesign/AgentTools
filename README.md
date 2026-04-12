@@ -258,4 +258,5 @@ echo "- $name has been applied\n";
 ## Community resources
 
 - **[processwire-ai-docs](https://github.com/gebeer/processwire-ai-docs)** by gebeer — A collection of AI agent skills for ProcessWire, including an AgentTools skill with a DDEV wrapper script (`pw-at.sh`) that automatically routes `--at-*` commands into the DDEV container when appropriate.
+- **[processwire-boost](https://github.com/trk/processwire-boost)** by trk — An AI context bridge for ProcessWire that compiles guidelines and skill playbooks for 9 AI agents (Claude Code, Cursor, Copilot, Gemini, and more), generates a static schema map, and provides a live MCP server with 28 tools for querying and modifying a ProcessWire site.
 
