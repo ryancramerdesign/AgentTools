@@ -7,7 +7,7 @@
  * orientation. Output is written to site/assets/at/site-map.json.
  *
  */
-class AgentToolsSiteMap extends AgentToolsHelper {
+class AgentToolsSitemap extends AgentToolsHelper {
 
 	/**
 	 * Output filename

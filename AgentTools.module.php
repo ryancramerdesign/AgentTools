@@ -10,7 +10,7 @@
  * Copyright 2026 Ryan Cramer and Claude (Anthropic) | MIT
  * 
  * @property AgentToolsMigrations $migrations
- * @property AgentToolsSiteMap $sitemap
+ * @property AgentToolsSitemap $sitemap
  *
  */
 class AgentTools extends WireData implements Module, ConfigurableModule {
