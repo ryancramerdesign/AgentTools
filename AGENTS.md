@@ -20,6 +20,7 @@ Run from the ProcessWire root directory (where `index.php` lives):
 | `php index.php --at-migrations-list` | List migrations and their status |
 | `php index.php --at-migrations-test` | Preview pending without applying |
 | `php index.php --at-sitemap-generate` | Generate a JSON site map to `site/assets/at/site-map.json` |
+| `php index.php --at-sitemap-generate-schema` | Generate a schema JSON to `site/assets/at/site-map-schema.json` |
 | `php index.php --at-cli` | Open an interactive agent CLI session |
 
 ## Getting oriented on a new site
@@ -30,6 +31,16 @@ php index.php --at-sitemap-generate
 ```
 Then read `site/assets/at/site-map.json` to get a complete picture of the site's
 templates, fields, page tree, and installed modules before making any changes.
+
+If you need full field/template configuration details (type-specific field settings,
+per-template field context overrides, all template settings), also run:
+```
+php index.php --at-sitemap-generate-schema
+```
+Then read `site/assets/at/site-map-schema.json`. The file contains a `_readme` key
+at the top level with instructions on how to interpret the schema — read it before
+using the data. This schema is particularly useful when generating migrations that
+depend on existing field or template configuration.
 
 ## Migrations
 

@@ -13,6 +13,7 @@ Usage:
   scripts/pw-at.sh migrations-list
   scripts/pw-at.sh migrations-test
   scripts/pw-at.sh sitemap-generate
+  scripts/pw-at.sh sitemap-generate-schema
 
 Wrapper for Ryan Cramer's AgentTools CLI.
 Preserves the original AgentTools command model while selecting the correct
@@ -97,7 +98,7 @@ case "$mode" in
   stdin-b64)
     [[ $# -eq 1 ]] || { echo "stdin-b64 requires exactly one base64 payload argument" >&2; exit 1; }
     ;;
-  stdin|cli|migrations-apply|migrations-list|migrations-test|sitemap-generate)
+  stdin|cli|migrations-apply|migrations-list|migrations-test|sitemap-generate|sitemap-generate-schema)
     [[ $# -eq 0 ]] || { echo "$mode does not accept positional arguments" >&2; exit 1; }
     ;;
   *)
