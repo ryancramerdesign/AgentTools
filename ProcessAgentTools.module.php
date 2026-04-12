@@ -3,9 +3,8 @@
 /**
  * ProcessAgentTools
  *
- * Admin UI for viewing and applying AgentTools migrations.
- * Shows migration status (applied/pending) and allows applying pending
- * migrations via button, capturing and rendering migration output as HTML.
+ * Admin UI for AgentTools: view/apply migrations and ask the Engineer
+ * (AI assistant) questions about or to make changes to the site.
  *
  * Copyright 2026 Ryan Cramer and Claude (Anthropic) | MIT
  *
@@ -15,8 +14,8 @@ class ProcessAgentTools extends Process {
 	public static function getModuleInfo() {
 		return [
 			'title' => 'Agent Tools',
-			'summary' => 'Admin interface for viewing and applying AgentTools migrations.',
-			'version' => 1,
+			'summary' => 'Admin interface for AgentTools migrations and AI engineer.',
+			'version' => 2,
 			'author' => 'Claude (Anthropic) and Ryan Cramer',
 			'icon' => 'asterisk',
 			'requires' => 'AgentTools',
@@ -25,23 +24,59 @@ class ProcessAgentTools extends Process {
 				'parent' => 'setup',
 				'title' => 'Agent Tools',
 			],
+			'useNavJSON' => true,
+			'nav' => [
+				['url' => 'migrations/', 'label' => 'Migrations'],
+				['url' => 'engineer/', 'label' => 'Engineer'],
+			],
 		];
 	}
 
 	/**
-	 * Main execute: show migration status with apply button if pending
+	 * Require superuser for all actions
+	 *
+	 */
+	public function init() {
+		if(!$this->wire()->user->isSuperuser()) throw new WirePermissionException("Superuser is required");
+		parent::init();
+	}
+
+	/**
+	 * Landing page: links to Migrations and Engineer
 	 *
 	 * @return string
 	 *
 	 */
 	public function ___execute() {
-		$user = $this->wire()->user; 
+		$this->headline($this->_('Agent Tools'));
+		$modules = $this->wire()->modules;
+		$adminUrl = $this->wire()->page->url;
+
+		/** @var InputfieldButton $btn */
+		$btn = $modules->get('InputfieldButton');
+		$btn->href = $adminUrl . 'migrations/';
+		$btn->icon = 'database';
+		$btn->val($this->_('Migrations'));
+		$out = $btn->render();
+
+		$btn = $modules->get('InputfieldButton');
+		$btn->href = $adminUrl . 'engineer/';
+		$btn->icon = 'commenting';
+		$btn->val($this->_('Engineer'));
+		$out .= $btn->render();
+
+		return $out;
+	}
+
+	/**
+	 * Migrations: show status table with apply button if pending
+	 *
+	 * @return string
+	 *
+	 */
+	public function ___executeMigrations() {
 		$input = $this->wire()->input;
 		$csrf = $this->wire()->session->CSRF();
-		
-		if(!$user->isSuperuser()) {
-			throw new WirePermissionException("Superuser is required");
-		}
 
 		if($input->post('submit_apply')) {
 			$csrf->validate();
@@ -49,6 +84,126 @@ class ProcessAgentTools extends Process {
 		}
 
 		return $this->renderStatus();
+	}
+
+	/**
+	 * Engineer: AI assistant for informational queries and site changes
+	 *
+	 * @return string
+	 *
+	 */
+	public function ___executeEngineer() {
+		$this->headline($this->_('Agent Tools: Engineer'));
+		$input = $this->wire()->input;
+		$csrf = $this->wire()->session->CSRF();
+
+		if($input->post('submit_engineer')) {
+			$csrf->validate();
+			return $this->processEngineerRequest();
+		}
+
+		return $this->renderEngineerForm();
+	}
+
+	/**
+	 * Render the Engineer request form
+	 *
+	 * @param string $prefill Optional text to pre-fill the textarea
+	 * @return string
+	 *
+	 */
+	protected function renderEngineerForm(string $prefill = ''): string {
+		/** @var AgentTools $at */
+		$at = $this->wire('at');
+		$apiKey = (string) $at->get('engineer_api_key');
+
+		if(!$apiKey) {
+			$settingsUrl = $this->wire()->config->urls->admin . 'module/edit?name=AgentTools';
+			$this->error(sprintf(
+				$this->_('An API key is required. Please configure it in [AgentTools settings](%s).'),
+				$settingsUrl
+			), Notice::allowMarkdown);
+			return '';
+		}
+
+		/** @var InputfieldForm $form */
+		$form = $this->wire()->modules->get('InputfieldForm');
+		$form->attr('method', 'post');
+
+		/** @var InputfieldTextarea $f */
+		$f = $this->wire()->modules->get('InputfieldTextarea');
+		$f->attr('name', 'engineer_request');
+		$f->label = $this->_('Ask the Engineer');
+		$f->description = $this->_('Ask a question about your site, or request a change. Changes are saved as migration files for your review before being applied.');
+		$f->attr('rows', 5);
+		$f->val($prefill);
+		$form->add($f);
+
+		$f = $form->InputfieldSubmit;
+		$f->attr('name', 'submit_engineer');
+		$f->icon = 'send';
+		$f->val($this->_('Send'));
+		$form->add($f);
+
+		return $form->render();
+	}
+
+	/**
+	 * Process an Engineer request and render the response
+	 *
+	 * @return string
+	 *
+	 */
+	protected function processEngineerRequest(): string {
+		$request = trim((string) $this->wire()->input->post('engineer_request'));
+
+		if(!strlen($request)) {
+			$this->error($this->_('Please enter a request.'));
+			return $this->renderEngineerForm();
+		}
+
+		/** @var AgentTools $at */
+		$at = $this->wire('at');
+		$result = $at->engineer->ask($request);
+
+		$out = '';
+
+		if($result['error']) {
+			$this->error($result['error']);
+		}
+
+		if($result['response']) {
+			$md = $this->wire()->modules->get('TextformatterMarkdownExtra');
+			if($md) {
+				$out .= $md->markdown($result['response']);
+			} else {
+				$out .= "<p>" . nl2br(htmlspecialchars($result['response'])) . "</p>";
+			}
+		}
+
+		$modules = $this->wire()->modules;
+		$adminUrl = $this->wire()->page->url;
+
+		if($result['migration']) {
+			$filename = basename($result['migration']);
+			$this->message(sprintf($this->_('Migration saved: %s'), $filename));
+			/** @var InputfieldButton $btn */
+			$btn = $modules->get('InputfieldButton');
+			$btn->href = $adminUrl . 'migrations/';
+			$btn->icon = 'database';
+			$btn->val($this->_('Review and apply migration'));
+			$out .= $btn->render();
+		}
+
+		/** @var InputfieldButton $btn */
+		$btn = $modules->get('InputfieldButton');
+		$btn->href = $adminUrl . 'engineer/';
+		$btn->icon = 'arrow-left';
+		$btn->val($this->_('Ask another question'));
+		if($result['migration']) $btn->setSecondary();
+		$out .= $btn->render();
+
+		return $out;
 	}
 
 	/**
@@ -67,10 +222,13 @@ class ProcessAgentTools extends Process {
 		$out = '';
 
 		if(empty($migrationFiles)) {
-			$out .= "<p class='notes'>" .
-				$this->_('No migration files found in:') . " <code>" . htmlspecialchars($migrationsDir) . "</code>" .
-				"</p>";
-			return $out;
+			$this->warning($this->_('No migration files found in:') . " `$migrationsDir`", Notice::allowMarkdown); 
+			/** @var InputfieldButton $button */
+			$button = $this->wire()->modules->get('InputfieldButton');
+			$button->href = '../engineer/?migration=1';
+			$button->value = $this->_('Ask the engineer to create a migration'); 
+			$button->icon = 'commenting';
+			return $button->render();
 		}
 
 		$pendingCount = 0;
@@ -105,9 +263,7 @@ class ProcessAgentTools extends Process {
 		$out .= $table->render();
 
 		$appliedCount = count($migrationFiles) - $pendingCount;
-		$out .= "<p class='detail'>" .
-			sprintf($this->_('%d applied, %d pending'), $appliedCount, $pendingCount) .
-			"</p>";
+		$this->message(sprintf($this->_('%d applied, %d pending'), $appliedCount, $pendingCount));
 
 		if($pendingCount > 0) {
 			$label = sprintf(
@@ -206,9 +362,11 @@ class ProcessAgentTools extends Process {
 			$this->error(sprintf($this->_('Stopped at: %s'), $failFile));
 			$remaining = count($pending) - $passCount - 1;
 			if($remaining > 0) {
-				$out .= "<p class='notes'>" .
-					sprintf($this->_('%d migration(s) applied. %d remaining migration(s) were NOT applied.'), $passCount, $remaining) .
-					"</p>";
+				$this->warning(sprintf(
+					$this->_('%d migration(s) applied. %d remaining migration(s) were NOT applied.'),
+					$passCount,
+					$remaining
+				));
 			}
 		} else {
 			$this->message(sprintf(
@@ -217,10 +375,13 @@ class ProcessAgentTools extends Process {
 			));
 		}
 
-		$out .= "<p><a href='./' class='ui-button ui-widget ui-corner-all'>" .
-			wireIconMarkup('arrow-left') . ' ' .
-			$this->_('Back to migration status') .
-			"</a></p>";
+		/** @var InputfieldButton $btn */
+		$btn = $this->wire()->modules->get('InputfieldButton');
+		$btn->href = './';
+		$btn->icon = 'arrow-left';
+		$btn->val($this->_('Back to migration status'));
+		$btn->setSecondary();
+		$out .= $btn->render();
 
 		return $out;
 	}

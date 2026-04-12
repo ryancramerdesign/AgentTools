@@ -11,6 +11,7 @@
  * 
  * @property AgentToolsMigrations $migrations
  * @property AgentToolsSitemap $sitemap
+ * @property AgentToolsEngineer $engineer
  *
  */
 class AgentTools extends WireData implements Module, ConfigurableModule {
@@ -45,6 +46,7 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 		'migrations' => null,
 		'skills' => null,
 		'sitemap' => null,
+		'engineer' => null,
 	];
 
 	/**
