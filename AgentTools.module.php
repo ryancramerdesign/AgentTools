@@ -247,6 +247,20 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 	}
 
 	/**
+	 * Allow helpers to be called as methods, e.g. $at->sitemap()->generate()
+	 *
+	 * @param string $method
+	 * @param array $arguments
+	 * @return AgentToolsHelper|mixed|null
+	 *
+	 */
+	public function ___callUnknown($method, $arguments) {
+		$helper = $this->getHelper($method);
+		if($helper) return $helper;
+		return parent::___callUnknown($method, $arguments);
+	}
+
+	/**
 	 * Get main files path for AgentTools assets
 	 *
 	 * @param string $subdir Optional subdirectory to get/create
