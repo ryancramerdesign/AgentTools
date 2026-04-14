@@ -64,8 +64,9 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			if(!$apiKey) throw new WireException($this->_('API key is not configured in AgentTools module settings.'));
 
 			$provider = (string) $this->at->get('engineer_provider') ?: self::providerAnthropic;
-			$systemPrompt = $this->buildSystemPrompt();
-			$tools = $this->getToolDefinitions($provider);
+			$readOnly = (bool) $this->at->get('engineer_readonly');
+			$systemPrompt = $this->buildSystemPrompt($readOnly, $request);
+			$tools = $readOnly ? [] : $this->getToolDefinitions($provider);
 			$messages = [['role' => 'user', 'content' => $request]];
 
 			for($i = 0; $i < self::maxIterations; $i++) {
@@ -101,7 +102,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	 * @return string
 	 *
 	 */
-	protected function buildSystemPrompt(): string {
+	protected function buildSystemPrompt(bool $readOnly = false, string $request = ''): string {
 
 		$siteUrl = $this->wire()->config->httpRoot;
 
@@ -114,7 +115,9 @@ class AgentToolsEngineer extends AgentToolsHelper {
 
 			"For requests that make changes to the site (creating or modifying fields, templates, pages, " .
 			"content, etc.), always use the save_migration tool rather than applying changes directly via " .
-			"eval_php. This allows the user to review changes before they are applied.\n\n" .
+			"eval_php. This allows the user to review changes before they are applied. " .
+			"Before writing a migration, use eval_php to verify current state (e.g. whether a field or " .
+			"template already exists) so the migration is accurate.\n\n" .
 
 			"ProcessWire API variables available to eval_php: \$pages, \$fields, \$templates, \$modules, " .
 			"\$users, \$roles, \$permissions, \$config, \$at (AgentTools module instance).\n\n" .
@@ -126,8 +129,15 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			"(for example, it references previous context you don't have), ask the user for clarification " .
 			"rather than guessing. Do not attempt to execute or create a migration for an ambiguous request.";
 
+		if($readOnly) $prompt .=
+			"\n\nYou are operating in read-only mode. You can answer questions, explain how things work, " .
+			"and suggest approaches, but you cannot execute code or create migration files. " .
+			"If asked to make a change, explain what would need to be done and provide example code, " .
+			"but note that changes must be applied manually or via the CLI.";
+
 		$siteMapFile = $this->at->getFilesPath() . 'site-map.json';
 		if(is_file($siteMapFile)) {
+			if($this->isSitemapStale($siteMapFile)) $this->regenerateSitemap();
 			$prompt .= "\n\n[SITE MAP]\n" . file_get_contents($siteMapFile);
 		}
 
@@ -136,12 +146,86 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			$prompt .= "\n\n[SCHEMA]\n" . file_get_contents($schemaFile);
 		}
 
-		$apiDocs = $this->getFieldtypeApiDocs();
-		if($apiDocs) {
-			$prompt .= "\n\n[FIELDTYPE API REFERENCE]\n" . $apiDocs;
+		$provider = (string) $this->at->get('engineer_provider') ?: self::providerAnthropic;
+		$includeApiDocs = $provider === self::providerAnthropic || $this->requestNeedsFieldtypeDocs($request);
+		if($includeApiDocs) {
+			$apiDocs = $this->getFieldtypeApiDocs();
+			if($apiDocs) $prompt .= "\n\n[FIELDTYPE API REFERENCE]\n" . $apiDocs;
 		}
 
 		return $prompt;
+	}
+
+	/**
+	 * Is the site-map file older than the most recently modified field, template, or page?
+	 *
+	 * Compares site-map filemtime against:
+	 *   - filemtime of fields.txt / templates.txt (written by the hook in AgentTools::ready())
+	 *   - UNIX_TIMESTAMP(MAX(modified)) from the pages table (datetime)
+	 *
+	 * @param string $siteMapFile Full path to site-map.json
+	 * @return bool True if the site-map is stale and should be regenerated
+	 *
+	 */
+	protected function isSitemapStale(string $siteMapFile): bool {
+		$sitemapMtime = filemtime($siteMapFile);
+
+		// Fields and templates: tracked via fields.txt/templates.txt written by the hook in AgentTools::ready()
+		foreach(['fields.txt', 'templates.txt'] as $trackingFile) {
+			$path = $this->at->getFilesPath() . $trackingFile;
+			if(is_file($path) && filemtime($path) > $sitemapMtime) return true;
+		}
+
+		// pages.modified is a datetime column
+		$stmt = $this->wire()->database->query("SELECT UNIX_TIMESTAMP(MAX(modified)) FROM pages");
+		$maxModified = (int) $stmt->fetchColumn();
+		if($maxModified > $sitemapMtime) return true;
+
+		return false;
+	}
+
+	/**
+	 * Regenerate the site-map and schema files
+	 *
+	 * Called automatically when the site-map is detected as stale.
+	 * Failures are silently swallowed so they don't interrupt an Engineer request.
+	 *
+	 */
+	protected function regenerateSitemap(): void {
+		try {
+			$this->at->sitemap->generate();
+			$this->at->sitemap->generateSchema();
+		} catch(\Throwable $e) {
+			// Silent: stale site-map is better than a broken Engineer request
+		}
+	}
+
+	/**
+	 * Does the request likely involve field creation or configuration?
+	 *
+	 * Used to decide whether to include the Fieldtype API reference in the system
+	 * prompt. Errs on the side of inclusion — false positives waste a few tokens,
+	 * false negatives leave the AI without reference docs it may need.
+	 *
+	 * @param string $request
+	 * @return bool
+	 *
+	 */
+	protected function requestNeedsFieldtypeDocs(string $request): bool {
+		$keywords = [
+			'field', 'fieldtype', 'inputfield',
+			'textarea', 'checkbox', 'toggle', 'select',
+			'image', 'file', 'upload',
+			'repeater', 'pagetable', 'page reference',
+			'datetime', 'date', 'email', 'url',
+			'integer', 'float', 'decimal',
+			'options field', 'multi',
+		];
+		$request = strtolower($request);
+		foreach($keywords as $kw) {
+			if(strpos($request, $kw) !== false) return true;
+		}
+		return false;
 	}
 
 	/**
@@ -205,8 +289,9 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			'properties' => [
 				'code' => ['type' => 'string', 'description' => 'Complete PHP migration file contents, beginning with <?php namespace ProcessWire;'],
 				'description' => ['type' => 'string', 'description' => 'Short snake_case description for the filename, e.g. add_toggles_field'],
+				'summary' => ['type' => 'string', 'description' => 'Human-readable markdown summary of what the migration does, to be embedded as a comment in the file. Include any relevant notes for the developer.'],
 			],
-			'required' => ['code', 'description'],
+			'required' => ['code', 'description', 'summary'],
 		];
 
 		if($provider === self::providerAnthropic) {
@@ -258,12 +343,24 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	 *
 	 */
 	protected function sendAnthropicRequest(string $apiKey, string $model, string $system, array $messages, array $tools): array {
+		$cache = ['type' => 'ephemeral', 'ttl' => '1h'];
+
+		// System prompt as a content block array so we can attach cache_control
+		$systemBlocks = [
+			['type' => 'text', 'text' => $system, 'cache_control' => $cache],
+		];
+
+		// Cache tool definitions too — they are static per session
+		if(!empty($tools)) {
+			$tools[count($tools) - 1]['cache_control'] = $cache;
+		}
+
 		return $this->curlPost(
 			'https://api.anthropic.com/v1/messages',
 			[
 				'model' => $model,
 				'max_tokens' => self::maxTokens,
-				'system' => $system,
+				'system' => $systemBlocks,
 				'messages' => $messages,
 				'tools' => $tools,
 			],
@@ -316,7 +413,8 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		} else if($name === 'save_migration') {
 			return $this->executeSaveMigration(
 				(string) ($input['code'] ?? ''),
-				(string) ($input['description'] ?? 'migration')
+				(string) ($input['description'] ?? 'migration'),
+				(string) ($input['summary'] ?? '')
 			);
 		}
 		return "Unknown tool: $name";
@@ -350,15 +448,25 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	 *
 	 * @param string $code Complete PHP migration file contents
 	 * @param string $description Short snake_case description for filename
+	 * @param string $summary Human-readable markdown summary to embed as a docblock comment
 	 * @return string Confirmation message or error
 	 *
 	 */
-	protected function executeSaveMigration(string $code, string $description): string {
+	protected function executeSaveMigration(string $code, string $description, string $summary = ''): string {
 		$description = preg_replace('/[^a-z0-9]+/', '_', strtolower($description));
 		$description = trim($description, '_');
 		if(!$description) $description = 'migration';
 		$filename = date('YmdHis') . '_' . $description . '.php';
 		$path = $this->at->getFilesPath('migrations') . $filename;
+		if($summary) {
+			// Embed summary as a docblock after the opening <?php tag
+			$docblock = "/**\n";
+			foreach(explode("\n", trim($summary)) as $line) {
+				$docblock .= ' * ' . rtrim($line) . "\n";
+			}
+			$docblock .= " */\n";
+			$code = preg_replace('/^(<\?php[^\n]*\n)/', '$1' . $docblock, $code, 1);
+		}
 		if(file_put_contents($path, $code) !== false) {
 			$this->savedMigration = $path;
 			return "Migration saved: $filename";
@@ -530,13 +638,28 @@ class AgentToolsEngineer extends AgentToolsHelper {
 
 		$f = $modules->get('InputfieldText');
 		$f->attr('name', 'engineer_model');
+		$f->attr('list', 'at_engineer_model_list');
 		$f->label = $this->_('Model');
 		$f->description = sprintf(
-			$this->_('Leave blank for default: %s (Anthropic) or %s (OpenAI-compatible).'),
+			$this->_('Model API identifier. Leave blank for default: %s (Anthropic) or %s (OpenAI-compatible). Common models are suggested as you type.'),
 			self::defaultAnthropicModel,
 			self::defaultOpenAIModel
 		);
 		$f->val($this->at->get('engineer_model') ?: '');
+		$knownModels = [
+			// Anthropic
+			'claude-opus-4-6',
+			'claude-sonnet-4-6',
+			'claude-haiku-4-5',
+			// OpenAI
+			'gpt-4o',
+			'gpt-4o-mini',
+			'gpt-4-turbo',
+			'o1',
+			'o3-mini',
+		];
+		$options = implode('', array_map(function($m) { return "<option value='$m'>"; }, $knownModels));
+		$f->appendMarkup = "<datalist id='at_engineer_model_list'>$options</datalist>";
 		$fs->add($f);
 
 		/** @var InputfieldURL $f */
@@ -546,6 +669,14 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		$f->description = $this->_('Base URL for OpenAI-compatible providers. Default: https://api.openai.com/v1');
 		$f->showIf = 'engineer_provider=' . self::providerOpenAI;
 		$f->val($this->at->get('engineer_endpoint') ?: '');
+		$fs->add($f);
+
+		/** @var InputfieldToggle $f */
+		$f = $modules->get('InputfieldToggle');
+		$f->attr('name', 'engineer_readonly');
+		$f->label = $this->_('Read-only mode');
+		$f->description = $this->_('When enabled, the Engineer can answer questions and suggest changes but cannot execute code or create migration files.');
+		$f->val((int) $this->at->get('engineer_readonly'));
 		$fs->add($f);
 
 		$inputfields->add($fs);

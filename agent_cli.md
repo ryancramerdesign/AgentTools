@@ -36,6 +36,7 @@ All commands are run from the ProcessWire root directory (where `index.php` live
 | `php index.php --at-migrations-list` | List migrations and their status |
 | `php index.php --at-migrations-test` | Preview pending without applying |
 | `php index.php --at-sitemap-generate` | Generate a JSON site map to `site/assets/at/site-map.json` |
+| `php index.php --at-sitemap-generate-schema` | Generate a schema JSON to `site/assets/at/site-map-schema.json` |
 
 ### When to use `--at-eval` vs `--at-stdin`
 

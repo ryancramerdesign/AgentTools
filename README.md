@@ -11,28 +11,51 @@ be done with the ProcessWire API. It's even possible for an entire site to be ma
 Claude without the need for ProcessWire's admin control panel, though we're not 
 suggesting that just yet.
 
+Claude collaborated with me on the development of the AgentTools module, and the
+accompanying ProcessAgentTools module was developed entirely by Claude Code. 
+
+### Command line tools for AI agents
+
 While working with Claude Code, I asked what would be helpful for them in working with 
 ProcessWire, and this module is the result. Claude needed a way to quickly access the 
 ProcessWire API from the command line, and this module provides 3 distinct ways for 
-Claude to do so.
+Claude to do so. AI agents can also use the command line to create migrations, generate 
+JSON sitemaps that provide an overview of the entire ProcessWire installation, install
+AI agent skills into your ProcessWire installation. Further, AI agents connected through
+the command line interface (CLI) can do anything that the ProcessWire API can do. 
 
-Claude collaborated with me on the development of the AgentTools module, and the 
-accompanying ProcessAgentTools module was developed entirely by Claude Code. Admittedly, 
-part of the purpose of this module is also to help me learn AI-assisted development, as 
-I'm still quite new to it, but learning quickly.
+### Admin tools for you
 
-This module aims to add several agent tools over time, but this first version is also somewhat
-of a proof of concept. Its first feature is basic migrations system, described further in this document.
+Also packaged with the AgentTools module is the ProcessAgentTools module. This provides an
+admin application (Setup > Agent Tools), currently with the following features:
+
+- Engineer: This is your site engineer, which connects directly with your AI agent and 
+  enables you to ask it questions about anything in your site. It can also assist you with 
+  creating migrations or making any other kinds of updates on your site. 
+
+- Migrations: This tool enables you to create, apply, list, view, and delete migrations
+  that were created by the Engineer or by your AI agent using the command line tools of
+  this module. 
 
 **Please note that this module should be considered very much in 'beta test' at this stage. 
-If you do use it in production (such as the migrations feature) always test locally and have 
+If use any of its features in production, test thoroughly in a dev environment first, and keep
 backups of everything that can be restored easily. While I've not run into any cases where 
 I had to restore anything, just the nature of the module means that you should use extra caution.**
 
 ## Requirements
 
-- Preferably 3.0.255 or newer, but almost any 3.x version of ProcessWire should still work.
-- Claude Code or another AI helper of your choice, though note we've only tested with Claude Code.
+ProcessWire 3.0.255 or newer is recommended, but almost any 3.x version of ProcessWire should still work.
+If you use ProcessWire 3.0.258 or newer, the Engineer and Migrations features become much smarter,
+as ProcessWire 3.0.258 and newer include API.md files that this module provides to AI agents. 
+
+CLI-compatable AI helper of your choice in order to use the CLI tools to full effect. Examples 
+include Claude Code and OpenAI Codex, though it should work with others as well. This module
+has primarily been developed with and tested with Claude Code.
+
+An Anthropic (Claude) API key, OpenAI API key, or any OpenAI compatible API key is required to use the 
+Engineer feature of the included admin helper module (ProcessAgentTools). When using an Anthropic API key,
+this module automatically uses prompt caching with a 1-hour TTL, making it very efficient and
+economical when handling multiple Engineer requests. 
 
 ## Installation
 
@@ -60,12 +83,14 @@ export PATH=/Applications/MAMP/bin/php/php8.2.26/bin:$PATH
 Chances are you won't have to do anything like that though. Next, please continue with connecting 
 Claude Code (below).
 
-### Connecting Claude Code:
+### Connecting your AI agent to the command line interface (CLI)
 
-1. Open Claude Code in the root of your website directory.
-2. Ask Claude Code to read the `/site/modules/AgentTools/CLAUDE.md` file.
-3. Claude should also read the `/site/modules/AgentTools/agent_cli.md` file automatically, but maybe ask to confirm, especially if using something other than Claude Code.
-4. Now you are ready to use Claude Code with ProcessWire! Test things out by asking Claude what your 3 newest pages are, or whatever suits your fancy!
+1. Open Claude Code or other AI agent in the root of your website directory.
+2. Ask your AI agent to read the `/site/modules/AgentTools/AGENTS.md` or  `/site/modules/AgentTools/CLAUDE.md`file.
+3. Your AI agent should also read the `/site/modules/AgentTools/agent_cli.md` file automatically, but maybe ask to confirm, especially if using something other 
+   than Claude Code.
+4. Now you are ready to use Claude Code or other AI agent with ProcessWire! Test things out by asking Claude what your 3 newest pages are, or whatever suits 
+   your fancy!
 
 ### Agent skill (optional)
 
@@ -80,15 +105,20 @@ automatically on future module upgrades.
 
 ### Migrations feature
 
-This module provides a basic migrations feature that has an AI-based workflow. The intention is that you 
-would have AgentTools installed in a local development (dev server) environment with Claude Code available. There 
-would be a corresponding production (live server) environment that also has the AgentTools module installed, and whether 
-Claude Code is available there or not is optional. Claude Code is needed to create migrations, but not 
-to apply them.
+This module provides a migrations feature that has an AI-based workflow. Two different kinds of workflows are available:
 
-Rather than manipulating pages, templates, fields or other resources in ProcessWire's admin, you tell 
-Claude to read the `/site/modules/AgentTools/CLAUDE.md` file and that you'd like to make changes that 
-should be saved as migrations. For example, here's a basic prompt:
+1. You can have AgentTools installed in a local development (dev server) environment with Claude Code or other AI agent available. There 
+   would be a corresponding production (live server) environment that also has the AgentTools module installed. Whether 
+   an AI agent is available there or not is optional. Claude Code (or other CLI AI agent tool) is needed to create migrations, but not 
+   to apply them.
+
+2. You can also create migrations directly from the admin, available from Setup > Agent Tools > Migrations.
+   In order to do this, you must have an Anthropic, OpenAI or OpenAI compatible API key populated in the AgentTools module settings.
+
+Either method words to create migrations, but the first method (CLI like Code Claude) generally has more context and also has
+the ability to ask you follow-up questions if it's not clear about anything. 
+
+Here is an example of a basic prompt that you might use to create a migration:
 
 > Please create a new template named hello-world that can only be used for one page. Add the title and body 
 > fields to it. Then create a new page using this new template and with the homepage as its parent. 
@@ -99,11 +129,11 @@ We've got something sneaky in that prompt "…can only be used for one page." Cl
 ask you questions before making the changes and creating the migration. In my case it asked me: "By one 
 page, do you mean that the template should have the noParents option set to -1?" The answer is yes.
 
-Once Claude has finished its work in your dev site you'll see it as a migration in Setup > Agent Tools. 
-It should show that the migration has been already "Applied". When you are ready to apply it to your 
-production server, you can copy/rsync/ftp the migrations to the production in the same directory:
-`/site/assets/at/migrations/`. This is also something Claude can do if you are comfortable with it, 
-and you've given Claude access to.
+Whether using the CLI or the admin, once your AI agent has finished its work in your dev site you'll 
+see it as a migration in Setup > Agent Tools. When you are ready to apply it, click the Apply button.
+Confirm that it worked correctly, and then you can copy/rsync/ftp the migrations to the production server 
+in the same directory: `/site/assets/at/migrations/`. This is also something some AI agents can do if you 
+are comfortable with it, and you've given them access to.
 
 However the migration files are copied to the production server, they can be applied from the command 
 line, or from the admin in Setup > Agent Tools. If using the admin, you'll see a list of migrations 
@@ -111,11 +141,11 @@ along with an option to apply them. If you prefer to use the command line interf
 command reference in the CLI reference section (below). 
 
 Once a migration has been applied, it will show as "applied" in your admin rather than "pending". 
-Though note that Claude writes the migrations in a way that means they can be re-applied without issue, 
+Though note that the AI agent should write the migrations in a way that means they can be re-applied without issue, 
 and simply report "not necessary to apply."
 
-Tip: when asking Claude to add a new page in ProcessWire that has significant content (like a large "body") field
-ask Claude if they would prefer the content in separate prompts, or all in one. When I posted a blog post,
+Tip: when asking an AI agent to add a new page in ProcessWire that has significant content (like a large "body") field
+ask them if they would prefer the content in separate prompts, or all in one. When I posted a blog post,
 Claude said they preferred it in separate prompts, like this:
 ```
 name: processwire-and-ai
@@ -132,14 +162,14 @@ See the resulting post here: [ProcessWire and AI](https://processwire.com/blog/p
 
 #### Please note
 
-- This migrations system is more experimental and not intended to replace a mature system like RockMigrations.
+- This migrations system is somewhat experimental and not intended to replace a mature system like RockMigrations.
 - File-based assets are not yet supported by migrations. 
 
 ---
 
 ## CLI reference
 
-All commands are run from your ProcessWire root directory (where index.php lives). Note that most of these CLI commands are intended to be run by AI agents on your behalf, but are documented here for reference.
+All commands are run from your ProcessWire root directory (where `index.php` lives). Note that most of these CLI commands are intended to be run by AI agents on your behalf, but are documented here for reference.
 
 ### Migration commands
 
@@ -149,33 +179,50 @@ All commands are run from your ProcessWire root directory (where index.php lives
 | `php index.php --at-migrations-list` | List all migrations and their status (applied/pending) |
 | `php index.php --at-migrations-test` | Preview pending migrations without applying them |
 
+### Site map commands
+
+The site map gives AI agents a complete JSON overview of your ProcessWire installation —
+templates, fields, pages, and modules — so they can answer questions and create accurate
+migrations without querying the database on every request.
+
+| Command | Description |
+|---------|-------------|
+| `php index.php --at-sitemap-generate` | Generate a site map to `site/assets/at/site-map.json` |
+| `php index.php --at-sitemap-generate-schema` | Generate a schema map to `site/assets/at/site-map-schema.json` |
+
+Run `--at-sitemap-generate` at the start of a session on an unfamiliar site. Run
+`--at-sitemap-generate-schema` when you need full field configuration details, per-template
+field context overrides, or detailed template settings — useful when creating migrations
+that depend on existing configuration. The admin Engineer regenerates these automatically
+after applying migrations.
+
 ### API access commands
 
-These commands give Claude (or any AI agent) direct access to the ProcessWire API
+These commands give your AI agent direct access to the ProcessWire API
 from the command line without needing to enter an interactive session.
 
 | Command | Description |
 |---------|-------------|
 | `php index.php --at-eval 'CODE'` | Evaluate a PHP expression with full ProcessWire API access |
-| `echo 'CODE' &#124; php index.php --at-stdin` | Evaluate multi-line PHP code piped from stdin |
+| `echo 'CODE' \| php index.php --at-stdin` | Evaluate multi-line PHP code piped from stdin |
 | `php index.php --at-cli` | Open an interactive agent CLI session |
 
-**`--at-eval` example** — ask Claude how many pages are on your site:
+**`--at-eval` example** — ask your AI agent how many pages are on your site:
 ```
 php index.php --at-eval 'echo wire()->pages->count() . " pages\n";'
 ```
 
 **`--at-stdin` example** — useful for multi-line code:
 ```
-echo '
+cat <<'PHP' | php index.php --at-stdin
 $t = new Template();
 $t->name = "hello-world";
 $t->save();
 echo "Created template: " . $t->name . "\n";
-' | php index.php --at-stdin
+PHP
 ```
 
-**`--at-cli`** opens an interactive session where Claude can write code to `agent_cli.php`
+**`--at-cli`** opens an interactive session where your AI agent can write code to `agent_cli.php`
 and run it, with full access to all ProcessWire API variables (`$pages`, `$templates`,
 `$fields`, `$modules`, etc.). See `agent_cli.md` for full details.
 

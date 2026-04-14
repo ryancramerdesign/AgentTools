@@ -430,23 +430,27 @@ class AgentToolsSitemap extends AgentToolsHelper {
 	}
 
 	/**
-	 * Get installed non-core modules data
+	 * Get installed and uninstalled non-core modules data
 	 *
 	 * @return array
 	 *
 	 */
 	protected function getModulesData() {
-		$data = [];
+		$data = [ 'installed' => [], 'uninstalled' => [] ];
 		$modules = $this->wire()->modules;
+
 		foreach($modules as $module) {
 			$info = $modules->getModuleInfo($module, ['noCache' => false]);
 			if(!empty($info['core'])) continue;
-			$data[] = [
+			$data['installed'][] = [
 				'name' => $info['name'],
 				'title' => $info['title'] ?? $info['name'],
 				'version' => $modules->formatVersion($info['version'] ?? 0),
 			];
 		}
+
+		$data['uninstalled'] = array_keys($modules->getInstallable());
+
 		return $data;
 	}
 }

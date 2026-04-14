@@ -21,7 +21,7 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 			'title' => 'Agent Tools',
 			'summary' => 'Enables AI coding agents to access ProcessWire’s API and provides a database migration system.',
 			'icon' => 'asterisk',
-			'version' => 3,
+			'version' => 4,
 			'author' => 'Ryan Cramer and Claude (Anthropic)',
 			'requires' => 'ProcessWire>=3.0.255',
 			'installs' => 'ProcessAgentTools',
@@ -73,16 +73,35 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 				$this->cliReady($atAction);
 			}
 		}
+		$at = $this;
+		$methods = 'WireSaveableItems::saved, WireSaveableItems::added, WireSaveableItems::deleted';
+		$this->addHookAfter($methods, function(HookEvent $e) use($at) {
+			$path = $at->getFilesPath();
+			$item = $e->arguments(0); /** @var Template|Fieldgroup $template */
+			$name = strtolower($item->className());
+			if(in_array($name, [ 'template', 'fieldgroup', 'field' ])) {
+				if($name === 'fieldgroup') $name = 'template';
+				$method = $e->method;
+				$fp = fopen($path . "{$name}s.txt", 'a');
+				if($fp !== false) {
+					fwrite($fp, "$method\t$item->name\t" . date('Y-m-d H:i:s') . "\n");
+					fclose($fp);
+				}
+			}
+		});
 	}
 
 	/**
 	 * Command line interface (CLI) ready
 	 *
 	 * Please note that this method halts execution when it's done, rather than return.
+	 * 
+	 * @param string $action
 	 *
 	 */
-	protected function cliReady($atAction) {
+	protected function cliReady($action) {
 
+		$atAction = $action;
 		$originalDir = getcwd();
 		chdir($this->wire()->config->paths->root);
 

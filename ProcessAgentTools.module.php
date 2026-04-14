@@ -15,7 +15,7 @@ class ProcessAgentTools extends Process {
 		return [
 			'title' => 'Agent Tools',
 			'summary' => 'Admin interface for AgentTools migrations and AI engineer.',
-			'version' => 2,
+			'version' => 4,
 			'author' => 'Claude (Anthropic) and Ryan Cramer',
 			'icon' => 'asterisk',
 			'requires' => 'AgentTools',
@@ -26,21 +26,187 @@ class ProcessAgentTools extends Process {
 			],
 			'useNavJSON' => true,
 			'nav' => [
-				['url' => 'migrations/', 'label' => 'Migrations'],
-				['url' => 'engineer/', 'label' => 'Engineer'],
+				['url' => 'migrations/', 'label' => 'Migrations', 'icon' => 'database'],
+				['url' => 'engineer/', 'label' => 'Engineer', 'icon' => 'commenting'],
 			],
 		];
 	}
-
+	
+	/**
+	 * @var AgentTools|null 
+	 * 
+	 */
+	protected $at = null;
+	
+	/**
+	 * Words to indicate the Engineer is thinking
+	 * 
+	 * @var string[] 
+	 * 
+	 */
+	protected $thinkingWords = [
+		'Backwashing',
+		'Bargaining',
+		'Basting',
+		'Coding',
+		'Cogitating',
+		'Deliberating',
+		'Discombobulating',
+		'Expediting',
+		'Finagling',
+		'Flibbertigibbeting',
+		'Gallivanting',
+		'Gesticulating',
+		'Hemming',
+		'Jawboning',
+		'Kibbitzing',
+		'Loitering',
+		'Lollygagging',
+		'Meandering',
+		'Negotiating',
+		'Nesting',
+		'Outsourcing',
+		'Percolating',
+		'Ruminating',
+		'Schmeering',
+		'Schmoozing',
+		'Schooling',
+		'Scuttering',
+		'Sensating',
+		'Shilly-shallying',
+		'Shrimping',
+		'Shucking',
+		'Siphoning',
+		'Sizzling',
+		'Skedaddling',
+		'Skimming',
+		'Snagging',
+		'Solidifying',
+		'Speculating',
+		'Waffling',
+		'Wrangling',
+	];
+	
 	/**
 	 * Require superuser for all actions
 	 *
 	 */
 	public function init() {
+		$this->at = $this->wire('at');
 		if(!$this->wire()->user->isSuperuser()) throw new WirePermissionException("Superuser is required");
+		if(!$this->at) {
+			// not likely, but just in case as a fallback
+			$this->at = $this->wire()->modules->getInstall('AgentTools');
+			if(!$this->at) throw new WireException('This module requires the AgentTools module');
+		}
 		parent::init();
 	}
-
+	
+	/**
+	 * Return a translation label
+	 * 
+	 * @param string $name
+	 * @return string
+	 * 
+	 */
+	protected function label($name) {
+		switch($name) {
+			case 'agent-tools': return $this->_('Agent Tools');
+			case 'applied': return $this->ukLabel($this->_('Applied'), 'success'); 
+			case 'ask-create-migration': return $this->_('Ask the engineer to create a migration');
+			case 'back': return $this->_('Back');
+			case 'date-time': return $this->_('Date/time'); 
+			case 'engineer': return $this->_('Engineer');
+			case 'failed': return $this->ukLabel($this->_('Failed'), 'danger');
+			case 'file': return $this->_('File'); 
+			case 'migration': return $this->_('Migration');
+			case 'migrations': return $this->_('Migrations');
+			case 'pending': return $this->ukLabel($this->_('Pending')); 
+			case 'status': return $this->_('Status'); 
+		}
+		return $name;	
+	}
+	
+	/**
+	 * Return an icon name for a given label/action
+	 * 
+	 * @param string $name
+	 * @return string
+	 * 
+	 */
+	protected function iconName($name) {
+		switch($name) {
+			case 'agent-tools': return 'asterisk';
+			case 'apply': return 'play';
+			case 'applied': return 'check';
+			case 'back': return 'arrow-left';
+			case 'delete': return 'trash-o';
+			case 'engineer': return 'commenting';
+			case 'failed': return 'times';
+			case 'migrations': return 'database';
+		}
+		return 'question-circle';
+	}
+	
+	/**
+	 * Get a feature description
+	 * 
+	 * @param string $name
+	 * @return string
+	 * 
+	 */
+	protected function description($name) {
+		switch($name) {
+			case 'migrations': return 
+				$this->_('Migrations are scripts that you can run to automatically make changes on your site.') . ' ' .
+				$this->_('Use this tool to apply, view, create or delete migrations.');
+			case 'engineer': return
+				$this->_('This is your site engineer and he can tell you everything there is to know about your ProcessWire installation.') . ' ' .
+				$this->_('In addition, he can make changes, perform web development tasks, or create migrations.') . ' ' .
+				$this->_('The engineer provides a way for your AI agent and you to work together.') . ' ' .
+				$this->_('This is an alternative to using AgentTools from the command line.') . ' '.
+				$this->_('But please note it may not be as powerful or contextual as using AgentTools from the command line.');
+		}
+		return 'unknown description name';
+	}
+	
+	/**
+	 * Render a uk-label element
+	 *
+	 * @param string $label
+	 * @param string $type One of 'success', 'danger', 'warning' or omit for default
+	 * @return string
+	 *
+	 */
+	protected function ukLabel($label, $type = '') {
+		if($type) $type = " uk-label-$type";
+		return "<span class='uk-label$type'>$label</span>";
+	}
+	
+	/**
+	 * Render a <pre> and entity encode text
+	 * 
+	 * @param string $text
+	 * @param array $options
+	 *  - `entityEncode` (bool): Entity encode given text? (default=true)
+	 *  - `wordWrap` (bool): Word wrap long lines? (default=true)
+	 * @return string
+	 * 
+	 */
+	protected function pre($text, array $options = []) {
+		$defaults = [
+			'entityEncode' => true,
+			'wordWrap' => true, 
+		];
+		$options = array_merge($defaults, $options);
+		$text = trim($text);
+		$style = "background-color: transparent;";
+		if($options['entityEncode']) $text = htmlspecialchars(trim($text));
+		if($options['wordWrap']) $style .= "white-space: pre-wrap;";
+		return "<pre style='$style'>$text</pre>";
+	}
+	
+	
 	/**
 	 * Landing page: links to Migrations and Engineer
 	 *
@@ -48,22 +214,25 @@ class ProcessAgentTools extends Process {
 	 *
 	 */
 	public function ___execute() {
-		$this->headline($this->_('Agent Tools'));
+		$this->headline($this->label('agent-tools'));
 		$modules = $this->wire()->modules;
 		$adminUrl = $this->wire()->page->url;
-
-		/** @var InputfieldButton $btn */
-		$btn = $modules->get('InputfieldButton');
-		$btn->href = $adminUrl . 'migrations/';
-		$btn->icon = 'database';
-		$btn->val($this->_('Migrations'));
-		$out = $btn->render();
-
-		$btn = $modules->get('InputfieldButton');
-		$btn->href = $adminUrl . 'engineer/';
-		$btn->icon = 'commenting';
-		$btn->val($this->_('Engineer'));
-		$out .= $btn->render();
+		$out = '<hr>';
+		
+		$tools = [ 'migrations', 'engineer' ];
+		
+		foreach($tools as $name) {
+			/** @var InputfieldButton $btn */
+			$label = $this->label($name);
+			$description =  $this->description($name);
+			$href = $adminUrl . "$name/";
+			$btn = $modules->get('InputfieldButton');
+			$btn->href = $href;
+			$btn->icon = $this->iconName($name);
+			$btn->val($label);
+			$btn = $btn->render();
+			$out .= "<h2 class='uk-margin-remove'>$label</h2><p>$description</p><p>$btn</p><hr />";
+		}
 
 		return $out;
 	}
@@ -76,11 +245,21 @@ class ProcessAgentTools extends Process {
 	 */
 	public function ___executeMigrations() {
 		$input = $this->wire()->input;
-		$csrf = $this->wire()->session->CSRF();
+		
+		if($input->requestMethod('post')) {
+			$this->wire()->session->CSRF()->validate();
+		}
 
 		if($input->post('submit_apply')) {
-			$csrf->validate();
 			return $this->processApply();
+		}
+
+		if($input->post('submit_apply_checked')) {
+			return $this->processApplyChecked();
+		}
+
+		if($input->post('submit_delete_checked')) {
+			$this->processDeleteChecked();
 		}
 
 		return $this->renderStatus();
@@ -93,32 +272,40 @@ class ProcessAgentTools extends Process {
 	 *
 	 */
 	public function ___executeEngineer() {
-		$this->headline($this->_('Agent Tools: Engineer'));
 		$input = $this->wire()->input;
-		$csrf = $this->wire()->session->CSRF();
+		$session = $this->wire()->session;
+		
+		$this->headline($this->label('engineer'));
 
 		if($input->post('submit_engineer')) {
-			$csrf->validate();
+			$session->CSRF()->validate();
 			return $this->processEngineerRequest();
 		}
 
-		return $this->renderEngineerForm();
+		$prefill = '';
+		$forMigration = (bool) $input->get('migration');
+
+		if($input->get('modify')) {
+			$prefill = (string) $session->get('at_engineer_prefill');
+			$session->remove('at_engineer_prefill');
+		}
+
+		return $this->renderEngineerForm($prefill, $forMigration);
 	}
 
 	/**
 	 * Render the Engineer request form
 	 *
 	 * @param string $prefill Optional text to pre-fill the textarea
+	 * @param bool $forMigration Did user arrive here from the "add migration" action? (default=false)
 	 * @return string
 	 *
 	 */
-	protected function renderEngineerForm(string $prefill = ''): string {
-		/** @var AgentTools $at */
-		$at = $this->wire('at');
-		$apiKey = (string) $at->get('engineer_api_key');
+	protected function renderEngineerForm(string $prefill = '', bool $forMigration = false): string {
+		$apiKey = (string) $this->at->get('engineer_api_key');
 
 		if(!$apiKey) {
-			$settingsUrl = $this->wire()->config->urls->admin . 'module/edit?name=AgentTools';
+			$settingsUrl = $this->wire()->modules->getModuleEditUrl($this);
 			$this->error(sprintf(
 				$this->_('An API key is required. Please configure it in [AgentTools settings](%s).'),
 				$settingsUrl
@@ -130,19 +317,34 @@ class ProcessAgentTools extends Process {
 		$form = $this->wire()->modules->get('InputfieldForm');
 		$form->attr('method', 'post');
 
-		/** @var InputfieldTextarea $f */
-		$f = $this->wire()->modules->get('InputfieldTextarea');
+		$f = $form->InputfieldTextarea;
 		$f->attr('name', 'engineer_request');
-		$f->label = $this->_('Ask the Engineer');
-		$f->description = $this->_('Ask a question about your site, or request a change. Changes are saved as migration files for your review before being applied.');
+		$f->icon = 'commenting';
 		$f->attr('rows', 5);
 		$f->val($prefill);
+
+		if($forMigration) {
+			$f->label = $this->_('Ask the site engineer to create a new migration');
+			$f->attr('placeholder', $this->_('Example: Create a Text field named summary with the label Summary and add it to the basic-page template.'));
+			$this->message($this->_('Example: Create a Text field named summary with the label Summary and add it to the basic-page template.'));
+		} else {
+			$f->label = $this->_('Ask the site engineer');
+			$f->description =
+				$this->_('Ask a question about your site, or request a change.') . ' ' .
+				$this->_('Changes are saved as migration files for your review before being applied.');
+			$f->detail = $this->description('engineer');
+		}
+
 		$form->add($f);
 
 		$f = $form->InputfieldSubmit;
 		$f->attr('name', 'submit_engineer');
 		$f->icon = 'send';
 		$f->val($this->_('Send'));
+		$qty = count($this->thinkingWords);
+		$word1 = $this->thinkingWords[mt_rand(0, $qty-1)];
+		do { $word2 = $this->thinkingWords[mt_rand(0, $qty-1)]; } while($word2 === $word1);
+		$f->appendMarkup .= " <span id='thinking' hidden>$word1 and $word2</span>";
 		$form->add($f);
 
 		return $form->render();
@@ -155,57 +357,240 @@ class ProcessAgentTools extends Process {
 	 *
 	 */
 	protected function processEngineerRequest(): string {
+		
+		$session = $this->wire()->session; 
+		$sanitizer = $this->wire()->sanitizer;
+		
 		$request = trim((string) $this->wire()->input->post('engineer_request'));
 
 		if(!strlen($request)) {
-			$this->error($this->_('Please enter a request.'));
-			return $this->renderEngineerForm();
+			$session->error($this->_('Please enter a request.'));
+			$session->location($this->wire()->page->url . 'engineer/');
 		}
-
-		/** @var AgentTools $at */
-		$at = $this->wire('at');
-		$result = $at->engineer->ask($request);
-
-		$out = '';
+		
+		/** @var InputfieldForm $form */
+		$form = $this->wire()->modules->get('InputfieldForm');
+		
+		$result = $this->at->engineer->ask($request);
+		
+		$out = "<blockquote><p>" . $sanitizer->entities($request) . "</p></blockquote>";
 
 		if($result['error']) {
 			$this->error($result['error']);
 		}
 
 		if($result['response']) {
-			$md = $this->wire()->modules->get('TextformatterMarkdownExtra');
-			if($md) {
-				$out .= $md->markdown($result['response']);
-			} else {
-				$out .= "<p>" . nl2br(htmlspecialchars($result['response'])) . "</p>";
-			}
+			$out .= $this->formatEngineerResponse($result['response']);
 		}
 
-		$modules = $this->wire()->modules;
+		$session->set('at_engineer_prefill', $request);
+	
 		$adminUrl = $this->wire()->page->url;
 
 		if($result['migration']) {
 			$filename = basename($result['migration']);
 			$this->message(sprintf($this->_('Migration saved: %s'), $filename));
-			/** @var InputfieldButton $btn */
-			$btn = $modules->get('InputfieldButton');
-			$btn->href = $adminUrl . 'migrations/';
+			$btn = $form->InputfieldButton;
+			$btn->href = $adminUrl . 'view-migration/?name=' . urlencode($filename);
 			$btn->icon = 'database';
 			$btn->val($this->_('Review and apply migration'));
-			$out .= $btn->render();
+			$btn->showInHeader(true);
+			$form->add($btn);
 		}
 
-		/** @var InputfieldButton $btn */
-		$btn = $modules->get('InputfieldButton');
+		$btn = $form->InputfieldButton;
 		$btn->href = $adminUrl . 'engineer/';
 		$btn->icon = 'arrow-left';
 		$btn->val($this->_('Ask another question'));
-		if($result['migration']) $btn->setSecondary();
-		$out .= $btn->render();
+		if($result['migration']) {
+			$btn->setSecondary();
+		} else {
+			$btn->showInHeader(true);
+		}
+		$form->add($btn);
 
-		return $out;
+		$btn = $form->InputfieldButton;
+		$btn->href = $adminUrl . 'engineer/?modify=1';
+		$btn->icon = 'edit';
+		$btn->val($this->_('Modify my question'));
+		$btn->setSecondary();
+		$form->add($btn);
+		
+		$form->val($out);
+
+		return $form->render();
 	}
+	
+	/**
+	 * Does given text contain markdown-looking elements?
+	 * 
+	 * Note that detecting markdown is a best guess, not an absolute. 
+	 * 
+	 * @param string $text
+	 * @param array $options
+	 *  - `quick` (bool): Exit on first found markdown-like element rather than checking all (default=false)
+	 *  - `verbose` (bool): Get array with [ 'name' => qty ] of found elements? (default=false)
+	 * @return int|array Returns score of 0 if no markdown found, 1+ with number of markdown-like elements found,
+	 *  or if the 'verbose' option is specified, an array is always returned. 
+	 * 
+	 */
+	protected function isMarkdown($text, array $options = []) {
+		$defaults = [ 'quick' => false, 'verbose' => false ];
+		$options = array_merge($defaults, $options);
+		$score = 0;
+		$names = [];
+		$patterns = [
+			'ul-li' => "\n- ",
+			'ul*li' => "\n* ", 
+			'link' => "](",
+			'headline' => '/^#{1,6}\s/m',
+			'inline-code' => '/`[^`]+`/m',
+			'table-row' => '/^\s*\|.+\|\s*$/m',
+			'code-block' => '/\n[~`]{3,}.+?\n[~`]{3,}/s',
+		];
+		foreach($patterns as $name => $pattern) {
+			if(strpos($pattern, '/') === 0) { // regex
+				$n = (int) preg_match_all($pattern, $text);
+			} else {
+				$n = substr_count($text, $pattern);
+			}
+			if($n) {
+				$score += $n;
+				$names[$name] = $n;
+			}
+			if($options['quick'] && $score > 0) break;
+		}
+		return $options['verbose'] ? $names : $score;
+	}
+	
+	/**
+	 * Format and prepare engineer response for output
+	 * 
+	 * @param string $response
+	 * @return string 
+	 * 
+	 */
+	protected function formatEngineerResponse($response) {
+		
+		if(strpos($response, '&') !== false) {
+			$response = $this->wire()->sanitizer->unentities($response);
+		}
+		
+		$markdown = null;
+		if($this->isMarkdown($response)) {
+			$markdown = $this->wire()->modules->get('TextformatterMarkdownExtra');
+		}
+		
+		if($markdown) {
+			// markdown
+			$response = $markdown->markdown($response);
+		} else if(strpos($response, '   ') !== false) {
+			// preformatted text
+			$response = $this->pre($response); 
+		} else {
+			// regular text	
+			$response = "<p>" . nl2br(htmlspecialchars($response)) . "</p>";
+		}
+		
+		$findReplace = [
+			'<table>' => '<table class="uk-table uk-table-divider uk-table-small">', 
+		];
+		
+		$response = str_replace(array_keys($findReplace), array_values($findReplace), $response);
+		
+		return $response;
+	}
+	
+	/**
+	 * View migration: display the PHP source of a single migration file
+	 *
+	 * @return string
+	 *
+	 */
+	public function ___executeViewMigration() {
+		
+		$modules = $this->wire()->modules;
+		$session = $this->wire()->session;
+		$input = $this->wire()->input;
+		$name = basename((string) $input->get('name'));
 
+		// Validate: must match migration filename pattern
+		if(!preg_match('/^\d{14}_[\w-]+\.php$/', $name)) {
+			$session->error($this->_('Invalid migration name.'));
+			$session->location('../migrations/');
+		}
+
+		$file = $this->at->getFilesPath('migrations') . $name;
+
+		if(!is_file($file)) {
+			$session->error($this->_('Migration file not found.'));
+			$session->location('../migrations/');
+		}
+
+		$applied = $this->at->migrations->isApplied($file);
+		$dateTime = $this->at->migrations->getDatetime($file);
+		$title = $this->at->migrations->getTitle($file);
+		
+		$this->headline(sprintf($this->_('Migration: %s'), $title));
+		$this->breadcrumb('../migrations/', $this->label('migrations'));
+		
+		// Handle apply POST
+		if($input->post('submit_apply')) {
+			$session->CSRF()->validate();
+			return $this->runMigrationFiles([$file], '?name=' . urlencode($name));
+		}
+		
+		$status = $this->label($applied ? 'applied' : 'pending');
+	
+		/** @var MarkupAdminDataTable Table */
+		$table = $modules->get('MarkupAdminDataTable');
+		$table->addClass('uk-margin-remove-bottom');
+		$table->setEncodeEntities(false);
+		$table->row([ $this->_('Status'), $status ]);
+		$table->row([ $this->_('Date'), $dateTime ]);
+		$table->row([ $this->_('File'), htmlspecialchars($file) ]);
+
+		$form = $modules->get('InputfieldForm');
+		$form->attr('method', 'post');
+		$form->action('./?name=' . urlencode($name));
+		
+		$summary = $this->at->migrations->getSummary($file);
+		if($summary) {
+			$f = $form->InputfieldMarkup;
+			$f->label = $this->_('Summary');
+			$f->icon = 'commenting';
+			$f->val($this->formatEngineerResponse($summary));
+			$form->add($f);
+		}
+
+		$f = $form->InputfieldMarkup;
+		$f->label = $this->_('Migration code');
+		$f->icon = 'code';
+		$f->val($this->pre(file_get_contents($file), [ 'wordWrap' => false ]));
+		$form->add($f);
+		
+		$btn = $form->InputfieldButton;
+		$btn->href = '../migrations/';
+		$btn->icon = $this->iconName('back');
+		$btn->val($this->label('back'));
+		$btn->setSecondary();
+		$form->add($btn);
+		
+		$f = $form->InputfieldSubmit;
+		$f->attr('name', 'submit_apply');
+		$f->showInHeader(true);
+		$f->icon = $applied ? 'refresh' : $this->iconName('apply');
+		$f->val($applied ? 
+			$this->_('Re-apply migration') : 
+			$this->_('Apply migration')
+		);
+		$form->add($f);
+
+		return
+			$table->render() .
+			$form->render();	
+	}
+	
 	/**
 	 * Render migration status table
 	 *
@@ -213,74 +598,109 @@ class ProcessAgentTools extends Process {
 	 *
 	 */
 	protected function renderStatus() {
-		/** @var AgentTools $at */
-		$at = $this->wire('at');
-		$migrationsDir = $at->getFilesPath('migrations');
-		$migrationFiles = $this->getMigrationFiles($migrationsDir);
+		$modules = $this->wire()->modules;
+		
+		$migrationsDir = $this->at->getFilesPath('migrations');
+		$migrationFiles = $this->at->migrations->getFiles($migrationsDir);
 
-		$this->headline($this->_('Agent Tools: Migrations'));
-		$out = '';
+		$this->headline($this->label('migrations'));
 
 		if(empty($migrationFiles)) {
 			$this->warning($this->_('No migration files found in:') . " `$migrationsDir`", Notice::allowMarkdown); 
 			/** @var InputfieldButton $button */
-			$button = $this->wire()->modules->get('InputfieldButton');
+			$button = $modules->get('InputfieldButton');
 			$button->href = '../engineer/?migration=1';
-			$button->value = $this->_('Ask the engineer to create a migration'); 
+			$button->value = $this->label('ask-create-migration');
 			$button->icon = 'commenting';
 			return $button->render();
 		}
 
 		$pendingCount = 0;
 		foreach($migrationFiles as $file) {
-			if(!$at->migrations->isApplied($file)) $pendingCount++;
+			if(!$this->at->migrations->isApplied($file)) $pendingCount++;
 		}
 
 		/** @var MarkupAdminDataTable $table */
-		$table = $this->wire()->modules->get('MarkupAdminDataTable');
+		$table = $modules->get('MarkupAdminDataTable');
 		$table->setEncodeEntities(false);
+		$table->setColNotSortable(0);
 		$table->headerRow([
-			$this->_('Migration file'),
-			$this->_('Date/time'),
-			$this->_('Status'),
+			'',
+			$this->label('migration'),
+			$this->label('date-time'),
+			$this->label('status'),
 		]);
 
-		$labelApplied = $this->_('Applied');
-		$labelPending = $this->_('Pending');
-
 		foreach($migrationFiles as $file) {
-			$applied = $at->migrations->isApplied($file);
-			$status = $applied
-				? "<span class='ui-priority-secondary'>$labelApplied</span>"
-				: "<strong class='ui-priority-primary'>$labelPending</strong>";
+			$applied = $this->at->migrations->isApplied($file);
+			$status = $this->label($applied ? 'applied' : 'pending');
+			$basename = basename($file);
+			$viewUrl = $this->wire()->page->url . 'view-migration/?name=' . urlencode($basename);
+			$checkbox = "<input type='checkbox' name='migrations[]' class='uk-checkbox migration-checkbox' value='" . htmlspecialchars($basename) . "'>";
 			$table->row([
-				htmlspecialchars(basename($file)),
-				$this->getMigrationDatetime($file),
+				$checkbox,
+				"<a href='$viewUrl'>" . htmlspecialchars($this->at->migrations->getTitle($file)) . "</a>",
+				$this->at->migrations->getDatetime($file),
 				$status,
 			]);
 		}
 
-		$out .= $table->render();
-
 		$appliedCount = count($migrationFiles) - $pendingCount;
 		$this->message(sprintf($this->_('%d applied, %d pending'), $appliedCount, $pendingCount));
+
+		// Pass confirmation message to JS
+		$this->wire()->config->js('AgentTools', [
+			'confirmDelete' => $this->_('Are you sure you want to delete the checked migration files? This cannot be undone.'),
+		]);
+
+		/** @var InputfieldForm $form */
+		$form = $modules->get('InputfieldForm');
+
+		// Wrap table and action buttons in a single form so checkboxes are submitted
+		$form->val($table->render());
 
 		if($pendingCount > 0) {
 			$label = sprintf(
 				$this->_n('Apply %d pending migration', 'Apply %d pending migrations', $pendingCount),
 				$pendingCount
 			);
-			/** @var InputfieldForm $form */
-			$form = $this->wire()->modules->get('InputfieldForm');
-			$f = $form->InputfieldSubmit;
+			/** @var InputfieldSubmit $f */
+			$f = $modules->get('InputfieldSubmit');
 			$f->attr('name', 'submit_apply');
-			$f->icon = 'play';
+			$f->icon = $this->iconName('apply'); 
 			$f->val($label);
 			$form->add($f);
-			$out .= $form->render();
 		}
 
-		return $out;
+		/** @var InputfieldSubmit $f */
+		$f = $modules->get('InputfieldSubmit');
+		$f->attr('name', 'submit_apply_checked');
+		$f->attr('id', 'submit_apply_checked');
+		$f->icon = 'check';
+		$f->val($this->_('Apply checked'));
+		$f->setSecondary();
+		$f->attr('hidden', 'hidden');
+		$form->add($f);
+
+		/** @var InputfieldSubmit $f */
+		$f = $modules->get('InputfieldSubmit');
+		$f->attr('name', 'submit_delete_checked');
+		$f->attr('id', 'submit_delete_checked');
+		$f->icon = $this->iconName('delete');
+		$f->val($this->_('Delete checked'));
+		$f->setSecondary();
+		$f->attr('hidden', 'hidden');
+		$form->add($f);
+
+		/** @var InputfieldButton $btn */
+		$btn = $modules->get('InputfieldButton');
+		$btn->href = '../engineer/?migration=1';
+		$btn->icon = $this->iconName('engineer');
+		$btn->val($this->_('New migration'));
+		$btn->setSecondary();
+		$form->add($btn);
+
+		return $form->render();
 	}
 
 	/**
@@ -290,41 +710,100 @@ class ProcessAgentTools extends Process {
 	 *
 	 */
 	protected function processApply() {
-		/** @var AgentTools $at */
-		$at = $this->wire('at');
-		$migrationsDir = $at->getFilesPath('migrations');
-		$migrationFiles = $this->getMigrationFiles($migrationsDir);
+		$migrationsDir = $this->at->getFilesPath('migrations');
+		$migrationFiles = $this->at->migrations->getFiles($migrationsDir);
 
 		$this->headline($this->_('Apply Migrations'));
 
 		$pending = [];
 		foreach($migrationFiles as $file) {
-			if(!$at->migrations->isApplied($file)) $pending[] = $file;
+			if(!$this->at->migrations->isApplied($file)) $pending[] = $file;
 		}
 
 		if(empty($pending)) {
-			$this->message($this->_('All migrations are already applied.'));
-			$this->wire()->session->location('./');
-			return '';
+			$session = $this->wire()->session;
+			$session->message($this->_('All migrations are already applied.'));
+			$session->location('./');
 		}
 
-		extract($this->wire()->fuel->getArray());
+		return $this->runMigrationFiles($pending, './');
+	}
+
+	/**
+	 * Get and validate checked migration files from POST, returning full paths
+	 *
+	 * @return array|null Array of full file paths, or null if none checked
+	 *
+	 */
+	protected function getCheckedMigrations(): ?array {
+		$names = $this->wire()->input->post('migrations');
+		if(empty($names) || !is_array($names)) return null;
+
+		$migrationsDir = $this->at->getFilesPath('migrations');
+		$files = [];
+
+		foreach($names as $name) {
+			$name = basename((string) $name);
+			if(!preg_match('/^\d{14}_[\w-]+\.php$/', $name)) continue;
+			$file = $migrationsDir . $name;
+			if(is_file($file)) $files[] = $file;
+		}
+
+		return empty($files) ? null : $files;
+	}
+
+	/**
+	 * Apply checked migrations (pending or already applied)
+	 *
+	 * @return string
+	 *
+	 */
+	protected function processApplyChecked(): string {
+		$this->headline($this->_('Apply checked migrations'));
+		$this->breadcrumb('../migrations/', $this->label('migrations'));
+
+		$checked = $this->getCheckedMigrations();
+		if(!$checked) {
+			$session = $this->wire()->session;
+			$session->warning($this->_('No migrations were checked.'));
+			$session->location('./');
+		}
+
+		// Sort chronologically by filename timestamp
+		sort($checked);
+
+		return $this->runMigrationFiles($checked, './');
+	}
+
+	/**
+	 * Execute migration files and render results
+	 *
+	 * Shared by processApply(), processApplyChecked(), and the single-migration
+	 * apply on the view migration screen.
+	 *
+	 * @param array $migrationFiles Full file paths to run, in order
+	 * @param string $backUrl URL for the "back" button (relative or absolute)
+	 * @return string
+	 *
+	 */
+	protected function runMigrationFiles(array $migrationFiles, string $backUrl): string {
+		extract($this->wire()->fuel->getArray()); // note: this overwrites $files, if used
 
 		$results = [];
 		$passCount = 0;
 		$failFile = null;
 
-		foreach($pending as $file) {
+		foreach($migrationFiles as $file) {
 			ob_start();
 			try {
 				include($file);
 				$fileOutput = ob_get_clean();
-				$at->migrations->addApplied($file);
+				$this->at->migrations->addApplied($file);
 				$passCount++;
 				$results[] = [
-					'file' => basename($file),
-					'output' => $fileOutput,
-					'success' => true,
+					'file' => basename($file), 
+					'output' => $fileOutput, 
+					'success' => true
 				];
 			} catch(\Throwable $e) {
 				$fileOutput = ob_get_clean();
@@ -340,27 +819,36 @@ class ProcessAgentTools extends Process {
 			}
 		}
 
+		// Regenerate site-maps so they reflect the changes for future Engineer requests
+		if($passCount > 0) {
+			try {
+				$this->at->sitemap->generate();
+				$this->at->sitemap->generateSchema();
+			} catch(\Throwable $e) {
+				// Non-fatal: migration applied successfully even if sitemap update fails
+			}
+		}
+
 		$out = '';
 
 		foreach($results as $result) {
 			if($result['success']) {
-				$icon = wireIconMarkup('check', 'fw');
-				$headingClass = '';
+				$icon = wireIconMarkup($this->iconName('applied'), 'fw');
+				$label = $this->label('applied');
 			} else {
-				$icon = wireIconMarkup('times', 'fw');
-				$headingClass = " style='color: red;'";
+				$icon = wireIconMarkup($this->iconName('failed'), 'fw');
+				$label = $this->label('failed');
 			}
-			$out .= "<h3$headingClass>$icon " . htmlspecialchars($result['file']) . "</h3>";
+			$file = htmlspecialchars($result['file']);
+			$out .= "<h3>$icon $file $label</h3>";
 			if(strlen(trim($result['output']))) {
-				$out .= "<pre class='notes' style='white-space: pre-wrap;'>" .
-					htmlspecialchars(trim($result['output'])) .
-					"</pre>";
+				$out .= $this->pre($result['output']); 
 			}
 		}
 
 		if($failFile) {
 			$this->error(sprintf($this->_('Stopped at: %s'), $failFile));
-			$remaining = count($pending) - $passCount - 1;
+			$remaining = count($migrationFiles) - $passCount - 1;
 			if($remaining > 0) {
 				$this->warning(sprintf(
 					$this->_('%d migration(s) applied. %d remaining migration(s) were NOT applied.'),
@@ -377,9 +865,9 @@ class ProcessAgentTools extends Process {
 
 		/** @var InputfieldButton $btn */
 		$btn = $this->wire()->modules->get('InputfieldButton');
-		$btn->href = './';
+		$btn->href = $backUrl;
 		$btn->icon = 'arrow-left';
-		$btn->val($this->_('Back to migration status'));
+		$btn->val($this->_('Back'));
 		$btn->setSecondary();
 		$out .= $btn->render();
 
@@ -387,32 +875,30 @@ class ProcessAgentTools extends Process {
 	}
 
 	/**
-	 * Extract ISO-8601 datetime string from migration filename
-	 *
-	 * @param string $file Full path or basename of migration file
-	 * @return string e.g. "2026-04-03 15:51:46" or empty string if not parseable
+	 * Delete checked migration files and remove from applied registry
 	 *
 	 */
-	protected function getMigrationDatetime($file) {
-		$ts = substr(basename($file), 0, 14);
-		if(!ctype_digit($ts)) return '';
-		return substr($ts, 0, 4) . '-' . substr($ts, 4, 2) . '-' . substr($ts, 6, 2) . ' ' .
-			substr($ts, 8, 2) . ':' . substr($ts, 10, 2) . ':' . substr($ts, 12, 2);
+	protected function processDeleteChecked() {
+		$session = $this->wire()->session;
+		
+		$checked = $this->getCheckedMigrations();
+		if(!$checked) {
+			$session->warning($this->_('No migrations were checked.'));
+			$session->location('./');
+		}
+
+		$deleteCount = 0;
+		foreach($checked as $file) {
+			$this->at->migrations->removeApplied($file);
+			if($this->wire()->files->unlink($file)) $deleteCount++;
+		}
+
+		$session->message(sprintf(
+			$this->_n('Deleted %d migration file.', 'Deleted %d migration files.', $deleteCount),
+			$deleteCount
+		));
+
+		$session->location('./');
 	}
 
-	/**
-	 * Get migration files sorted chronologically by timestamp prefix
-	 *
-	 * @param string $dir Path to migrations directory
-	 * @return array Array of full file paths
-	 *
-	 */
-	protected function getMigrationFiles($dir) {
-		if(!is_dir($dir)) return [];
-		$pattern = '[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]_*.php';
-		$files = glob($dir . $pattern);
-		if(!$files) return [];
-		sort($files);
-		return $files;
-	}
 }
