@@ -1,5 +1,31 @@
 # Changelog
 
+## Version 5
+
+### Engineer
+
+- **Multi-model support** — configure additional AI providers/models beyond the primary; each uses its own API key and endpoint
+- **Additional models** textarea in module config accepts one model per line in pipe-separated format: `model | api-key`, `model | api-key | endpoint`, or `model | api-key | endpoint | label`; provider is auto-detected from the key prefix (`sk-ant-*` = Anthropic, all others = OpenAI-compatible); whitespace around pipes is optional; lines beginning with `#` are ignored
+- **Control room** collapsible fieldset in the Engineer form with model selector and context options; auto-expands when non-default settings are saved
+- **Context selector** radio in Control room: *All* (site maps + API docs), *Custom* (choose individual items), or *None* (no extra context, useful for general questions or token-limited providers)
+- **Persist Control room selections** per user via `$user->meta('AgentTools')` — model index, context mode, and custom context items are remembered across sessions
+- **Debug notices** after each Engineer request listing which context items were actually included in the system prompt
+- System prompt now instructs the AI to combine all changes for a single request into one migration file
+- System prompt now instructs the AI to format Unix timestamps as human-readable date strings when displaying results
+- Improved API error handling — shows the actual error body when the response format doesn't match the expected structure
+
+### Module config
+
+- Primary AI provider settings wrapped in a *Primary AI provider* fieldset
+- Primary model field now accepts a comma-separated list of model IDs to expose multiple models from the same provider
+- Additional models textarea with inline format documentation and copy-paste examples for OpenAI, Anthropic, Google Gemini, Groq/Llama, and local Ollama
+
+### Bug fixes
+
+- Removed deprecated `curl_close()` call (PHP 8.5)
+
+---
+
 ## Version 4
 
 ### Engineer (new feature)

@@ -48,29 +48,47 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	protected $savedMigration = null;
 
 	/**
+	 * Context items included in the last buildSystemPrompt() call
+	 *
+	 * @var array
+	 *
+	 */
+	public $lastContext = [];
+
+	/**
 	 * Ask the engineer a question or request a site change
 	 *
 	 * @param string $request
+	 * @param array $options Optional overrides:
+	 *  - `provider` (string): AI provider constant (default: module config)
+	 *  - `apiKey` (string): API key (default: module config)
+	 *  - `model` (string): Model identifier (default: module config / provider default)
+	 *  - `endpoint` (string): API endpoint base URL for OpenAI-compatible providers
+	 *  - `context` (string): 'all' or 'custom' (default: 'all')
+	 *  - `contextItems` (array): Items to include when context='custom': sitemap_pages, sitemap_schema, api_core, api_site
 	 * @return array [ 'response' => string, 'migration' => string|null, 'error' => string|null ]
 	 *
 	 */
-	public function ask(string $request): array {
+	public function ask(string $request, array $options = []): array {
 
 		$this->savedMigration = null;
 		$result = ['response' => '', 'migration' => null, 'error' => null];
 
 		try {
-			$apiKey = (string) $this->at->get('engineer_api_key');
+			$provider = $options['provider'] ?? ((string) $this->at->get('engineer_provider') ?: self::providerAnthropic);
+			$apiKey = $options['apiKey'] ?? (string) $this->at->get('engineer_api_key');
+			$model = $options['model'] ?? '';
+			$endpoint = $options['endpoint'] ?? '';
+
 			if(!$apiKey) throw new WireException($this->_('API key is not configured in AgentTools module settings.'));
 
-			$provider = (string) $this->at->get('engineer_provider') ?: self::providerAnthropic;
 			$readOnly = (bool) $this->at->get('engineer_readonly');
-			$systemPrompt = $this->buildSystemPrompt($readOnly, $request);
+			$systemPrompt = $this->buildSystemPrompt($readOnly, $request, $options);
 			$tools = $readOnly ? [] : $this->getToolDefinitions($provider);
 			$messages = [['role' => 'user', 'content' => $request]];
 
 			for($i = 0; $i < self::maxIterations; $i++) {
-				$response = $this->sendRequest($provider, $systemPrompt, $messages, $tools);
+				$response = $this->sendRequest($provider, $apiKey, $model, $endpoint, $systemPrompt, $messages, $tools);
 				$toolCalls = $this->extractToolCalls($provider, $response);
 
 				if(empty($toolCalls)) {
@@ -97,14 +115,117 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	}
 
 	/**
+	 * Get all available models as a list of entries for the Control room model selector
+	 *
+	 * Combines the primary provider (CSV model field) with any additional models
+	 * configured in engineer_additional_models. Each entry has: label, model,
+	 * provider, key, endpoint.
+	 *
+	 * @return array
+	 *
+	 */
+	public function getAvailableModels(): array {
+		$models = [];
+
+		$primaryKey = (string) $this->at->get('engineer_api_key');
+		$primaryProvider = (string) $this->at->get('engineer_provider') ?: self::providerAnthropic;
+		$primaryEndpoint = (string) $this->at->get('engineer_endpoint') ?: '';
+		$primaryModelStr = (string) $this->at->get('engineer_model') ?:
+			($primaryProvider === self::providerAnthropic ? self::defaultAnthropicModel : self::defaultOpenAIModel);
+
+		foreach(explode(',', $primaryModelStr) as $modelId) {
+			$modelId = trim($modelId);
+			if(!$modelId) continue;
+			$models[] = [
+				'label' => $modelId,
+				'model' => $modelId,
+				'provider' => $primaryProvider,
+				'key' => $primaryKey,
+				'endpoint' => $primaryEndpoint,
+			];
+		}
+
+		$additionalStr = trim((string) $this->at->get('engineer_additional_models'));
+		if($additionalStr) {
+			foreach(explode("\n", $additionalStr) as $line) {
+				$entry = $this->parseAdditionalModelLine(trim($line));
+				if($entry) $models[] = $entry;
+			}
+		}
+
+		return $models;
+	}
+
+	/**
+	 * Parse a single additional model line into a model entry array
+	 *
+	 * Pipe-separated format (whitespace around pipes is ignored):
+	 *   model | key                        — provider auto-detected from key prefix
+	 *   model | key | endpoint             — with custom endpoint URL
+	 *   model | key | endpoint | label     — with custom endpoint and display label
+	 *
+	 * Provider is auto-detected as 'anthropic' if key starts with 'sk-ant-', otherwise 'openai'.
+	 * Label defaults to "model (provider)" if not specified.
+	 *
+	 * @param string $line
+	 * @return array|null
+	 *
+	 */
+	protected function parseAdditionalModelLine(string $line): ?array {
+		if(!$line || strpos($line, '#') === 0) return null;
+		$parts = explode('|', $line, 4);
+		$parts = array_map('trim', $parts);
+		$count = count($parts);
+		$endpoint = '';
+		$label = '';
+
+		if($count === 2) {
+			[$model, $key] = $parts;
+		} else if($count === 3) {
+			[$model, $key, $endpoint] = $parts;
+		} else {
+			[$model, $key, $endpoint, $label] = $parts;
+		}
+
+		$provider = strpos($key, 'sk-ant-') === 0 ? self::providerAnthropic : self::providerOpenAI;
+
+		$model = trim($model);
+		$key = trim($key);
+		$provider = trim($provider);
+		$endpoint = trim($endpoint);
+		$label = trim($label);
+
+		if(!$model || !$key) return null;
+		if(!$label) $label = $model . ' (' . $provider . ')';
+
+		return [
+			'label' => $label,
+			'model' => $model,
+			'provider' => $provider,
+			'key' => $key,
+			'endpoint' => $endpoint,
+		];
+	}
+
+	/**
 	 * Build the system prompt, including site map and schema context if available
 	 *
+	 * @param bool $readOnly
+	 * @param string $request The user's request (used for keyword-based doc inclusion)
+	 * @param array $options Context options from ask():
+	 *  - `provider` (string): Active provider (affects API doc inclusion logic)
+	 *  - `context` (string): 'all' or 'custom'
+	 *  - `contextItems` (array): Items to include when context='custom'
 	 * @return string
 	 *
 	 */
-	protected function buildSystemPrompt(bool $readOnly = false, string $request = ''): string {
+	protected function buildSystemPrompt(bool $readOnly = false, string $request = '', array $options = []): string {
 
 		$siteUrl = $this->wire()->config->httpRoot;
+		$provider = $options['provider'] ?? ((string) $this->at->get('engineer_provider') ?: self::providerAnthropic);
+		$contextMode = $options['context'] ?? 'all';
+		$contextItems = $options['contextItems'] ?? [];
+		$isAll = $contextMode === 'all';
 
 		$prompt =
 			"You are an expert ProcessWire CMS engineer with complete knowledge of the ProcessWire API " .
@@ -117,13 +238,19 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			"content, etc.), always use the save_migration tool rather than applying changes directly via " .
 			"eval_php. This allows the user to review changes before they are applied. " .
 			"Before writing a migration, use eval_php to verify current state (e.g. whether a field or " .
-			"template already exists) so the migration is accurate.\n\n" .
+			"template already exists) so the migration is accurate. " .
+			"Combine all changes for a single request into one migration file. Do not create multiple " .
+			"migrations for a single request unless the user explicitly asks for them, or unless the " .
+			"changes are technically unrelated and must be applied independently.\n\n" .
 
 			"ProcessWire API variables available to eval_php: \$pages, \$fields, \$templates, \$modules, " .
 			"\$users, \$roles, \$permissions, \$config, \$at (AgentTools module instance).\n\n" .
 
 			"When referencing pages by path in your response, format them as markdown links using this " .
 			"site's base URL: $siteUrl (e.g. a page at /blog/post/ becomes [$siteUrl" . "blog/post/]($siteUrl" . "blog/post/)).\n\n" .
+
+			"When displaying dates or timestamps retrieved via eval_php, always format them as human-readable " .
+			"strings (e.g. date('Y-m-d H:i:s', \$page->modified)) rather than returning raw Unix timestamps.\n\n" .
 
 			"If a request is ambiguous, incomplete, or lacks sufficient context to act on confidently " .
 			"(for example, it references previous context you don't have), ask the user for clarification " .
@@ -135,22 +262,46 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			"If asked to make a change, explain what would need to be done and provide example code, " .
 			"but note that changes must be applied manually or via the CLI.";
 
+		$this->lastContext = [];
+
+		// Staleness check always runs regardless of context mode (sitemaps have CLI value too)
 		$siteMapFile = $this->at->getFilesPath() . 'site-map.json';
 		if(is_file($siteMapFile)) {
 			if($this->isSitemapStale($siteMapFile)) $this->regenerateSitemap();
-			$prompt .= "\n\n[SITE MAP]\n" . file_get_contents($siteMapFile);
+			if($isAll || in_array('sitemap_pages', $contextItems)) {
+				$prompt .= "\n\n[SITE MAP]\n" . file_get_contents($siteMapFile);
+				$this->lastContext[] = 'sitemap_pages';
+			}
 		}
 
 		$schemaFile = $this->at->getFilesPath() . 'site-map-schema.json';
-		if(is_file($schemaFile)) {
+		if(is_file($schemaFile) && ($isAll || in_array('sitemap_schema', $contextItems))) {
 			$prompt .= "\n\n[SCHEMA]\n" . file_get_contents($schemaFile);
+			$this->lastContext[] = 'sitemap_schema';
 		}
 
-		$provider = (string) $this->at->get('engineer_provider') ?: self::providerAnthropic;
-		$includeApiDocs = $provider === self::providerAnthropic || $this->requestNeedsFieldtypeDocs($request);
-		if($includeApiDocs) {
-			$apiDocs = $this->getFieldtypeApiDocs();
-			if($apiDocs) $prompt .= "\n\n[FIELDTYPE API REFERENCE]\n" . $apiDocs;
+		if($isAll) {
+			// Original behavior: always include for Anthropic (cached), keyword-detect for others
+			$includeApiDocs = $provider === self::providerAnthropic || $this->requestNeedsFieldtypeDocs($request);
+			if($includeApiDocs) {
+				$apiDocs = $this->getFieldtypeApiDocs();
+				if($apiDocs) {
+					$prompt .= "\n\n[FIELDTYPE API REFERENCE]\n" . $apiDocs;
+					$this->lastContext[] = 'api_core';
+				}
+			}
+		} else {
+			// Custom mode: include only what the user explicitly selected
+			$includeCore = in_array('api_core', $contextItems);
+			$includeSite = in_array('api_site', $contextItems);
+			if($includeCore || $includeSite) {
+				$apiDocs = $this->getFieldtypeApiDocs($includeCore, $includeSite);
+				if($apiDocs) {
+					$prompt .= "\n\n[FIELDTYPE API REFERENCE]\n" . $apiDocs;
+					if($includeCore) $this->lastContext[] = 'api_core';
+					if($includeSite) $this->lastContext[] = 'api_site';
+				}
+			}
 		}
 
 		return $prompt;
@@ -231,28 +382,49 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	/**
 	 * Get Fieldtype API documentation from API.md files in the ProcessWire installation
 	 *
-	 * Reads API.md files from wire/modules/Fieldtype/ subdirectories if they exist.
-	 * Returns empty string if PW root cannot be determined or no API.md files are found.
+	 * Reads API.md files from Fieldtype module subdirectories. Can include core
+	 * (/wire/modules/Fieldtype/) and/or site (/site/modules/) API.md files.
 	 *
+	 * @param bool $includeCore Include core Fieldtype API.md files (default=true)
+	 * @param bool $includeSite Include site module API.md files (default=true)
 	 * @return string
 	 *
 	 */
-	protected function getFieldtypeApiDocs(): string {
-		$root = $this->wire()->config->paths->root;
-		$fieldtypePath = $root . 'wire/modules/Fieldtype/';
-		if(!is_dir($fieldtypePath)) return '';
-
+	protected function getFieldtypeApiDocs(bool $includeCore = true, bool $includeSite = true): string {
 		$docs = '';
 
-		// API.md files in subdirectory fieldtypes
-		foreach(glob($fieldtypePath . '*/API.md') as $file) {
-			$docs .= file_get_contents($file) . "\n\n";
+		if($includeCore) {
+			$fieldtypePath = $this->wire()->config->paths->root . 'wire/modules/Fieldtype/';
+			if(is_dir($fieldtypePath)) {
+				foreach(glob($fieldtypePath . '*/API.md') as $file) {
+					$docs .= file_get_contents($file) . "\n\n";
+				}
+				$flatApiFile = $fieldtypePath . 'API.md';
+				if(is_file($flatApiFile)) {
+					$docs .= file_get_contents($flatApiFile) . "\n\n";
+				}
+			}
 		}
 
-		// Flat API.md shared by simple fieldtypes (directly in Fieldtype/)
-		$flatApiFile = $fieldtypePath . 'API.md';
-		if(is_file($flatApiFile)) {
-			$docs .= file_get_contents($flatApiFile) . "\n\n";
+		if($includeSite) {
+			$sitePath = $this->wire()->config->paths->siteModules;
+			if(is_dir($sitePath)) {
+				// Site Fieldtype subdirectory (mirrors core structure)
+				$fieldtypePath = $sitePath . 'Fieldtype/';
+				if(is_dir($fieldtypePath)) {
+					foreach(glob($fieldtypePath . '*/API.md') as $file) {
+						$docs .= file_get_contents($file) . "\n\n";
+					}
+					$flatApiFile = $fieldtypePath . 'API.md';
+					if(is_file($flatApiFile)) {
+						$docs .= file_get_contents($flatApiFile) . "\n\n";
+					}
+				}
+				// Top-level site module API.md files (custom fieldtypes in own directory)
+				foreach(glob($sitePath . '*/API.md') as $file) {
+					$docs .= file_get_contents($file) . "\n\n";
+				}
+			}
 		}
 
 		return trim($docs);
@@ -308,25 +480,26 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	}
 
 	/**
-	 * Send a request to the configured AI provider
+	 * Send a request to the AI provider
 	 *
-	 * @param string $provider
+	 * @param string $provider Provider constant
+	 * @param string $apiKey API key (may be overridden per-model)
+	 * @param string $model Model identifier (empty string = use provider default)
+	 * @param string $endpoint Base URL for OpenAI-compatible providers (empty = module config or OpenAI default)
 	 * @param string $systemPrompt
 	 * @param array $messages
 	 * @param array $tools
 	 * @return array
 	 *
 	 */
-	protected function sendRequest(string $provider, string $systemPrompt, array $messages, array $tools): array {
-		$apiKey = (string) $this->at->get('engineer_api_key');
-		$model = (string) $this->at->get('engineer_model');
-
+	protected function sendRequest(string $provider, string $apiKey, string $model, string $endpoint, string $systemPrompt, array $messages, array $tools): array {
 		if($provider === self::providerAnthropic) {
 			if(!$model) $model = self::defaultAnthropicModel;
 			return $this->sendAnthropicRequest($apiKey, $model, $systemPrompt, $messages, $tools);
 		} else {
 			if(!$model) $model = self::defaultOpenAIModel;
-			$endpoint = rtrim((string) $this->at->get('engineer_endpoint') ?: 'https://api.openai.com/v1', '/');
+			if(!$endpoint) $endpoint = (string) $this->at->get('engineer_endpoint') ?: 'https://api.openai.com/v1';
+			$endpoint = rtrim($endpoint, '/');
 			return $this->sendOpenAIRequest($apiKey, $model, $endpoint, $systemPrompt, $messages, $tools);
 		}
 	}
@@ -589,15 +762,14 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		$response = curl_exec($ch);
 		$httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
 		$curlError = curl_error($ch);
-		curl_close($ch);
-
 		if($response === false) throw new WireException("API request failed: $curlError");
 
 		$data = json_decode($response, true);
 		if(!is_array($data)) throw new WireException("Invalid API response: expected JSON");
 
 		if($httpCode >= 400) {
-			$error = $data['error']['message'] ?? $data['error'] ?? 'Unknown error';
+			$error = $data['error']['message'] ?? $data['error'] ?? $data['message'] ?? null;
+			if($error === null) $error = trim($response) ?: 'Unknown error';
 			if(is_array($error)) $error = json_encode($error);
 			throw new WireException("API error ($httpCode): $error");
 		}
@@ -614,10 +786,16 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	public function getConfigInputfields(InputfieldWrapper $inputfields): void {
 		$modules = $this->wire()->modules;
 
-		/** @var InputfieldFieldset $fs */
-		$fs = $modules->get('InputfieldFieldset');
-		$fs->label = $this->_('Engineer');
-		$fs->icon = 'commenting';
+		/** @var InputfieldFieldset $outerFs */
+		$outerFs = $modules->get('InputfieldFieldset');
+		$outerFs->label = $this->_('Engineer');
+		$outerFs->icon = 'commenting';
+
+		// Primary AI provider fieldset
+		/** @var InputfieldFieldset $primaryFs */
+		$primaryFs = $modules->get('InputfieldFieldset');
+		$primaryFs->label = $this->_('Primary AI provider');
+		$outerFs->add($primaryFs);
 
 		/** @var InputfieldSelect $f */
 		$f = $modules->get('InputfieldSelect');
@@ -626,31 +804,41 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		$f->addOption(self::providerAnthropic, 'Anthropic (Claude)');
 		$f->addOption(self::providerOpenAI, $this->_('OpenAI-compatible'));
 		$f->val($this->at->get('engineer_provider') ?: self::providerAnthropic);
-		$fs->add($f);
+		$primaryFs->add($f);
 
 		/** @var InputfieldText $f */
 		$f = $modules->get('InputfieldText');
 		$f->attr('name', 'engineer_api_key');
-		$f->attr('type', 'password');
 		$f->label = $this->_('API Key');
 		$f->val($this->at->get('engineer_api_key') ?: '');
-		$fs->add($f);
+		$primaryFs->add($f);
 
 		$f = $modules->get('InputfieldText');
 		$f->attr('name', 'engineer_model');
 		$f->attr('list', 'at_engineer_model_list');
 		$f->label = $this->_('Model');
-		$f->description = sprintf(
-			$this->_('Model API identifier. Leave blank for default: %s (Anthropic) or %s (OpenAI-compatible). Common models are suggested as you type.'),
-			self::defaultAnthropicModel,
-			self::defaultOpenAIModel
-		);
+		$f->description = 
+			$this->_('Model API identifier.') . ' ' . 
+			sprintf(
+				$this->_('Leave blank for default: %s (Anthropic) or %s (OpenAI-compatible).'),
+				'`' . self::defaultAnthropicModel . '`',
+				'`' . self::defaultOpenAIModel . '`',
+			) . ' ' . 
+			sprintf(
+				$this->_("Enter multiple comma-separated identifiers to offer a choice in the Engineer's Control room (e.g. %s,%s)."),
+				'`' . self::defaultAnthropicModel . '`',
+				'`claude-opus-4-7`'
+			) . ' ' . 
+			$this->_('Common models are suggested as you type. First entered model is the default.');
 		$f->val($this->at->get('engineer_model') ?: '');
-		$knownModels = [
+		$claudeModels = [
 			// Anthropic
+			'claude-opus-4-7',
 			'claude-opus-4-6',
 			'claude-sonnet-4-6',
 			'claude-haiku-4-5',
+		];
+		$knownModels = $claudeModels + [
 			// OpenAI
 			'gpt-4o',
 			'gpt-4o-mini',
@@ -658,9 +846,14 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			'o1',
 			'o3-mini',
 		];
+		$f->detail =
+			'Example for single model: `claude-sonnet-4-6` ' . "\n" .
+			'Example for multi models: `' . implode(',', $claudeModels) . "`\n" .
+			'Models entered must be from the same provider and use the same API key (above). ' .
+			'For other providers, see "Additional models" below.';
 		$options = implode('', array_map(function($m) { return "<option value='$m'>"; }, $knownModels));
 		$f->appendMarkup = "<datalist id='at_engineer_model_list'>$options</datalist>";
-		$fs->add($f);
+		$primaryFs->add($f);
 
 		/** @var InputfieldURL $f */
 		$f = $modules->get('InputfieldURL');
@@ -669,7 +862,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		$f->description = $this->_('Base URL for OpenAI-compatible providers. Default: https://api.openai.com/v1');
 		$f->showIf = 'engineer_provider=' . self::providerOpenAI;
 		$f->val($this->at->get('engineer_endpoint') ?: '');
-		$fs->add($f);
+		$primaryFs->add($f);
 
 		/** @var InputfieldToggle $f */
 		$f = $modules->get('InputfieldToggle');
@@ -677,8 +870,41 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		$f->label = $this->_('Read-only mode');
 		$f->description = $this->_('When enabled, the Engineer can answer questions and suggest changes but cannot execute code or create migration files.');
 		$f->val((int) $this->at->get('engineer_readonly'));
-		$fs->add($f);
+		$primaryFs->add($f);
 
-		$inputfields->add($fs);
+		// Additional models fieldset
+		/** @var InputfieldFieldset $additionalFs */
+		/*
+		$additionalFs = $modules->get('InputfieldFieldset');
+		$additionalFs->label = $this->_('Additional models');
+		$additionalFs->collapsed = Inputfield::collapsedYes;
+		*/
+
+		/** @var InputfieldTextarea $f */
+		$f = $modules->get('InputfieldTextarea');
+		$f->attr('name', 'engineer_additional_models');
+		$f->label = $this->_('Additional models');
+		$f->collapsed = Inputfield::collapsedBlank;
+		$f->description =
+			'Add one model per line to make it available in the Engineer\'s Control room. Each model uses its own API key, ' .
+			'independent of the primary provider above. Use the pipe-separated format: ' . "\n\n" . 
+			'`model | api-key` ' . "\n" . 
+			'`model | api-key | endpoint-url` ' . "\n" . 
+			'`model | api-key | endpoint-url | label`' . "\n\n" . 
+			'Provider is auto-detected from the key prefix (`sk-ant-*` = Anthropic, all others = OpenAI-compatible). ' .
+			'Whitespace around pipes is optional. Lines beginning with `#` are ignored.';
+		$f->appendMarkup .=
+			"<p class='uk-margin-small-top uk-margin-remove-bottom'>Examples:</p>" . 
+			"<pre class='uk-margin-remove'>" . 
+			"# OpenAI\ngpt-4o | YOUR_OPENAI_API_KEY\n\n" .
+			"# Anthropic (key prefix auto-detects provider)\nclaude-haiku-4-5-20251001 | sk-ant-YOUR_API_KEY\n\n" .
+			"# Google Gemini\ngemini-2.0-flash | YOUR_API_KEY | https://generativelanguage.googleapis.com/v1beta/openai/\n\n" .
+			"# Groq / Llama (label distinguishes it from other openai-compatible models)\nllama-3.3-70b-versatile | YOUR_API_KEY | https://api.groq.com/openai/v1 | Groq Llama 3.3\n\n" .
+			"# Local Ollama (no real key required)\nllama3 | ollama | http://localhost:11434/v1" . 
+			"</pre>";
+		$f->attr('rows', 6);
+		$f->val($this->at->get('engineer_additional_models') ?: '');
+		$outerFs->add($f);
+		$inputfields->add($outerFs);
 	}
 }

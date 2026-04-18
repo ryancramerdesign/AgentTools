@@ -161,11 +161,12 @@ class ProcessAgentTools extends Process {
 				$this->_('Migrations are scripts that you can run to automatically make changes on your site.') . ' ' .
 				$this->_('Use this tool to apply, view, create or delete migrations.');
 			case 'engineer': return
-				$this->_('This is your site engineer and he can tell you everything there is to know about your ProcessWire installation.') . ' ' .
-				$this->_('In addition, he can make changes, perform web development tasks, or create migrations.') . ' ' .
-				$this->_('The engineer provides a way for your AI agent and you to work together.') . ' ' .
-				$this->_('This is an alternative to using AgentTools from the command line.') . ' '.
-				$this->_('But please note it may not be as powerful or contextual as using AgentTools from the command line.');
+				$this->_('Your site engineer can tell you everything there is to know about your ProcessWire installation.') . ' ' .
+				$this->_('Engineer can make changes, perform web development tasks, create migrations, and more.') . ' ';
+				$this->_('Please be sure you have full backups of your site and database before asking Engineer to make changes to your site.') . ' ';
+				//$this->_('The engineer provides a way for your AI agent and you to work together.') . ' ' .
+				//$this->_('This is an alternative to using AgentTools from the command line.') . ' '.
+				//$this->_('But please note it may not be as powerful or contextual as using AgentTools from the command line.');
 		}
 		return 'unknown description name';
 	}
@@ -313,6 +314,13 @@ class ProcessAgentTools extends Process {
 			return '';
 		}
 
+		// Load persisted Control room preferences
+		$meta = $this->wire()->user->meta('AgentTools') ?: [];
+		$savedModelIndex = (string) ($meta['engineer_model_index'] ?? '0');
+		$validContextModes = ['all', 'custom', 'none'];
+		$savedAddContext = in_array(($meta['engineer_add_context'] ?? ''), $validContextModes) ? $meta['engineer_add_context'] : 'all';
+		$savedCustomContexts = (array) ($meta['engineer_custom_contexts'] ?? []);
+
 		/** @var InputfieldForm $form */
 		$form = $this->wire()->modules->get('InputfieldForm');
 		$form->attr('method', 'post');
@@ -336,11 +344,62 @@ class ProcessAgentTools extends Process {
 		}
 
 		$form->add($f);
+		
+		$fs = $form->InputfieldFieldset;
+		$fs->label = 'Control room';
+		$fs->icon = 'sliders';
+		$controlRoomChanged = $savedModelIndex !== '0' || $savedAddContext !== 'all' || !empty($savedCustomContexts);
+		$fs->collapsed = $controlRoomChanged ? Inputfield::collapsedNo : Inputfield::collapsedYes;
+		$form->add($fs);
+		
+		$f = $form->InputfieldSelect;
+		$f->attr('name', 'engineer_model_index');
+		$f->label = 'Model';
+		$availableModels = $this->at->engineer->getAvailableModels();
+		foreach($availableModels as $index => $entry) {
+			$f->addOption((string) $index, $entry['label']);
+		}
+		$f->val($savedModelIndex);
+		$f->columnWidth = 34;
+		$fs->add($f);
 
+		$f = $form->InputfieldRadios;
+		$f->attr('name', 'add_context');
+		$f->label = $this->_('Extra context to include');
+		$f->addOption('all', $this->_('All: site maps + API docs'));
+		$f->addOption('custom', $this->_('Custom: select…'));
+		$f->addOption('none', $this->_('None'));
+		$f->columnWidth = 66;
+		$f->optionColumns = 1;
+		$f->val($savedAddContext);
+		$f->required = true;
+		$f->detail = 
+			$this->_('The "All" option provides the best results but also uses the most tokens.') . "\n" . 
+			$this->_('The "None" option means your API agent will use PW’s API to find what it needs.');
+		$fs->add($f);
+
+		$f = $form->InputfieldCheckboxes;
+		$f->attr('name', 'custom_contexts');
+		$f->label = $this->_('Please select what to include');
+		$f->description =
+			$this->_('The more context you provide, the better Engineer will know your site, and the more tokens it will use. ' .
+			'But if you are asking Engineer a general ProcessWire question unrelated to the structure of your site, no extra context may be needed.');
+		$options = [
+			'sitemap_pages' => $this->_('Site map of your site\'s pages'),
+			'sitemap_schema' => $this->_('Schema of your site\'s fields and templates'),
+			'api_core' => $this->_('Core field APIs (/wire/modules/)'),
+			'api_site' => $this->_('Site field APIs (/site/modules/)'),
+		];
+		$f->addOptions($options);
+		$f->val($savedCustomContexts);
+		$f->showIf = 'add_context=custom';
+		$fs->add($f);
+		
 		$f = $form->InputfieldSubmit;
 		$f->attr('name', 'submit_engineer');
 		$f->icon = 'send';
 		$f->val($this->_('Send'));
+		$f->showInHeader(true);
 		$qty = count($this->thinkingWords);
 		$word1 = $this->thinkingWords[mt_rand(0, $qty-1)];
 		do { $word2 = $this->thinkingWords[mt_rand(0, $qty-1)]; } while($word2 === $word1);
@@ -361,18 +420,64 @@ class ProcessAgentTools extends Process {
 		$session = $this->wire()->session; 
 		$sanitizer = $this->wire()->sanitizer;
 		
-		$request = trim((string) $this->wire()->input->post('engineer_request'));
+		$input = $this->wire()->input;
+		$request = trim((string) $input->post('engineer_request'));
 
 		if(!strlen($request)) {
 			$session->error($this->_('Please enter a request.'));
 			$session->location($this->wire()->page->url . 'engineer/');
 		}
-		
+
+		// Build options from Control room selections
+		$validContextModes = ['all', 'custom', 'none'];
+		$addContext = (string) $input->post('add_context');
+		$contextMode = in_array($addContext, $validContextModes) ? $addContext : 'all';
+		$contextItems = [];
+		if($contextMode === 'custom') {
+			$validItems = ['sitemap_pages', 'sitemap_schema', 'api_core', 'api_site'];
+			$rawItems = $input->post('custom_contexts');
+			if(is_array($rawItems)) {
+				foreach($rawItems as $item) {
+					if(in_array((string) $item, $validItems)) $contextItems[] = (string) $item;
+				}
+			}
+		}
+
+		$options = ['context' => $contextMode, 'contextItems' => $contextItems];
+
+		$modelIndex = (int) $input->post('engineer_model_index');
+		$availableModels = $this->at->engineer->getAvailableModels();
+		if(isset($availableModels[$modelIndex])) {
+			$entry = $availableModels[$modelIndex];
+			$options['model'] = $entry['model'];
+			$options['provider'] = $entry['provider'];
+			$options['apiKey'] = $entry['key'];
+			$options['endpoint'] = $entry['endpoint'];
+		}
+
+		// Persist Control room selections per user
+		$user = $this->wire()->user;
+		$meta = $user->meta('AgentTools') ?: [];
+		$meta['engineer_model_index'] = $modelIndex;
+		$meta['engineer_add_context'] = $contextMode;
+		$meta['engineer_custom_contexts'] = $contextItems;
+		$user->meta('AgentTools', $meta);
+
 		/** @var InputfieldForm $form */
 		$form = $this->wire()->modules->get('InputfieldForm');
-		
-		$result = $this->at->engineer->ask($request);
-		
+
+		$result = $this->at->engineer->ask($request, $options);
+
+		foreach($this->at->engineer->lastContext as $item) {
+			$labels = [
+				'sitemap_pages' => $this->_('Included: site map of pages'),
+				'sitemap_schema' => $this->_('Included: schema of fields and templates'),
+				'api_core' => $this->_('Included: core field APIs'),
+				'api_site' => $this->_('Included: site field APIs'),
+			];
+			if(isset($labels[$item])) $this->message($labels[$item]);
+		}
+
 		$out = "<blockquote><p>" . $sanitizer->entities($request) . "</p></blockquote>";
 
 		if($result['error']) {
