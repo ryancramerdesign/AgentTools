@@ -53,6 +53,18 @@ so it is never overwritten by rsync or file transfers.
 Migrations can also be applied from the ProcessWire admin at **Setup > Agent Tools**.
 
 
+## Engineer (admin UI)
+
+The ProcessAgentTools module provides a browser-based Engineer at **Setup > Agent Tools > Engineer**.
+It connects to an AI provider (Anthropic, OpenAI, or any OpenAI-compatible endpoint) and gives it
+four tools: `eval_php`, `save_migration`, `site_info` (fetches page tree or schema on demand), and
+`api_docs` (discovers and retrieves ProcessWire API.md documentation on demand). The Engineer
+supports multi-turn conversation memory within a session.
+
+The Engineer is separate from the CLI workflow described in this file — it is intended for
+interactive human use from the browser, not for agent-to-agent communication (that feature
+is planned as a future `--at-engineer` CLI command).
+
 ## Further reading
 
 - `agent_cli.md` — full details on migrations, `--at-cli` session usage, and conventions

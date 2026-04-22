@@ -29,13 +29,18 @@ the command line interface (CLI) can do anything that the ProcessWire API can do
 Also packaged with the AgentTools module is the ProcessAgentTools module. This provides an
 admin application (Setup > Agent Tools), currently with the following features:
 
-- Engineer: This is your site engineer, which connects directly with your AI agent and 
-  enables you to ask it questions about anything in your site. It can also assist you with 
-  creating migrations or making any other kinds of updates on your site. 
+- **Engineer**: A natural language AI interface to your site. Ask questions, request changes,
+  or have it create migrations — all from your browser. The Engineer has four tools available
+  to it: `eval_php` (query live site data), `save_migration` (create a migration for review),
+  `site_info` (fetch the site's page tree or fields/templates schema on demand), and
+  `api_docs` (discover and retrieve ProcessWire API documentation on demand). The Engineer
+  supports conversation memory so it can refer back to earlier exchanges in the same session.
+  Multiple AI providers and models can be configured and switched between from a Control room
+  in the Engineer form.
 
-- Migrations: This tool enables you to create, apply, list, view, and delete migrations
+- **Migrations**: This tool enables you to create, apply, list, view, and delete migrations
   that were created by the Engineer or by your AI agent using the command line tools of
-  this module. 
+  this module.
 
 **Please note that this module should be considered very much in 'beta test' at this stage. 
 If use any of its features in production, test thoroughly in a dev environment first, and keep
@@ -45,8 +50,9 @@ I had to restore anything, just the nature of the module means that you should u
 ## Requirements
 
 ProcessWire 3.0.255 or newer is recommended, but almost any 3.x version of ProcessWire should still work.
-If you use ProcessWire 3.0.258 or newer, the Engineer and Migrations features become much smarter,
-as ProcessWire 3.0.258 and newer include API.md files that this module provides to AI agents. 
+If you use ProcessWire 3.0.258 or newer, the Engineer becomes smarter when working with fields,
+as ProcessWire 3.0.258 and newer include API.md files that the Engineer retrieves on demand via
+its `api_docs` tool. More API.md files covering other parts of ProcessWire are being added over time.
 
 CLI-compatable AI helper of your choice in order to use the CLI tools to full effect. Examples 
 include Claude Code and OpenAI Codex, though it should work with others as well. This module

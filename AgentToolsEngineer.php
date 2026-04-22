@@ -40,6 +40,17 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	const maxOutputLength = 50000;
 
 	/**
+	 * Max conversation history pairs (user + assistant) to retain
+	 *
+	 * Each pair = one user message + one assistant reply. Oldest pairs are
+	 * trimmed first when the limit is exceeded. Can be made configurable later.
+	 *
+	 * @var int
+	 *
+	 */
+	protected $maxHistoryPairs = 10;
+
+	/**
 	 * Migration file saved during the current ask() call, if any
 	 *
 	 * @var string|null
@@ -64,15 +75,16 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	 *  - `apiKey` (string): API key (default: module config)
 	 *  - `model` (string): Model identifier (default: module config / provider default)
 	 *  - `endpoint` (string): API endpoint base URL for OpenAI-compatible providers
-	 *  - `context` (string): 'all' or 'custom' (default: 'all')
-	 *  - `contextItems` (array): Items to include when context='custom': sitemap_pages, sitemap_schema, api_core, api_site
-	 * @return array [ 'response' => string, 'migration' => string|null, 'error' => string|null ]
+	 *  - `context` (string): 'all', 'custom', or 'none' (default: 'all')
+	 *  - `contextItems` (array): Items to include when context='custom': sitemap_pages, sitemap_schema
+	 *  - `history` (array): Prior conversation as [ ['role'=>'user','content'=>'...'], ['role'=>'assistant','content'=>'...'], ... ]
+	 * @return array [ 'response' => string, 'migration' => string|null, 'error' => string|null, 'history' => array ]
 	 *
 	 */
 	public function ask(string $request, array $options = []): array {
 
 		$this->savedMigration = null;
-		$result = ['response' => '', 'migration' => null, 'error' => null];
+		$result = ['response' => '', 'migration' => null, 'error' => null, 'history' => []];
 
 		try {
 			$provider = $options['provider'] ?? ((string) $this->at->get('engineer_provider') ?: self::providerAnthropic);
@@ -82,18 +94,38 @@ class AgentToolsEngineer extends AgentToolsHelper {
 
 			if(!$apiKey) throw new WireException($this->_('API key is not configured in AgentTools module settings.'));
 
+			// Build message history: prior pairs (text only) + current request
+			$history = $options['history'] ?? [];
+			$messages = [];
+			foreach($history as $entry) {
+				if(isset($entry['role']) && isset($entry['content'])) {
+					$messages[] = ['role' => $entry['role'], 'content' => (string) $entry['content']];
+				}
+			}
+			$messages[] = ['role' => 'user', 'content' => $request];
+
 			$readOnly = (bool) $this->at->get('engineer_readonly');
 			$systemPrompt = $this->buildSystemPrompt($readOnly, $request, $options);
 			$tools = $readOnly ? [] : $this->getToolDefinitions($provider);
-			$messages = [['role' => 'user', 'content' => $request]];
 
 			for($i = 0; $i < self::maxIterations; $i++) {
 				$response = $this->sendRequest($provider, $apiKey, $model, $endpoint, $systemPrompt, $messages, $tools);
 				$toolCalls = $this->extractToolCalls($provider, $response);
 
 				if(empty($toolCalls)) {
-					$result['response'] = $this->extractText($provider, $response);
+					$responseText = $this->extractText($provider, $response);
+					$result['response'] = $responseText;
 					$result['migration'] = $this->savedMigration;
+					// Return updated history: trim to maxHistoryPairs, append this exchange
+					$updatedHistory = array_merge($history, [
+						['role' => 'user', 'content' => $request],
+						['role' => 'assistant', 'content' => $responseText],
+					]);
+					$maxEntries = $this->maxHistoryPairs * 2;
+					if(count($updatedHistory) > $maxEntries) {
+						$updatedHistory = array_slice($updatedHistory, -$maxEntries);
+					}
+					$result['history'] = $updatedHistory;
 					return $result;
 				}
 
@@ -211,28 +243,23 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	 * Build the system prompt, including site map and schema context if available
 	 *
 	 * @param bool $readOnly
-	 * @param string $request The user's request (used for keyword-based doc inclusion)
+	 * @param string $request
 	 * @param array $options Context options from ask():
-	 *  - `provider` (string): Active provider (affects API doc inclusion logic)
-	 *  - `context` (string): 'all' or 'custom'
-	 *  - `contextItems` (array): Items to include when context='custom'
+	 *  - `context` (string): 'all', 'custom', or 'none'
+	 *  - `contextItems` (array): Items to include when context='custom': sitemap_pages, sitemap_schema
 	 * @return string
 	 *
 	 */
 	protected function buildSystemPrompt(bool $readOnly = false, string $request = '', array $options = []): string {
 
 		$siteUrl = $this->wire()->config->httpRoot;
-		$provider = $options['provider'] ?? ((string) $this->at->get('engineer_provider') ?: self::providerAnthropic);
-		$contextMode = $options['context'] ?? 'all';
-		$contextItems = $options['contextItems'] ?? [];
-		$isAll = $contextMode === 'all';
 
 		$prompt =
 			"You are an expert ProcessWire CMS engineer with complete knowledge of the ProcessWire API " .
 			"and full access to this specific installation.\n\n" .
 
 			"For informational requests, respond with clear concise text. Use the eval_php tool when " .
-			"you need to query live site data not available in the site map or schema provided below.\n\n" .
+			"you need to query live site data.\n\n" .
 
 			"For requests that make changes to the site (creating or modifying fields, templates, pages, " .
 			"content, etc.), always use the save_migration tool rather than applying changes directly via " .
@@ -245,6 +272,15 @@ class AgentToolsEngineer extends AgentToolsHelper {
 
 			"ProcessWire API variables available to eval_php: \$pages, \$fields, \$templates, \$modules, " .
 			"\$users, \$roles, \$permissions, \$config, \$at (AgentTools module instance).\n\n" .
+
+			"Use the site_info tool to retrieve information about this site's pages or fields and templates. " .
+			"Call with type='pages' for a map of the site's page tree, or type='schema' for the site's " .
+			"fields and templates structure. Fetch only what the request requires.\n\n" .
+
+			"Use the api_docs tool to discover and retrieve ProcessWire API documentation when needed. " .
+			"Call with action='list' to see all available doc names, then action='get' with the doc name to read it. " .
+			"Retrieve API docs before creating or modifying fields, templates, or other items where you need " .
+			"to know available options or method signatures.\n\n" .
 
 			"When referencing pages by path in your response, format them as markdown links using this " .
 			"site's base URL: $siteUrl (e.g. a page at /blog/post/ becomes [$siteUrl" . "blog/post/]($siteUrl" . "blog/post/)).\n\n" .
@@ -262,47 +298,9 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			"If asked to make a change, explain what would need to be done and provide example code, " .
 			"but note that changes must be applied manually or via the CLI.";
 
-		$this->lastContext = [];
-
-		// Staleness check always runs regardless of context mode (sitemaps have CLI value too)
+		// Keep sitemaps current so site_info tool returns fresh data
 		$siteMapFile = $this->at->getFilesPath() . 'site-map.json';
-		if(is_file($siteMapFile)) {
-			if($this->isSitemapStale($siteMapFile)) $this->regenerateSitemap();
-			if($isAll || in_array('sitemap_pages', $contextItems)) {
-				$prompt .= "\n\n[SITE MAP]\n" . file_get_contents($siteMapFile);
-				$this->lastContext[] = 'sitemap_pages';
-			}
-		}
-
-		$schemaFile = $this->at->getFilesPath() . 'site-map-schema.json';
-		if(is_file($schemaFile) && ($isAll || in_array('sitemap_schema', $contextItems))) {
-			$prompt .= "\n\n[SCHEMA]\n" . file_get_contents($schemaFile);
-			$this->lastContext[] = 'sitemap_schema';
-		}
-
-		if($isAll) {
-			// Original behavior: always include for Anthropic (cached), keyword-detect for others
-			$includeApiDocs = $provider === self::providerAnthropic || $this->requestNeedsFieldtypeDocs($request);
-			if($includeApiDocs) {
-				$apiDocs = $this->getFieldtypeApiDocs();
-				if($apiDocs) {
-					$prompt .= "\n\n[FIELDTYPE API REFERENCE]\n" . $apiDocs;
-					$this->lastContext[] = 'api_core';
-				}
-			}
-		} else {
-			// Custom mode: include only what the user explicitly selected
-			$includeCore = in_array('api_core', $contextItems);
-			$includeSite = in_array('api_site', $contextItems);
-			if($includeCore || $includeSite) {
-				$apiDocs = $this->getFieldtypeApiDocs($includeCore, $includeSite);
-				if($apiDocs) {
-					$prompt .= "\n\n[FIELDTYPE API REFERENCE]\n" . $apiDocs;
-					if($includeCore) $this->lastContext[] = 'api_core';
-					if($includeSite) $this->lastContext[] = 'api_site';
-				}
-			}
-		}
+		if(is_file($siteMapFile) && $this->isSitemapStale($siteMapFile)) $this->regenerateSitemap();
 
 		return $prompt;
 	}
@@ -362,72 +360,50 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	 * @return bool
 	 *
 	 */
-	protected function requestNeedsFieldtypeDocs(string $request): bool {
-		$keywords = [
-			'field', 'fieldtype', 'inputfield',
-			'textarea', 'checkbox', 'toggle', 'select',
-			'image', 'file', 'upload',
-			'repeater', 'pagetable', 'page reference',
-			'datetime', 'date', 'email', 'url',
-			'integer', 'float', 'decimal',
-			'options field', 'multi',
+	/**
+	 * Get an index of all available API.md documentation files
+	 *
+	 * Scans core (/wire/modules/) and site (/site/modules/) at both one and two
+	 * directory levels deep, returning a map of doc name => file path.
+	 *
+	 * @return array [ 'FieldtypeText' => '/path/to/API.md', ... ] sorted by name
+	 *
+	 */
+	public function listApiDocs(): array {
+		$docs = [];
+		$config = $this->wire()->config;
+		$searchPaths = [
+			$config->paths->root . 'wire/modules/',
+			$config->paths->siteModules,
 		];
-		$request = strtolower($request);
-		foreach($keywords as $kw) {
-			if(strpos($request, $kw) !== false) return true;
+		foreach($searchPaths as $basePath) {
+			if(!is_dir($basePath)) continue;
+			foreach(glob($basePath . '*/API.md') ?: [] as $file) {
+				$name = basename(dirname($file));
+				$docs[$name] = $file;
+			}
+			foreach(glob($basePath . '*/*/API.md') ?: [] as $file) {
+				$name = basename(dirname($file));
+				$docs[$name] = $file;
+			}
 		}
-		return false;
+		ksort($docs);
+		return $docs;
 	}
 
 	/**
-	 * Get Fieldtype API documentation from API.md files in the ProcessWire installation
+	 * Get the content of a specific API.md documentation file by name
 	 *
-	 * Reads API.md files from Fieldtype module subdirectories. Can include core
-	 * (/wire/modules/Fieldtype/) and/or site (/site/modules/) API.md files.
-	 *
-	 * @param bool $includeCore Include core Fieldtype API.md files (default=true)
-	 * @param bool $includeSite Include site module API.md files (default=true)
-	 * @return string
+	 * @param string $name Doc name as returned by listApiDocs() (e.g. 'FieldtypeText')
+	 * @return string File contents, or an error message if not found
 	 *
 	 */
-	protected function getFieldtypeApiDocs(bool $includeCore = true, bool $includeSite = true): string {
-		$docs = '';
-
-		if($includeCore) {
-			$fieldtypePath = $this->wire()->config->paths->root . 'wire/modules/Fieldtype/';
-			if(is_dir($fieldtypePath)) {
-				foreach(glob($fieldtypePath . '*/API.md') as $file) {
-					$docs .= file_get_contents($file) . "\n\n";
-				}
-				$flatApiFile = $fieldtypePath . 'API.md';
-				if(is_file($flatApiFile)) {
-					$docs .= file_get_contents($flatApiFile) . "\n\n";
-				}
-			}
+	public function getApiDocs(string $name): string {
+		$docs = $this->listApiDocs();
+		if(!isset($docs[$name])) {
+			return "No API documentation found for '$name'. Use action='list' to see available docs.";
 		}
-
-		if($includeSite) {
-			$sitePath = $this->wire()->config->paths->siteModules;
-			if(is_dir($sitePath)) {
-				// Site Fieldtype subdirectory (mirrors core structure)
-				$fieldtypePath = $sitePath . 'Fieldtype/';
-				if(is_dir($fieldtypePath)) {
-					foreach(glob($fieldtypePath . '*/API.md') as $file) {
-						$docs .= file_get_contents($file) . "\n\n";
-					}
-					$flatApiFile = $fieldtypePath . 'API.md';
-					if(is_file($flatApiFile)) {
-						$docs .= file_get_contents($flatApiFile) . "\n\n";
-					}
-				}
-				// Top-level site module API.md files (custom fieldtypes in own directory)
-				foreach(glob($sitePath . '*/API.md') as $file) {
-					$docs .= file_get_contents($file) . "\n\n";
-				}
-			}
-		}
-
-		return trim($docs);
+		return (string) file_get_contents($docs[$name]);
 	}
 
 	/**
@@ -466,15 +442,55 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			'required' => ['code', 'description', 'summary'],
 		];
 
+		$siteInfoDesc =
+			"Retrieve information about this ProcessWire site. Use type='pages' for a map of the page tree, " .
+			"or type='schema' for the site's fields and templates structure.";
+
+		$siteInfoParams = [
+			'type' => 'object',
+			'properties' => [
+				'type' => [
+					'type' => 'string',
+					'enum' => ['pages', 'schema'],
+					'description' => "Use 'pages' for the site page tree, 'schema' for fields and templates",
+				],
+			],
+			'required' => ['type'],
+		];
+
+		$apiDocsDesc =
+			"Access ProcessWire API documentation. Use action='list' to get available doc names, " .
+			"then action='get' with the doc name to retrieve its contents.";
+
+		$apiDocsParams = [
+			'type' => 'object',
+			'properties' => [
+				'action' => [
+					'type' => 'string',
+					'enum' => ['list', 'get'],
+					'description' => "Use 'list' to see all available doc names, 'get' to retrieve a specific doc",
+				],
+				'name' => [
+					'type' => 'string',
+					'description' => "Name of the doc to retrieve, as returned by action='list' (required when action='get')",
+				],
+			],
+			'required' => ['action'],
+		];
+
 		if($provider === self::providerAnthropic) {
 			return [
 				['name' => 'eval_php', 'description' => $evalDesc, 'input_schema' => $evalParams],
 				['name' => 'save_migration', 'description' => $migrationDesc, 'input_schema' => $migrationParams],
+				['name' => 'site_info', 'description' => $siteInfoDesc, 'input_schema' => $siteInfoParams],
+				['name' => 'api_docs', 'description' => $apiDocsDesc, 'input_schema' => $apiDocsParams],
 			];
 		} else {
 			return [
 				['type' => 'function', 'function' => ['name' => 'eval_php', 'description' => $evalDesc, 'parameters' => $evalParams]],
 				['type' => 'function', 'function' => ['name' => 'save_migration', 'description' => $migrationDesc, 'parameters' => $migrationParams]],
+				['type' => 'function', 'function' => ['name' => 'site_info', 'description' => $siteInfoDesc, 'parameters' => $siteInfoParams]],
+				['type' => 'function', 'function' => ['name' => 'api_docs', 'description' => $apiDocsDesc, 'parameters' => $apiDocsParams]],
 			];
 		}
 	}
@@ -589,6 +605,24 @@ class AgentToolsEngineer extends AgentToolsHelper {
 				(string) ($input['description'] ?? 'migration'),
 				(string) ($input['summary'] ?? '')
 			);
+		} else if($name === 'site_info') {
+			$type = (string) ($input['type'] ?? '');
+			$filesPath = $this->at->getFilesPath();
+			if($type === 'pages') {
+				$file = $filesPath . 'site-map.json';
+				return is_file($file) ? (string) file_get_contents($file) : 'Site map not found. Run --at-sitemap-generate to generate it.';
+			} else if($type === 'schema') {
+				$file = $filesPath . 'site-map-schema.json';
+				return is_file($file) ? (string) file_get_contents($file) : 'Schema not found. Run --at-sitemap-generate-schema to generate it.';
+			}
+			return "Invalid type '$type'. Use 'pages' or 'schema'.";
+		} else if($name === 'api_docs') {
+			$action = (string) ($input['action'] ?? 'list');
+			if($action === 'get') {
+				return $this->getApiDocs((string) ($input['name'] ?? ''));
+			}
+			$names = array_keys($this->listApiDocs());
+			return $names ? implode("\n", $names) : 'No API documentation files found.';
 		}
 		return "Unknown tool: $name";
 	}
@@ -900,7 +934,8 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			"# Anthropic (key prefix auto-detects provider)\nclaude-haiku-4-5-20251001 | sk-ant-YOUR_API_KEY\n\n" .
 			"# Google Gemini\ngemini-2.0-flash | YOUR_API_KEY | https://generativelanguage.googleapis.com/v1beta/openai/\n\n" .
 			"# Groq / Llama (label distinguishes it from other openai-compatible models)\nllama-3.3-70b-versatile | YOUR_API_KEY | https://api.groq.com/openai/v1 | Groq Llama 3.3\n\n" .
-			"# Local Ollama (no real key required)\nllama3 | ollama | http://localhost:11434/v1" . 
+			"# Local Ollama (no real key required)\nllama3 | ollama | http://localhost:11434/v1\n\n" .
+			"# OpenRouter (access many models via one key, model IDs use provider/name format)\nanthropic/claude-sonnet-4-6 | sk-or-YOUR_KEY | https://openrouter.ai/api/v1 | Claude via OpenRouter" .
 			"</pre>";
 		$f->attr('rows', 6);
 		$f->val($this->at->get('engineer_additional_models') ?: '');

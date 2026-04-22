@@ -1,5 +1,26 @@
 # Changelog
 
+## Version 6
+
+### Engineer
+
+- **Conversation memory** — Yes/No radio in Control room; when enabled, prior exchanges are stored in the PHP session and included with each request so the Engineer can refer back to them; memory preference persisted per user via `$user->meta()`; defaults to enabled
+- **Inline reply form** — when memory is enabled, a compact reply textarea appears below each response so the conversation can continue without leaving the page
+- **Conversation history display** — collapsed `InputfieldMarkup` in the Engineer form shows prior exchanges (user messages as blockquotes, assistant replies rendered) when memory is on and history exists; labelled with exchange count
+- **Reset conversation** — checkbox in Control room (shown when memory is on and history exists) clears session history; displays current history size in kb
+- **`site_info` tool** — agent can now fetch the site's page tree (`type='pages'`) or fields/templates schema (`type='schema'`) on demand; sitemaps are no longer pre-loaded into the system prompt
+- **`api_docs` tool** — agent can now discover (`action='list'`) and retrieve (`action='get', name='...'`) ProcessWire API.md documentation on demand; replaces keyword-based pre-loading heuristic
+- **Control room simplified** — "Extra context to include" selector removed entirely; Control room now contains only Model and Memory; label summarises current settings (e.g. `Control room — claude-sonnet-4-6 · Memory: On`)
+- Control room always collapsed; summary label reflects current model and memory state at a glance
+- OpenRouter added to Additional models examples in module config
+
+### Bug fixes
+
+- Fixed URL-in-label bug in `parseAdditionalModelLine()` when a 4-part pipe-separated line has a URL as the 4th segment
+- Removed `requestNeedsFieldtypeDocs()` and `getFieldtypeApiDocs()` (superseded by `api_docs` tool)
+
+---
+
 ## Version 5
 
 ### Engineer

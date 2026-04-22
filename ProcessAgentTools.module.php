@@ -317,9 +317,9 @@ class ProcessAgentTools extends Process {
 		// Load persisted Control room preferences
 		$meta = $this->wire()->user->meta('AgentTools') ?: [];
 		$savedModelIndex = (string) ($meta['engineer_model_index'] ?? '0');
-		$validContextModes = ['all', 'custom', 'none'];
-		$savedAddContext = in_array(($meta['engineer_add_context'] ?? ''), $validContextModes) ? $meta['engineer_add_context'] : 'all';
-		$savedCustomContexts = (array) ($meta['engineer_custom_contexts'] ?? []);
+		$savedMemory = ($meta['engineer_memory'] ?? 'yes') === 'no' ? 'no' : 'yes';
+		$history = $this->wire()->session->get('at_engineer_history') ?: [];
+		$historyKb = $history ? round(strlen(json_encode($history)) / 1024, 1) : 0;
 
 		/** @var InputfieldForm $form */
 		$form = $this->wire()->modules->get('InputfieldForm');
@@ -344,57 +344,60 @@ class ProcessAgentTools extends Process {
 		}
 
 		$form->add($f);
-		
+
+		if($savedMemory === 'yes' && !empty($history)) {
+			$pairs = (int) (count($history) / 2);
+			$f = $form->InputfieldMarkup;
+			$f->label = sprintf(
+				$this->_n('Conversation history (%d exchange)', 'Conversation history (%d exchanges)', $pairs),
+				$pairs
+			);
+			$f->icon = 'history';
+			$f->collapsed = Inputfield::collapsedYes;
+			$historyOut = '';
+			foreach(array_chunk($history, 2) as $pair) {
+				if(isset($pair[0])) $historyOut .= '<blockquote><p>' . $this->wire()->sanitizer->entities($pair[0]['content']) . '</p></blockquote>';
+				if(isset($pair[1])) $historyOut .= $this->formatEngineerResponse($pair[1]['content']);
+			}
+			$f->val($historyOut);
+			$form->add($f);
+		}
+
+		$availableModels = $this->at->engineer->getAvailableModels();
+		$modelLabel = isset($availableModels[(int) $savedModelIndex]) ? $availableModels[(int) $savedModelIndex]['label'] : 'Default';
+		$memoryLabel = $savedMemory === 'yes' ? 'On' : 'Off';
+
 		$fs = $form->InputfieldFieldset;
-		$fs->label = 'Control room';
+		$fs->label = "Control room — $modelLabel · Memory: $memoryLabel";
 		$fs->icon = 'sliders';
-		$controlRoomChanged = $savedModelIndex !== '0' || $savedAddContext !== 'all' || !empty($savedCustomContexts);
-		$fs->collapsed = $controlRoomChanged ? Inputfield::collapsedNo : Inputfield::collapsedYes;
+		$fs->collapsed = Inputfield::collapsedYes;
 		$form->add($fs);
-		
+
 		$f = $form->InputfieldSelect;
 		$f->attr('name', 'engineer_model_index');
-		$f->label = 'Model';
-		$availableModels = $this->at->engineer->getAvailableModels();
+		$f->label = $this->_('Model');
 		foreach($availableModels as $index => $entry) {
 			$f->addOption((string) $index, $entry['label']);
 		}
 		$f->val($savedModelIndex);
-		$f->columnWidth = 34;
 		$fs->add($f);
 
 		$f = $form->InputfieldRadios;
-		$f->attr('name', 'add_context');
-		$f->label = $this->_('Extra context to include');
-		$f->addOption('all', $this->_('All: site maps + API docs'));
-		$f->addOption('custom', $this->_('Custom: select…'));
-		$f->addOption('none', $this->_('None'));
-		$f->columnWidth = 66;
+		$f->attr('name', 'engineer_memory');
+		$f->label = $this->_('Conversation history');
+		$f->addOption('yes', $this->_('Yes: remember this conversation'));
+		$f->addOption('no', $this->_('No: each request is independent'));
+		$f->val($savedMemory);
 		$f->optionColumns = 1;
-		$f->val($savedAddContext);
-		$f->required = true;
-		$f->detail = 
-			$this->_('The "All" option provides the best results but also uses the most tokens.') . "\n" . 
-			$this->_('The "None" option means your API agent will use PW’s API to find what it needs.');
+		$f->detail = $this->_('When enabled, prior exchanges in this session are included with each request so the Engineer can refer back to them.');
+		if($savedMemory === 'yes' && $historyKb > 0) {
+			$f->appendMarkup = '<p class="uk-margin-small-top">' .
+				'<label><input type="checkbox" class="uk-checkbox" name="engineer_memory_reset" value="1"> ' .
+				sprintf($this->_('Reset conversation history (%s kb)'), $historyKb) .
+				'</label></p>';
+		}
 		$fs->add($f);
 
-		$f = $form->InputfieldCheckboxes;
-		$f->attr('name', 'custom_contexts');
-		$f->label = $this->_('Please select what to include');
-		$f->description =
-			$this->_('The more context you provide, the better Engineer will know your site, and the more tokens it will use. ' .
-			'But if you are asking Engineer a general ProcessWire question unrelated to the structure of your site, no extra context may be needed.');
-		$options = [
-			'sitemap_pages' => $this->_('Site map of your site\'s pages'),
-			'sitemap_schema' => $this->_('Schema of your site\'s fields and templates'),
-			'api_core' => $this->_('Core field APIs (/wire/modules/)'),
-			'api_site' => $this->_('Site field APIs (/site/modules/)'),
-		];
-		$f->addOptions($options);
-		$f->val($savedCustomContexts);
-		$f->showIf = 'add_context=custom';
-		$fs->add($f);
-		
 		$f = $form->InputfieldSubmit;
 		$f->attr('name', 'submit_engineer');
 		$f->icon = 'send';
@@ -429,22 +432,7 @@ class ProcessAgentTools extends Process {
 		}
 
 		// Build options from Control room selections
-		$validContextModes = ['all', 'custom', 'none'];
-		$addContext = (string) $input->post('add_context');
-		$contextMode = in_array($addContext, $validContextModes) ? $addContext : 'all';
-		$contextItems = [];
-		if($contextMode === 'custom') {
-			$validItems = ['sitemap_pages', 'sitemap_schema', 'api_core', 'api_site'];
-			$rawItems = $input->post('custom_contexts');
-			if(is_array($rawItems)) {
-				foreach($rawItems as $item) {
-					if(in_array((string) $item, $validItems)) $contextItems[] = (string) $item;
-				}
-			}
-		}
-
-		$options = ['context' => $contextMode, 'contextItems' => $contextItems];
-
+		$options = [];
 		$modelIndex = (int) $input->post('engineer_model_index');
 		$availableModels = $this->at->engineer->getAvailableModels();
 		if(isset($availableModels[$modelIndex])) {
@@ -455,12 +443,20 @@ class ProcessAgentTools extends Process {
 			$options['endpoint'] = $entry['endpoint'];
 		}
 
+		// Handle conversation memory
+		$memory = (string) $input->post('engineer_memory') === 'yes' ? 'yes' : 'no';
+		$memoryReset = (bool) $input->post('engineer_memory_reset');
+		$session = $this->wire()->session;
+		if($memoryReset) $session->remove('at_engineer_history');
+		if($memory === 'yes') {
+			$options['history'] = $session->get('at_engineer_history') ?: [];
+		}
+
 		// Persist Control room selections per user
 		$user = $this->wire()->user;
 		$meta = $user->meta('AgentTools') ?: [];
 		$meta['engineer_model_index'] = $modelIndex;
-		$meta['engineer_add_context'] = $contextMode;
-		$meta['engineer_custom_contexts'] = $contextItems;
+		$meta['engineer_memory'] = $memory;
 		$user->meta('AgentTools', $meta);
 
 		/** @var InputfieldForm $form */
@@ -468,14 +464,9 @@ class ProcessAgentTools extends Process {
 
 		$result = $this->at->engineer->ask($request, $options);
 
-		foreach($this->at->engineer->lastContext as $item) {
-			$labels = [
-				'sitemap_pages' => $this->_('Included: site map of pages'),
-				'sitemap_schema' => $this->_('Included: schema of fields and templates'),
-				'api_core' => $this->_('Included: core field APIs'),
-				'api_site' => $this->_('Included: site field APIs'),
-			];
-			if(isset($labels[$item])) $this->message($labels[$item]);
+		// Save updated history to session if memory is enabled and request succeeded
+		if($memory === 'yes' && !$result['error'] && $result['history']) {
+			$session->set('at_engineer_history', $result['history']);
 		}
 
 		$out = "<blockquote><p>" . $sanitizer->entities($request) . "</p></blockquote>";
@@ -520,10 +511,48 @@ class ProcessAgentTools extends Process {
 		$btn->val($this->_('Modify my question'));
 		$btn->setSecondary();
 		$form->add($btn);
-		
+
 		$form->val($out);
 
-		return $form->render();
+		$replyFormOutput = '';
+		if($memory === 'yes' && !$result['error']) {
+			/** @var InputfieldForm $replyForm */
+			$replyForm = $this->wire()->modules->get('InputfieldForm');
+			$replyForm->attr('method', 'post');
+			$replyForm->attr('action', $adminUrl . 'engineer/');
+
+			$f = $replyForm->InputfieldTextarea;
+			$f->attr('name', 'engineer_request');
+			$f->label = $this->_('Reply');
+			$f->icon = 'commenting';
+			$f->attr('rows', 3);
+			$replyForm->add($f);
+
+			// Preserve Control room settings as hidden fields
+			foreach([
+				'engineer_model_index' => $modelIndex,
+				'engineer_memory' => 'yes',
+			] as $hiddenName => $hiddenValue) {
+				$f = $replyForm->InputfieldHidden;
+				$f->attr('name', $hiddenName);
+				$f->attr('value', (string) $hiddenValue);
+				$replyForm->add($f);
+			}
+
+			$f = $replyForm->InputfieldSubmit;
+			$f->attr('name', 'submit_engineer');
+			$f->val($this->_('Send reply'));
+			$f->icon = 'send';
+			$qty = count($this->thinkingWords);
+			$word1 = $this->thinkingWords[mt_rand(0, $qty-1)];
+			do { $word2 = $this->thinkingWords[mt_rand(0, $qty-1)]; } while($word2 === $word1);
+			$f->appendMarkup .= " <span id='thinking' hidden>$word1 and $word2</span>";
+			$replyForm->add($f);
+
+			$replyFormOutput = $replyForm->render();
+		}
+
+		return $form->render() . $replyFormOutput;
 	}
 	
 	/**
@@ -547,6 +576,7 @@ class ProcessAgentTools extends Process {
 		$patterns = [
 			'ul-li' => "\n- ",
 			'ul*li' => "\n* ", 
+			'bold' => '**', 
 			'link' => "](",
 			'headline' => '/^#{1,6}\s/m',
 			'inline-code' => '/`[^`]+`/m',
