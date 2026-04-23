@@ -53,7 +53,7 @@ class AgentToolsSitemap extends AgentToolsHelper {
 	 * @return bool|null
 	 *
 	 */
-	public function cliExecute($action) {
+	public function cliExecute(string $action): ?bool {
 		if($action === 'generate') {
 			return $this->generate();
 		} else if($action === 'generate-schema') {

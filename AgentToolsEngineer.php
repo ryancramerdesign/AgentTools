@@ -104,7 +104,8 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			}
 			$messages[] = ['role' => 'user', 'content' => $request];
 
-			$readOnly = (bool) $this->at->get('engineer_readonly');
+			$readOnly = isset($options['readOnly']) ? (bool) $options['readOnly'] : (bool) $this->at->get('engineer_readonly');
+			$verbose = !empty($options['verbose']);
 			$systemPrompt = $this->buildSystemPrompt($readOnly, $request, $options);
 			$tools = $readOnly ? [] : $this->getToolDefinitions($provider);
 
@@ -132,6 +133,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 				$this->appendAssistantMessage($provider, $messages, $response);
 
 				foreach($toolCalls as $toolCall) {
+					if($verbose) fwrite(STDERR, "// tool: {$toolCall['name']}\n");
 					$output = $this->executeTool($toolCall['name'], $toolCall['input']);
 					$this->appendToolResult($provider, $messages, $toolCall, $output);
 				}
@@ -186,6 +188,103 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		}
 
 		return $models;
+	}
+
+	/**
+	 * CLI help entries for the Engineer
+	 *
+	 * @return array
+	 *
+	 */
+	public function cliHelp(): array {
+		return [
+			'php index.php --at-engineer "REQUEST"' =>
+				'Ask the Engineer a question or request a change [--model=N] [--readonly] [--verbose]',
+			'php index.php --at-engineer-migrate "REQUEST"' =>
+				'Have the Engineer create a migration; outputs the migration file path [--model=N] [--verbose]',
+		];
+	}
+
+	/**
+	 * Execute an Engineer CLI command
+	 *
+	 * Handles --at-engineer and --at-engineer-migrate.
+	 *
+	 * Flags (optional, placed before the request string):
+	 *  --model=N   Use agent at index N (0 = primary)
+	 *  --readonly  Allow queries only; migrations are disabled (--at-engineer only)
+	 *  --verbose   Write tool call names to stderr as they execute
+	 *
+	 * @param string $action '' for ask, 'migrate' for migration-only
+	 * @return bool|null True on success, false on failure, null if action not recognised
+	 *
+	 */
+	public function cliExecute(string $action): ?bool {
+
+		if($action !== '' && $action !== 'migrate') return null;
+
+		$argv = $_SERVER['argv'];
+		$args = array_slice($argv, 2);
+		$migrate = ($action === 'migrate');
+		$verbose = false;
+		$readOnly = false;
+		$modelIndex = null;
+		$question = '';
+
+		foreach($args as $arg) {
+			if($arg === '--verbose') {
+				$verbose = true;
+			} else if($arg === '--readonly') {
+				$readOnly = true;
+			} else if(strpos($arg, '--model=') === 0) {
+				$modelIndex = (int) substr($arg, 8);
+			} else if(strpos($arg, '--') !== 0) {
+				$question = $arg;
+				break;
+			}
+		}
+
+		if(!$question) return false;
+
+		// Select agent by index or fall back to primary
+		$agents = $this->at->getAgents();
+		$agent = $modelIndex !== null ? $agents->eq($modelIndex) : $agents->first();
+
+		if(!$agent || !$agent->apiKey) {
+			fwrite(STDERR, "ERROR: No agent configured. Add API credentials in AgentTools module settings.\n");
+			return false;
+		}
+
+		$options = [
+			'provider' => $agent->provider,
+			'apiKey' => $agent->apiKey,
+			'model' => $agent->model,
+			'endpoint' => $agent->endpointUrl,
+			'readOnly' => $readOnly || (bool) $this->at->get('engineer_readonly'),
+			'verbose' => $verbose,
+		];
+
+		$result = $this->ask($question, $options);
+
+		if($result['error']) {
+			fwrite(STDERR, "ERROR: " . $result['error'] . "\n");
+			return false;
+		}
+
+		if($migrate) {
+			if(!$result['migration']) {
+				fwrite(STDERR, "ERROR: No migration was created for this request.\n");
+				if($result['response']) fwrite(STDERR, $result['response'] . "\n");
+				return false;
+			}
+			echo $result['response'] . "\n";
+			echo "\nMigration: " . $result['migration'] . "\n";
+		} else {
+			echo $result['response'] . "\n";
+			if($result['migration']) echo "\nMigration: " . $result['migration'] . "\n";
+		}
+
+		return true;
 	}
 
 	/**
@@ -508,7 +607,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	 * @return array
 	 *
 	 */
-	protected function sendRequest(string $provider, string $apiKey, string $model, string $endpoint, string $systemPrompt, array $messages, array $tools): array {
+	public function sendRequest(string $provider, string $apiKey, string $model, string $endpoint, string $systemPrompt, array $messages, array $tools): array {
 		if($provider === self::providerAnthropic) {
 			if(!$model) $model = self::defaultAnthropicModel;
 			return $this->sendAnthropicRequest($apiKey, $model, $systemPrompt, $messages, $tools);
@@ -535,24 +634,27 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		$cache = ['type' => 'ephemeral', 'ttl' => '1h'];
 
 		// System prompt as a content block array so we can attach cache_control
-		$systemBlocks = [
-			['type' => 'text', 'text' => $system, 'cache_control' => $cache],
-		];
+		// Omit entirely if empty — Anthropic rejects empty text blocks
+		$systemBlocks = $system !== ''
+			? [['type' => 'text', 'text' => $system, 'cache_control' => $cache]]
+			: [];
 
 		// Cache tool definitions too — they are static per session
 		if(!empty($tools)) {
 			$tools[count($tools) - 1]['cache_control'] = $cache;
 		}
 
+		$payload = [
+			'model' => $model,
+			'max_tokens' => self::maxTokens,
+			'messages' => $messages,
+			'tools' => $tools,
+		];
+		if(!empty($systemBlocks)) $payload['system'] = $systemBlocks;
+
 		return $this->curlPost(
 			'https://api.anthropic.com/v1/messages',
-			[
-				'model' => $model,
-				'max_tokens' => self::maxTokens,
-				'system' => $systemBlocks,
-				'messages' => $messages,
-				'tools' => $tools,
-			],
+			$payload,
 			[
 				'x-api-key: ' . $apiKey,
 				'anthropic-version: 2023-06-01',
@@ -720,7 +822,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	 * @return string
 	 *
 	 */
-	protected function extractText(string $provider, array $response): string {
+	public function extractText(string $provider, array $response): string {
 		if($provider === self::providerAnthropic) {
 			$parts = [];
 			foreach($response['content'] ?? [] as $block) {

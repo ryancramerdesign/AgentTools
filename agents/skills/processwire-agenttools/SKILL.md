@@ -33,6 +33,8 @@ Do not call `php index.php --at-*` directly unless debugging the wrapper itself.
 | `bash .agents/skills/processwire-agenttools/scripts/pw-at.sh migrations-test` | Preview pending without applying |
 | `bash .agents/skills/processwire-agenttools/scripts/pw-at.sh sitemap-generate` | Generate site map JSON to `site/assets/at/site-map.json` |
 | `bash .agents/skills/processwire-agenttools/scripts/pw-at.sh sitemap-generate-schema` | Generate schema JSON to `site/assets/at/site-map-schema.json` |
+| `bash .agents/skills/processwire-agenttools/scripts/pw-at.sh engineer "REQUEST"` | Ask the Engineer a question or request a change |
+| `bash .agents/skills/processwire-agenttools/scripts/pw-at.sh engineer-migrate "REQUEST"` | Have the Engineer create a migration; outputs the migration file path |
 
 ## Available API variables
 

@@ -1,5 +1,35 @@
 # Changelog
 
+## Version 7
+
+### Public agents API
+
+- **`AgentToolsAgent`** — new class representing a single configured AI agent with `model`, `apiKey`, `endpointUrl`, `label`, and `provider` properties
+- **`AgentToolsAgents`** — new `WireArray` subclass holding all configured agents
+- **`$at->getAgents()`** — returns an `AgentToolsAgents` instance combining the primary model(s) and any additional models; first item is always the primary agent
+- **`$at->getPrimaryAgent()`** — convenience method returning the first `AgentToolsAgent`, or `false` if none configured
+- **`AgentToolsAgent::ask(string $question, string $systemPrompt = ''): string`** — simple stateless public API; sends a question and returns a plain text response; errors returned as string
+- **`AgentToolsAgent::sendRequest()`** — advanced method for callers that need full control over the messages array, tool definitions, or multi-turn history; returns raw provider response array
+- `AgentToolsEngineer::extractText()` made public so external callers can normalize raw provider responses
+- Fixed empty system prompt bug in `sendAnthropicRequest()` — Anthropic rejects cache_control on empty text blocks; system prompt is now omitted from the request entirely when empty
+
+### CLI Engineer (sub-agents)
+
+- **`--at-engineer "REQUEST"`** — ask the Engineer a question or request a change from the command line; response written to stdout, errors to stderr
+- **`--at-engineer-migrate "REQUEST"`** — have the Engineer create a migration; outputs the response followed by `Migration: /full/path/to/file.php` for easy capture
+- Optional flags: `--model=N` (use agent at index N), `--readonly` (queries only), `--verbose` (write tool call names to stderr)
+- `pw-at.sh` wrapper updated with `engineer` and `engineer-migrate` commands; fixed `sitemap-generate-schema` silently not dispatching
+- `ask()` in `AgentToolsEngineer` now supports `readOnly` and `verbose` options
+- `cliExecute()` signature unified across all helper classes: `string $action): ?bool`
+
+### Documentation
+
+- `AGENTS.md` — Engineer section updated with CLI commands, flags table, and shell capture example
+- `README.md` — Engineer description updated; CLI reference table updated; new Module author reference section documenting `getAgents()`, `getPrimaryAgent()`, `ask()`, and `sendRequest()`
+- `SKILL.md` — `engineer` and `engineer-migrate` commands added to command table
+
+---
+
 ## Version 6
 
 ### Engineer

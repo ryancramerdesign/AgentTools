@@ -25,7 +25,7 @@ class AgentToolsSkills extends AgentToolsHelper {
 	 * @return bool|null Return true on success, false on fail, null if not applicable
 	 *
 	 */
-	public function cliExecute($action) {
+	public function cliExecute(string $action): ?bool {
 		if($action === 'install') {
 			$this->doInstallSkill();
 			echo $this->wire()->notices->renderText();

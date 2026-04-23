@@ -12,6 +12,13 @@
  * @property AgentToolsMigrations $migrations
  * @property AgentToolsSitemap $sitemap
  * @property AgentToolsEngineer $engineer
+ * 
+ * @property string $engineer_provider
+ * @property string $engineer_api_key
+ * @property string $engineer_model
+ * @property string $engineer_endpoint
+ * @property int|bool $engineer_readonly
+ * @property string $engineer_additional_models
  *
  */
 class AgentTools extends WireData implements Module, ConfigurableModule {
@@ -21,12 +28,13 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 			'title' => 'Agent Tools',
 			'summary' => "Enables AI coding agents to access ProcessWire's API and provides a database migration system.",
 			'icon' => 'asterisk',
-			'version' => 6,
+			'version' => 7,
 			'author' => 'Ryan Cramer and Claude (Anthropic)',
 			'requires' => 'ProcessWire>=3.0.255',
 			'installs' => 'ProcessAgentTools',
 			'autoload' => true,
 			'singular' => true,
+			'cli' => 'at', // cli name recognized by ProcessWire 3.0.259+
 		];
 	}
 
@@ -48,6 +56,20 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 		'sitemap' => null,
 		'engineer' => null,
 	];
+	
+	/**
+	 * Commands that trigger module to output help for commands
+	 * 
+	 * @var string[] 
+	 * 
+	 */
+	protected $helpCommands = [ 'at', 'help', '--at', '--help' ];
+	
+	/**
+	 * @var AgentToolsAgents|null 
+	 * 
+	 */
+	protected $agents = null;
 
 	/**
 	 * Called when module is wired to API
@@ -56,7 +78,7 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 	 *
 	 */
 	public function wired() {
-		$this->wire()->wire('at', $this);
+		$this->wire()->wire(self::name, $this);
 		parent::wired();
 	}
 
@@ -65,11 +87,12 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 	 *
 	 */
 	public function ready() {
-		if(PHP_SAPI === 'cli') {
-			$argv = $GLOBALS['argv'];
+		if(php_sapi_name() === 'cli') {
+			$argv = $_SERVER['argv'];
 			$prefix = '--' . self::name . '-';
-			if(!empty($argv[1]) && strpos($argv[1], $prefix) === 0) {
-				$atAction = str_replace($prefix, '', $argv[1]);
+			$command = empty($argv[1]) ? '' : $argv[1];
+			if(strpos($command, $prefix) === 0 || in_array($command, $this->helpCommands)) {
+				$atAction = str_replace($prefix, '', $command);
 				$this->cliReady($atAction);
 			}
 		}
@@ -136,15 +159,23 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 		} else if($atAction === 'stdin') {
 			$code = file_get_contents('php://stdin');
 			if(strlen(trim($code))) $success = $this->cliEval($code, $fuel);
+			
+		} else if(in_array($atAction, $this->helpCommands)) { 
+			$this->renderHelp($this->cliHelp()); 
 
 		} else {
 			$found = false;
 			foreach(array_keys($this->helpers) as $name) {
-				if(strpos($atAction, "$name-") !== 0) continue;
-				$act = str_replace("$name-", '', $atAction);
+				if($atAction === $name) {
+					$act = '';
+				} else if(strpos($atAction, "$name-") === 0) {
+					$act = substr($atAction, strlen($name) + 1);
+				} else {
+					continue;
+				}
 				$helper = $this->getHelper($name);
 				if(!$helper) continue;
-				$success = $helper->cliExecute($act); 
+				$success = $helper->cliExecute($act);
 				$found = true;
 				break;
 			}
@@ -185,6 +216,16 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 			echo "  Line: " . $e->getLine() . "\n";
 			return false;
 		}
+	}
+	
+	/**
+	 * Get CLI commands for ProcessWire 3.0.259 CliModule interface
+	 * 
+	 * @return array 
+	 * 
+	 */
+	public function getCliCommands() {
+		return $this->cliHelp();
 	}
 
 	/**
@@ -319,7 +360,38 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 			"</IfModule>\n"
 		);
 	}
-
+	
+	/**
+	 * Get primary agent
+	 *
+	 * @return AgentToolsAgent|false
+	 *
+	 */
+	public function getPrimaryAgent() {
+		return $this->getAgents()->first();
+	}
+	
+	/**
+	 * Get all defined agents
+	 * 
+	 * First agent is the primary
+	 * 
+	 * @return AgentToolsAgents
+	 * 
+	 */
+	public function getAgents() {
+		if($this->agents) return $this->agents;
+		$models = explode(',', $this->engineer_model);
+		$lines = [];
+		foreach($models as $model) {
+			$a = [ $model, $this->engineer_api_key, $this->engineer_endpoint ];
+			$lines[] = trim(implode(' | ', $a), '| ');
+		}
+		$str = implode("\n", $lines) . "\n" . trim($this->engineer_additional_models, '| ');
+		$this->agents = new AgentToolsAgents($str);
+		return $this->agents;
+	}
+	
 	/**
 	 * Module config
 	 *
@@ -440,3 +512,6 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 		$this->migrations->addApplied($file);
 	}
 }
+
+include_once(__DIR__ . '/AgentToolsAgent.php');
+include_once(__DIR__ . '/AgentToolsAgents.php');

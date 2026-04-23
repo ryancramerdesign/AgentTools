@@ -27,7 +27,7 @@ class AgentToolsMigrations extends AgentToolsHelper {
 	 * @return bool|null Return true on success, false on fail, null if not applicable
 	 *
 	 */
-	public function cliExecute($atAction) {
+	public function cliExecute(string $atAction): ?bool {
 		if($atAction === 'help') {
 			echo $this->at->renderHelp($this->cliHelp(), 'Migrations usage');
 			return true;

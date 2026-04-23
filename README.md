@@ -38,12 +38,26 @@ admin application (Setup > Agent Tools), currently with the following features:
   Multiple AI providers and models can be configured and switched between from a Control room
   in the Engineer form.
 
+  The Engineer is also available from the command line via `--at-engineer "REQUEST"` and
+  `--at-engineer-migrate "REQUEST"`, allowing AI agents to spawn it as a ProcessWire-specialist
+  sub-agent. See the [CLI reference](#cli-reference) below and `AGENTS.md` for details.
+
 - **Migrations**: This tool enables you to create, apply, list, view, and delete migrations
   that were created by the Engineer or by your AI agent using the command line tools of
   this module.
 
-**Please note that this module should be considered very much in 'beta test' at this stage. 
-If use any of its features in production, test thoroughly in a dev environment first, and keep
+### Tools for module authors
+
+The AgentTools module makes its multi-agent configuration available from its API 
+with the `$at->getAgents()` and `$at->getPrimaryAgent()` methods. In addition
+to making the agent configuration data available to other modules, each of the
+agents provides methods for handling the process of asking questions and getting 
+responses back. More details can be found in the Module Author Reference, near the
+end of this document.
+
+### Please note
+
+**If you use any AgentTools features in production, test thoroughly in a dev environment first, and keep
 backups of everything that can be restored easily. While I've not run into any cases where 
 I had to restore anything, just the nature of the module means that you should use extra caution.**
 
@@ -212,6 +226,8 @@ from the command line without needing to enter an interactive session.
 | `php index.php --at-eval 'CODE'` | Evaluate a PHP expression with full ProcessWire API access |
 | `echo 'CODE' \| php index.php --at-stdin` | Evaluate multi-line PHP code piped from stdin |
 | `php index.php --at-cli` | Open an interactive agent CLI session |
+| `php index.php --at-engineer "REQUEST"` | Ask the Engineer a question or request a change |
+| `php index.php --at-engineer-migrate "REQUEST"` | Have the Engineer create a migration; outputs the migration file path |
 
 **`--at-eval` example** — ask your AI agent how many pages are on your site:
 ```
@@ -305,6 +321,67 @@ echo "- $name has been applied\n";
   as IDs differ between environments
 - The applied migrations registry is stored in the database (not in a file), so it
   is never overwritten when you rsync migration files to a server
+
+---
+
+## Module author reference
+
+If you are building an AI module and want to be able to use AgentTools agent configuration 
+data, this module makes that data available with 2 API methods: `getAgents()` and `getPrimaryAgent()`:
+```php
+/** @var AgentToolsAgents $agents */
+$agents = $at->getAgents(); 
+
+foreach($agents as $agent) {
+  /** @var AgentToolsAgent $agent */
+  echo "
+    Model: $agent->model 
+    Api key:  $agent->apiKey 
+    Endpoint URL: $agent->endpointUrl 
+    Label: $agent->label
+  ";
+}
+```
+The primary agent is the first one returned by `$at->getAgents()`. To get just the
+primary agent:
+```php
+$agent = $at->getPrimaryAgent();
+```
+Whether you get an agent from `getAgents()` or `getPrimaryAgent()` each AgentToolsAgent
+object has `model`, `apiKey`, `endpointUrl` and `label` properties, which can be used
+to build your own AI agent request. 
+
+If you'd like to use AgentTools to perform the request for you, each AgentToolsAgent 
+object includes an `ask()` method for sending questions to the model directly, and 
+getting back a plain text answer: 
+```php
+// simple question and answer
+$agent = $at->getPrimaryAgent();
+$answer = $agent->ask('What is the capital of France?');
+
+// Optionally include a system prompt:
+$request = 'Summarize this content: ' . $body;
+$systemPrompt = 'You are a concise copywriter.'; 
+$answer = $agent->ask($request, $systemPrompt);
+```
+If an error occurs, the error message is returned in the `$answer`. 
+
+For most use cases, the `ask()` method above is appropriate. But there is also a 
+`sendRequest()` method for advanced callers that need control over the full messages array 
+(e.g. multi-turn history) or tool definitions:
+```php
+// System prompt, or empty string for none
+$systemPrompt = '';
+
+// Array of message objects
+$messages = [['role' => 'user'|'assistant', 'content' => '...'], ...]; 
+
+// Tool definitions in provider format (Anthropic or OpenAI)
+$tools = []; 
+
+// The `$response` is a raw provider response — check provider docs for structure
+$response = $agent->sendRequest($systemPrompt, $messages, $tools);
+```
 
 ---
 

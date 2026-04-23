@@ -36,7 +36,7 @@ abstract class AgentToolsHelper extends Wire {
 	 * @return bool|null Return true on success, false on fail, null if not applicable
 	 *
 	 */
-	public function cliExecute($action) {
+	public function cliExecute(string $action): ?bool {
 		return null;
 	}
 

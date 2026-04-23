@@ -14,6 +14,8 @@ Usage:
   scripts/pw-at.sh migrations-test
   scripts/pw-at.sh sitemap-generate
   scripts/pw-at.sh sitemap-generate-schema
+  scripts/pw-at.sh engineer [--model=N] [--readonly] [--verbose] 'REQUEST'
+  scripts/pw-at.sh engineer-migrate [--model=N] [--verbose] 'REQUEST'
 
 Wrapper for Ryan Cramer's AgentTools CLI.
 Preserves the original AgentTools command model while selecting the correct
@@ -101,6 +103,9 @@ case "$mode" in
   stdin|cli|migrations-apply|migrations-list|migrations-test|sitemap-generate|sitemap-generate-schema)
     [[ $# -eq 0 ]] || { echo "$mode does not accept positional arguments" >&2; exit 1; }
     ;;
+  engineer|engineer-migrate)
+    [[ $# -ge 1 ]] || { echo "$mode requires a request string" >&2; exit 1; }
+    ;;
   *)
     usage >&2
     exit 1
@@ -126,7 +131,10 @@ case "$mode" in
   cli)
     run_php --at-cli
     ;;
-  migrations-apply|migrations-list|migrations-test|sitemap-generate)
+  migrations-apply|migrations-list|migrations-test|sitemap-generate|sitemap-generate-schema)
     run_php "--at-$mode"
+    ;;
+  engineer|engineer-migrate)
+    run_php "--at-$mode" "$@"
     ;;
 esac
