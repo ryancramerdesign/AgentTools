@@ -133,4 +133,8 @@ class AgentToolsAgent extends WireData {
 			$tools
 		); 
 	}
+	
+	public function getHash() {
+		return md5("$this->model|$this->apiKey");
+	}
 }

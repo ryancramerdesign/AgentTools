@@ -35,6 +35,11 @@ $(function() {
 		$thinking.prop('hidden', false);
 		fadeIn();
 	});
-	
+
+	$('.at-apiKey').on('at-apikey-show', function(e) {
+		$(this).find('input').prop('type', 'text'); 
+	}).on('at-apikey-hide', function(e) {
+		$(this).find('input').prop('type', 'password');
+	});
 	
 });

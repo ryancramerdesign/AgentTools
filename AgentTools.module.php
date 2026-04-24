@@ -17,6 +17,7 @@
  * @property string $engineer_api_key
  * @property string $engineer_model
  * @property string $engineer_endpoint
+ * @property string $engineer_label
  * @property int|bool $engineer_readonly
  * @property string $engineer_additional_models
  *
@@ -27,8 +28,8 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 		return [
 			'title' => 'Agent Tools',
 			'summary' => "Enables AI coding agents to access ProcessWire's API and provides a database migration system.",
-			'icon' => 'asterisk',
-			'version' => 7,
+			'icon' => 'at',
+			'version' => 8,
 			'author' => 'Ryan Cramer and Claude (Anthropic)',
 			'requires' => 'ProcessWire>=3.0.255',
 			'installs' => 'ProcessAgentTools',
@@ -70,6 +71,22 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 	 * 
 	 */
 	protected $agents = null;
+	
+	/**
+	 * Construct
+	 * 
+	 */
+	public function __construct() {
+		parent::__construct();
+		// establish config variables with defaults
+		$keys = [ 
+			'provider', 'api_key', 'model', 'endpoint', 
+			'label', 'readonly', 'additional_models' 
+		];
+		foreach($keys as $key) {
+			$this->set("engineer_$key", "");
+		}
+	}
 
 	/**
 	 * Called when module is wired to API
@@ -381,14 +398,27 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 	 */
 	public function getAgents() {
 		if($this->agents) return $this->agents;
-		$models = explode(',', $this->engineer_model);
+		
 		$lines = [];
-		foreach($models as $model) {
-			$a = [ $model, $this->engineer_api_key, $this->engineer_endpoint ];
-			$lines[] = trim(implode(' | ', $a), '| ');
+		$removeDuplicates = false;
+		if($this->engineer_model || $this->engineer_api_key) {
+			// convert old settings to new setting
+			$models = explode(',', $this->engineer_model);
+			foreach($models as $model) {
+				$a = [$model, $this->engineer_api_key, $this->engineer_endpoint, $this->engineer_label ];
+				$lines[] = trim(implode(' | ', $a), '| ');
+			}
+			$removeDuplicates = true;
 		}
-		$str = implode("\n", $lines) . "\n" . trim($this->engineer_additional_models, '| ');
-		$this->agents = new AgentToolsAgents($str);
+		// we are indexing by $line so we can auto-remove duplicate entries
+		// which is likely when converting legacy settings to new settings
+		foreach(explode("\n", trim($this->engineer_additional_models, '| ')) as $line) {
+			if(strlen($line)) $lines[] = $line;
+		}
+		
+		$this->agents = new AgentToolsAgents(array_values($lines));
+		if($removeDuplicates) $this->agents->removeDuplicates();
+		
 		return $this->agents;
 	}
 	

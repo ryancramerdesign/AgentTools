@@ -15,9 +15,9 @@ class ProcessAgentTools extends Process {
 		return [
 			'title' => 'Agent Tools',
 			'summary' => 'Admin interface for AgentTools migrations and AI engineer.',
-			'version' => 4,
+			'version' => 5,
 			'author' => 'Claude (Anthropic) and Ryan Cramer',
-			'icon' => 'asterisk',
+			'icon' => 'at',
 			'requires' => 'AgentTools',
 			'page' => [
 				'name' => 'agent-tools',
@@ -28,6 +28,7 @@ class ProcessAgentTools extends Process {
 			'nav' => [
 				['url' => 'migrations/', 'label' => 'Migrations', 'icon' => 'database'],
 				['url' => 'engineer/', 'label' => 'Engineer', 'icon' => 'commenting'],
+				['url' => 'agents/', 'label' => 'Agents', 'icon' => 'universal-access'],
 			],
 		];
 	}
@@ -112,6 +113,7 @@ class ProcessAgentTools extends Process {
 	protected function label($name) {
 		switch($name) {
 			case 'agent-tools': return $this->_('Agent Tools');
+			case 'agents': return $this->_('Agents'); 
 			case 'applied': return $this->ukLabel($this->_('Applied'), 'success'); 
 			case 'ask-create-migration': return $this->_('Ask the engineer to create a migration');
 			case 'back': return $this->_('Back');
@@ -137,6 +139,7 @@ class ProcessAgentTools extends Process {
 	protected function iconName($name) {
 		switch($name) {
 			case 'agent-tools': return 'asterisk';
+			case 'agents': return 'universal-access';
 			case 'apply': return 'play';
 			case 'applied': return 'check';
 			case 'back': return 'arrow-left';
@@ -162,11 +165,11 @@ class ProcessAgentTools extends Process {
 				$this->_('Use this tool to apply, view, create or delete migrations.');
 			case 'engineer': return
 				$this->_('Your site engineer can tell you everything there is to know about your ProcessWire installation.') . ' ' .
-				$this->_('Engineer can make changes, perform web development tasks, create migrations, and more.') . ' ';
-				$this->_('Please be sure you have full backups of your site and database before asking Engineer to make changes to your site.') . ' ';
-				//$this->_('The engineer provides a way for your AI agent and you to work together.') . ' ' .
-				//$this->_('This is an alternative to using AgentTools from the command line.') . ' '.
-				//$this->_('But please note it may not be as powerful or contextual as using AgentTools from the command line.');
+				$this->_('Engineer can make changes, perform web development tasks, create migrations, and more.') . ' ' .
+				$this->_('Please be sure you have full backups of your site and database before asking Engineer to make changes to your site.');
+			case 'agents': return 	
+				$this->_('Manage all your agents in one place. Configure up to ten agents with models, API keys, and endpoint URLs.') . ' ' . 
+				$this->_('Once configured, you can use any of your agents with the Engineer.'); 
 		}
 		return 'unknown description name';
 	}
@@ -220,7 +223,7 @@ class ProcessAgentTools extends Process {
 		$adminUrl = $this->wire()->page->url;
 		$out = '<hr>';
 		
-		$tools = [ 'migrations', 'engineer' ];
+		$tools = [ 'migrations', 'engineer', 'agents' ];
 		
 		foreach($tools as $name) {
 			/** @var InputfieldButton $btn */
@@ -303,13 +306,11 @@ class ProcessAgentTools extends Process {
 	 *
 	 */
 	protected function renderEngineerForm(string $prefill = '', bool $forMigration = false): string {
-		$apiKey = (string) $this->at->get('engineer_api_key');
-
-		if(!$apiKey) {
-			$settingsUrl = $this->wire()->modules->getModuleEditUrl($this);
+		if(!$this->at->getPrimaryAgent()) {
+			$agentsUrl = $this->wire()->page->url . 'agents/';
 			$this->error(sprintf(
-				$this->_('An API key is required. Please configure it in [AgentTools settings](%s).'),
-				$settingsUrl
+				$this->_('At least one agent must be configured. Please configure one in [Agents](%s).'),
+				$agentsUrl
 			), Notice::allowMarkdown);
 			return '';
 		}
@@ -403,10 +404,7 @@ class ProcessAgentTools extends Process {
 		$f->icon = 'send';
 		$f->val($this->_('Send'));
 		$f->showInHeader(true);
-		$qty = count($this->thinkingWords);
-		$word1 = $this->thinkingWords[mt_rand(0, $qty-1)];
-		do { $word2 = $this->thinkingWords[mt_rand(0, $qty-1)]; } while($word2 === $word1);
-		$f->appendMarkup .= " <span id='thinking' hidden>$word1 and $word2</span>";
+		$f->appendMarkup .= $this->renderThinkingWords();
 		$form->add($f);
 
 		return $form->render();
@@ -543,16 +541,127 @@ class ProcessAgentTools extends Process {
 			$f->attr('name', 'submit_engineer');
 			$f->val($this->_('Send reply'));
 			$f->icon = 'send';
-			$qty = count($this->thinkingWords);
-			$word1 = $this->thinkingWords[mt_rand(0, $qty-1)];
-			do { $word2 = $this->thinkingWords[mt_rand(0, $qty-1)]; } while($word2 === $word1);
-			$f->appendMarkup .= " <span id='thinking' hidden>$word1 and $word2</span>";
+			$f->appendMarkup .= $this->renderThinkingWords();
 			$replyForm->add($f);
-
 			$replyFormOutput = $replyForm->render();
 		}
 
 		return $form->render() . $replyFormOutput;
+	}
+	
+	/**
+	 * Agents configuration 
+	 * 
+	 * @return string
+	 * 
+	 */
+	public function ___executeAgents() {
+		$modules = $this->wire()->modules;
+		$at = $this->at;
+		$maxAgents = 10;
+		$form = $modules->get('InputfieldForm'); /** @var InputfieldForm $form */
+		$agents = $at->getAgents();
+		$dataLists = include(__DIR__ . '/datalists.php');
+		
+		$this->headline('Agents configuration');
+		
+		$labels = [
+			'model' => 'Model ID',
+			'label' => 'Optional label',
+			'apiKey' => 'API key',
+			'endpointUrl' => 'Endpoint URL',
+		];
+		
+		$engineerKeys = [
+			'engineer_model' => 'model', 
+			'engineer_label' => 'label',
+			'engineer_api_key' => 'apiKey',
+			'engineer_endpoint' => 'endpointUrl',
+		];
+
+		$headerActions = [
+			'apiKey' => [
+				'onIcon' => 'toggle-on',
+				'onEvent' => 'at-apikey-show',
+				'onTooltip' => 'Hide API key',
+				'offIcon' => 'toggle-off',
+				'offEvent' => 'at-apikey-hide',
+				'offTooltip' => 'Show API key',
+			],
+		];
+		
+		for($n = 1; $n <= $maxAgents; $n++) {
+			
+			$fs = $form->InputfieldFieldset;
+			$fs->label = "Agent $n" . ($n === 1 ? ' (Primary)' : '');
+			$fs->themeOffset = 1;
+			$fs->collapsed = Inputfield::collapsedBlank;
+			$form->add($fs);
+			$agent = $agents->eq($n-1);
+			
+			foreach($labels as $name => $label) {
+				$f = $form->InputfieldText;
+				$f->attr('name', "$name$n");
+				$f->label = $label;
+				$f->columnWidth = 25;
+				if($agent) $f->val($agent->get($name));
+				if($name === 'apiKey') $f->attr('type', 'password');
+				$fs->add($f);
+			
+				if(isset($headerActions[$name])) {
+					$f->wrapClass("at-$name");
+					$f->addHeaderAction($headerActions[$name]);
+				}
+				
+				if(!isset($dataLists[$name])) continue;
+				
+				$f->attr('list', "$name-examples"); 
+				$examples = $dataLists[$name];
+				if(!count($examples)) continue; // already rendered the datalist
+				$o = '';
+				
+				foreach($examples as $label => $example) {
+					$o .= "<option value='$example' label='$label'>";
+				}
+				
+				$f->appendMarkup = "<datalist id='$name-examples'>$o</datalist>";
+				$dataLists[$name] = []; // ensure we render it only once
+			}
+		}
+		
+		$submit = $form->InputfieldSubmit;
+		$submit->attr('name', 'submit_agents');
+		$submit->value = $this->_('Save');
+		$submit->showInHeader();
+		$form->add($submit);
+		
+		if(!$form->isSubmitted($submit)) return $form->render();
+		
+		$form->processInput($this->wire()->input->post);
+		$agents = new AgentToolsAgents();
+		
+		for($n = 1; $n <= $maxAgents; $n++) {
+			$agent = new AgentToolsAgent();
+			foreach($labels as $name => $label) {
+				$agent->set($name, $form->getValueByName("$name$n"));
+			}
+			if($agent->model || $agent->apiKey || $agent->endpointUrl) $agents->add($agent);
+		}
+		
+		$data = $modules->getConfig('AgentTools');
+		$agent = $agents->first(); /** @var AgentToolsAgent $agent */
+	
+		// save settings (keeping legacy settings for now)
+		foreach($engineerKeys as $key => $prop) {
+			$data[$key] = $agent->get($prop);
+		}
+		$data['engineer_additional_models'] = $agents->getString();
+		$modules->saveConfig($at, $data);
+		$this->message('Saved agents');
+		
+		if(count($form->getErrors())) return $form->render();
+		
+		$this->wire()->session->location('./');
 	}
 	
 	/**
@@ -1035,5 +1144,17 @@ class ProcessAgentTools extends Process {
 
 		$session->location('./');
 	}
-
+	
+	/**
+	 * Select random thinking words 
+	 * 
+	 * @return string
+	 * 
+	 */
+	protected function renderThinkingWords() {
+		$qty = count($this->thinkingWords);
+		$word1 = $this->thinkingWords[mt_rand(0, $qty-1)];
+		do { $word2 = $this->thinkingWords[mt_rand(0, $qty-1)]; } while($word2 === $word1);
+		return " <span id='thinking' hidden>$word1 and $word2</span>";
+	}
 }

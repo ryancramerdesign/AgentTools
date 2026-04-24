@@ -9,7 +9,7 @@
 class AgentToolsAgents extends WireArray {
 	
 	/**
-	 * @param string $str Optional agents definition string to populate
+	 * @param string|array $str Optional agents definition string to populate (string or array of strings)
 	 * 
 	 */
 	public function __construct($str = '') {
@@ -36,12 +36,16 @@ class AgentToolsAgents extends WireArray {
 	/**
 	 * Add agent(s) by definition string
 	 *
-	 * @param string $str
+	 * @param string|array $str String definition or array of strings definition
 	 * @return self
 	 *
 	 */
-	public function addString(string $str) {
-		$lines = strpos($str, "\n") !== false ? explode("\n", $str) : [ $str ];
+	public function addString($str) {
+		if(is_array($str)) {
+			$lines = $str;
+		} else {
+			$lines = strpos($str, "\n") !== false ? explode("\n", $str) : [$str];
+		}
 		foreach($lines as $line) {
 			if(strpos($line, '|') === false) continue;
 			$agent = $this->makeBlankItem();
@@ -51,6 +55,25 @@ class AgentToolsAgents extends WireArray {
 		return $this;
 	}
 	
+	/**
+	 * Render string of all agents configuration
+	 * 
+	 */
+	public function getString() {
+		$a = [];
+		foreach($this as $agent) {
+			/** @var AgentToolsAgent $agent */
+			$a[] = $agent->getString();
+		}
+		return trim(implode("\n", $a));
+	}
+	
+	/**
+	 * Render just the model names
+	 * 
+	 * @return string
+	 * 
+	 */
 	public function __toString() {
 		$a = [];
 		foreach($this as $agent) {
@@ -66,5 +89,14 @@ class AgentToolsAgents extends WireArray {
 	 */
 	public function getIterator(): \ArrayIterator {
 		return new \ArrayIterator($this->data);
+	}
+	
+	public function removeDuplicates() {
+		$a = [];
+		foreach($this as $agent) { /** @var AgentToolsAgent $agent */
+			$hash = $agent->getHash();
+			if(isset($a[$hash])) $this->remove($agent);
+			$a[$hash] = $agent;
+		}
 	}
 }

@@ -1,5 +1,20 @@
 # Changelog
 
+## Version 8
+
+### Agents configuration UI
+
+- **Setup > Agent Tools > Agents** — new admin screen for managing up to 10 agents; each row has Model ID, Optional label, API key (password field with show/hide toggle), and Endpoint URL; empty agent rows collapse automatically
+- Model ID and Endpoint URL fields offer datalist suggestions covering Anthropic, OpenAI, Gemini, Groq, Z.AI, and OpenRouter
+- `engineer_additional_models` now stores all agents (including the primary); the field in module config is repurposed as an export/import field for copying agent configuration between installations
+- `AgentToolsEngineer::getAvailableModels()` refactored to use `$at->getAgents()` instead of reading legacy config fields directly; labeled agents now show their friendly name in the Control room model selector
+- `AgentToolsEngineer::ask()` defaults now use `$at->getPrimaryAgent()` instead of reading `engineer_provider`/`engineer_api_key` directly
+- `renderEngineerForm()` guard updated to use `$at->getPrimaryAgent()` and links to the new Agents screen when no agent is configured
+- `renderThinkingWords()` extracted from inline duplication in Engineer form and reply form
+- Module icon updated to `at` (the @ symbol) — fitting for both the `$at` API variable and the `--at-` CLI prefix
+
+---
+
 ## Version 7
 
 ### Public agents API

@@ -87,8 +87,9 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		$result = ['response' => '', 'migration' => null, 'error' => null, 'history' => []];
 
 		try {
-			$provider = $options['provider'] ?? ((string) $this->at->get('engineer_provider') ?: self::providerAnthropic);
-			$apiKey = $options['apiKey'] ?? (string) $this->at->get('engineer_api_key');
+			$primary = $this->at->getPrimaryAgent();
+			$provider = $options['provider'] ?? ($primary ? $primary->provider : self::providerAnthropic);
+			$apiKey = $options['apiKey'] ?? ($primary ? $primary->apiKey : '');
 			$model = $options['model'] ?? '';
 			$endpoint = $options['endpoint'] ?? '';
 
@@ -160,33 +161,16 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	 */
 	public function getAvailableModels(): array {
 		$models = [];
-
-		$primaryKey = (string) $this->at->get('engineer_api_key');
-		$primaryProvider = (string) $this->at->get('engineer_provider') ?: self::providerAnthropic;
-		$primaryEndpoint = (string) $this->at->get('engineer_endpoint') ?: '';
-		$primaryModelStr = (string) $this->at->get('engineer_model') ?:
-			($primaryProvider === self::providerAnthropic ? self::defaultAnthropicModel : self::defaultOpenAIModel);
-
-		foreach(explode(',', $primaryModelStr) as $modelId) {
-			$modelId = trim($modelId);
-			if(!$modelId) continue;
+		foreach($this->at->getAgents() as $agent) {
+			/** @var AgentToolsAgent $agent */
 			$models[] = [
-				'label' => $modelId,
-				'model' => $modelId,
-				'provider' => $primaryProvider,
-				'key' => $primaryKey,
-				'endpoint' => $primaryEndpoint,
+				'label' => $agent->label ?: $agent->model,
+				'model' => $agent->model,
+				'provider' => $agent->provider,
+				'key' => $agent->apiKey,
+				'endpoint' => $agent->endpointUrl,
 			];
 		}
-
-		$additionalStr = trim((string) $this->at->get('engineer_additional_models'));
-		if($additionalStr) {
-			foreach(explode("\n", $additionalStr) as $line) {
-				$entry = $this->parseAdditionalModelLine(trim($line));
-				if($entry) $models[] = $entry;
-			}
-		}
-
 		return $models;
 	}
 
@@ -921,17 +905,15 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	 */
 	public function getConfigInputfields(InputfieldWrapper $inputfields): void {
 		$modules = $this->wire()->modules;
-
+		$datalists = include(__DIR__ . '/datalists.php');
+		
 		/** @var InputfieldFieldset $outerFs */
 		$outerFs = $modules->get('InputfieldFieldset');
 		$outerFs->label = $this->_('Engineer');
 		$outerFs->icon = 'commenting';
-
-		// Primary AI provider fieldset
-		/** @var InputfieldFieldset $primaryFs */
-		$primaryFs = $modules->get('InputfieldFieldset');
-		$primaryFs->label = $this->_('Primary AI provider');
-		$outerFs->add($primaryFs);
+		$outerFs->description = 
+			$this->_('Configure the primary AI agent here.') . ' ' . 
+			$this->_('You can also edit and add more AI agents at [Setup > AgentTools > Agents](../setup/agent-tools/agents/).'); 
 
 		/** @var InputfieldSelect $f */
 		$f = $modules->get('InputfieldSelect');
@@ -940,65 +922,58 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		$f->addOption(self::providerAnthropic, 'Anthropic (Claude)');
 		$f->addOption(self::providerOpenAI, $this->_('OpenAI-compatible'));
 		$f->val($this->at->get('engineer_provider') ?: self::providerAnthropic);
-		$primaryFs->add($f);
+		$f->columnWidth = 50;
+		$outerFs->add($f);
 
 		/** @var InputfieldText $f */
 		$f = $modules->get('InputfieldText');
 		$f->attr('name', 'engineer_api_key');
+		$f->attr('type', 'password');
 		$f->label = $this->_('API Key');
 		$f->val($this->at->get('engineer_api_key') ?: '');
-		$primaryFs->add($f);
+		$f->columnWidth = 50;
+		$outerFs->add($f);
 
 		$f = $modules->get('InputfieldText');
 		$f->attr('name', 'engineer_model');
-		$f->attr('list', 'at_engineer_model_list');
-		$f->label = $this->_('Model');
-		$f->description = 
-			$this->_('Model API identifier.') . ' ' . 
-			sprintf(
-				$this->_('Leave blank for default: %s (Anthropic) or %s (OpenAI-compatible).'),
-				'`' . self::defaultAnthropicModel . '`',
-				'`' . self::defaultOpenAIModel . '`',
-			) . ' ' . 
-			sprintf(
-				$this->_("Enter multiple comma-separated identifiers to offer a choice in the Engineer's Control room (e.g. %s,%s)."),
-				'`' . self::defaultAnthropicModel . '`',
-				'`claude-opus-4-7`'
-			) . ' ' . 
-			$this->_('Common models are suggested as you type. First entered model is the default.');
+		$f->attr('list', 'model-list');
+		$f->label = $this->_('Model API identifier');
 		$f->val($this->at->get('engineer_model') ?: '');
-		$claudeModels = [
-			// Anthropic
-			'claude-opus-4-7',
-			'claude-opus-4-6',
-			'claude-sonnet-4-6',
-			'claude-haiku-4-5',
-		];
-		$knownModels = $claudeModels + [
-			// OpenAI
-			'gpt-4o',
-			'gpt-4o-mini',
-			'gpt-4-turbo',
-			'o1',
-			'o3-mini',
-		];
-		$f->detail =
-			'Example for single model: `claude-sonnet-4-6` ' . "\n" .
-			'Example for multi models: `' . implode(',', $claudeModels) . "`\n" .
-			'Models entered must be from the same provider and use the same API key (above). ' .
-			'For other providers, see "Additional models" below.';
-		$options = implode('', array_map(function($m) { return "<option value='$m'>"; }, $knownModels));
-		$f->appendMarkup = "<datalist id='at_engineer_model_list'>$options</datalist>";
-		$primaryFs->add($f);
+		$f->description = 'Example: `claude-sonnet-4-6` ';
+		$o = '';
+		foreach($datalists['model'] as $modelLabel => $modelName) {
+			$o .= "<option value='$modelName' label='$modelLabel'>";
+		}
+		$f->appendMarkup = "<datalist id='model-list'>$o</datalist>";
+		$f->columnWidth = 50;
+		$outerFs->add($f);
+		
+		$f = $modules->get('InputfieldText');
+		$f->attr('name', 'engineer_label');
+		$f->attr('list', 'label-list');
+		$f->label = $this->_('Model API label (optional)');
+		$f->val($this->at->get('engineer_label') ?: '');
+		$f->description = 'Example: `Claude Sonnet 4.6` ';
+		$o = '';
+		foreach($datalists['model'] as $modelLabel => $modelName) {
+			$o .= "<option value='$modelLabel' label='$modelName'>";
+		}
+		$f->appendMarkup = "<datalist id='label-list'>$o</datalist>";
+		$f->columnWidth = 50;
+		$outerFs->add($f);
 
 		/** @var InputfieldURL $f */
 		$f = $modules->get('InputfieldURL');
 		$f->attr('name', 'engineer_endpoint');
-		$f->label = $this->_('API Endpoint URL');
-		$f->description = $this->_('Base URL for OpenAI-compatible providers. Default: https://api.openai.com/v1');
-		$f->showIf = 'engineer_provider=' . self::providerOpenAI;
+		$f->label = $this->_('API endpoint URL');
 		$f->val($this->at->get('engineer_endpoint') ?: '');
-		$primaryFs->add($f);
+		$f->attr('list', 'endpoint-list');
+		$o = '';
+		foreach($datalists['endpointUrl'] as $endpointLabel => $endpointUrl) {
+			$o .= "<option value='$endpointUrl' label='$endpointLabel'>";
+		}
+		$f->appendMarkup = "<datalist id='endpoint-list'>$o</datalist>";
+		$outerFs->add($f);
 
 		/** @var InputfieldToggle $f */
 		$f = $modules->get('InputfieldToggle');
@@ -1006,39 +981,16 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		$f->label = $this->_('Read-only mode');
 		$f->description = $this->_('When enabled, the Engineer can answer questions and suggest changes but cannot execute code or create migration files.');
 		$f->val((int) $this->at->get('engineer_readonly'));
-		$primaryFs->add($f);
-
-		// Additional models fieldset
-		/** @var InputfieldFieldset $additionalFs */
-		/*
-		$additionalFs = $modules->get('InputfieldFieldset');
-		$additionalFs->label = $this->_('Additional models');
-		$additionalFs->collapsed = Inputfield::collapsedYes;
-		*/
+		$outerFs->add($f);
 
 		/** @var InputfieldTextarea $f */
 		$f = $modules->get('InputfieldTextarea');
 		$f->attr('name', 'engineer_additional_models');
-		$f->label = $this->_('Additional models');
-		$f->collapsed = Inputfield::collapsedBlank;
+		$f->label = $this->_('Agents (export/import)');
+		$f->collapsed = Inputfield::collapsedYes;
 		$f->description =
-			'Add one model per line to make it available in the Engineer\'s Control room. Each model uses its own API key, ' .
-			'independent of the primary provider above. Use the pipe-separated format: ' . "\n\n" . 
-			'`model | api-key` ' . "\n" . 
-			'`model | api-key | endpoint-url` ' . "\n" . 
-			'`model | api-key | endpoint-url | label`' . "\n\n" . 
-			'Provider is auto-detected from the key prefix (`sk-ant-*` = Anthropic, all others = OpenAI-compatible). ' .
-			'Whitespace around pipes is optional. Lines beginning with `#` are ignored.';
-		$f->appendMarkup .=
-			"<p class='uk-margin-small-top uk-margin-remove-bottom'>Examples:</p>" . 
-			"<pre class='uk-margin-remove'>" . 
-			"# OpenAI\ngpt-4o | YOUR_OPENAI_API_KEY\n\n" .
-			"# Anthropic (key prefix auto-detects provider)\nclaude-haiku-4-5-20251001 | sk-ant-YOUR_API_KEY\n\n" .
-			"# Google Gemini\ngemini-2.0-flash | YOUR_API_KEY | https://generativelanguage.googleapis.com/v1beta/openai/\n\n" .
-			"# Groq / Llama (label distinguishes it from other openai-compatible models)\nllama-3.3-70b-versatile | YOUR_API_KEY | https://api.groq.com/openai/v1 | Groq Llama 3.3\n\n" .
-			"# Local Ollama (no real key required)\nllama3 | ollama | http://localhost:11434/v1\n\n" .
-			"# OpenRouter (access many models via one key, model IDs use provider/name format)\nanthropic/claude-sonnet-4-6 | sk-or-YOUR_KEY | https://openrouter.ai/api/v1 | Claude via OpenRouter" .
-			"</pre>";
+			$this->_('This field contains your agents configuration in pipe-separated format (one agent per line).') . ' ' .
+			$this->_('You can copy this value to transfer your agent configuration to another installation, or paste a configuration from another installation here.');
 		$f->attr('rows', 6);
 		$f->val($this->at->get('engineer_additional_models') ?: '');
 		$outerFs->add($f);
