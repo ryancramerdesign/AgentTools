@@ -403,7 +403,6 @@ class ProcessAgentTools extends Process {
 		$f->attr('name', 'submit_engineer');
 		$f->icon = 'send';
 		$f->val($this->_('Send'));
-		$f->showInHeader(true);
 		$f->appendMarkup .= $this->renderThinkingWords();
 		$form->add($f);
 
