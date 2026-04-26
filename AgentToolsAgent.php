@@ -89,18 +89,25 @@ class AgentToolsAgent extends WireData {
 	 *
 	 * // With a system prompt:
 	 * $answer = $agent->ask('Summarize this content: ' . $body, 'You are a concise copywriter.');
+	 *
+	 * // With provider-specific options:
+	 * $answer = $agent->ask('Draft a tagline.', '', [
+	 *   'timeout' => 30,
+	 *   'openai' => ['temperature' => 0.9, 'max_output_tokens' => 256],
+	 * ]);
 	 * ~~~~~
 	 *
 	 * @param string $question The question or request to send
 	 * @param string $systemPrompt Optional instructions for the AI (leave blank for none)
+	 * @param array $options Optional request options — see sendRequest() for supported keys
 	 * @return string Text response from the AI, or error message string if the request failed
 	 *
 	 */
-	public function ask(string $question, string $systemPrompt = ''): string {
+	public function ask(string $question, string $systemPrompt = '', array $options = []): string {
 		$at = $this->wire('at'); /** @var AgentTools $at */
 		$messages = [['role' => 'user', 'content' => $question]];
 		try {
-			$response = $this->sendRequest($systemPrompt, $messages);
+			$response = $this->sendRequest($systemPrompt, $messages, [], $options);
 			return $at->engineer->extractText($this->provider, $response);
 		} catch(\Throwable $e) {
 			return $e->getMessage();
@@ -108,30 +115,52 @@ class AgentToolsAgent extends WireData {
 	}
 
 	/**
-	 * Send request to agent (advanced)
+	 * Send request to agent using an AgentToolsRequest object (advanced)
 	 *
-	 * For most use cases, use ask() instead. This method is for callers that need
-	 * control over the full messages array (e.g. multi-turn history) or tool definitions.
-	 * 
+	 * Prefer this over sendRequest() for new code — the request object is self-documenting,
+	 * hookable, and extensible without signature changes.
+	 *
+	 * ~~~~~
+	 * $request = new AgentToolsRequest($agent);
+	 * $request->systemPrompt = 'You are a concise assistant.';
+	 * $request->messages = [['role' => 'user', 'content' => 'List templates.']];
+	 * $request->options = ['openai' => ['reasoning_effort' => 'high']];
+	 * $response = $agent->sendProviderRequest($request);
+	 * ~~~~~
+	 *
+	 * #pw-advanced
+	 *
+	 * @param AgentToolsRequest $request
+	 * @return array Raw provider response — check provider docs for structure
+	 *
+	 */
+	public function sendProviderRequest(AgentToolsRequest $request): array {
+		$at = $this->wire('at'); /** @var AgentTools $at */
+		return $at->engineer->sendProviderRequest($request);
+	}
+
+	/**
+	 * Send request to agent with positional arguments (backwards-compatible)
+	 *
+	 * For new code, construct an AgentToolsRequest and use sendProviderRequest() instead.
+	 * This method remains for backwards compatibility.
+	 *
 	 * #pw-advanced
 	 *
 	 * @param string $systemPrompt System prompt, or empty string for none
 	 * @param array $messages Array of message objects: [['role' => 'user'|'assistant', 'content' => '...'], ...]
 	 * @param array $tools Tool definitions in provider format (Anthropic or OpenAI)
+	 * @param array $options Optional request options — see AgentToolsRequest $options for keys
 	 * @return array Raw provider response — check provider docs for structure
 	 *
 	 */
-	public function sendRequest(string $systemPrompt, array $messages, array $tools = []) {
-		$at = $this->wire('at'); /** @var AgentTools $at */
-		return $at->engineer->sendRequest(
-			$this->provider, 
-			$this->apiKey, 
-			$this->model,
-			$this->endpointUrl,
-			$systemPrompt, 
-			$messages, 
-			$tools
-		); 
+	public function sendRequest(string $systemPrompt, array $messages, array $tools = [], array $options = []): array {
+		$request = new AgentToolsRequest($this);
+		$request->systemPrompt = $systemPrompt;
+		$request->messages = $messages;
+		$request->tools = $tools;
+		$request->options = $options;
+		return $this->sendProviderRequest($request);
 	}
 	
 	public function getHash() {

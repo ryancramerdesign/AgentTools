@@ -12,6 +12,8 @@
  *
  * Copyright 2026 Ryan Cramer and Claude (Anthropic) | MIT
  *
+ * @method array sendProviderRequest(AgentToolsRequest $request)
+ *
  */
 class AgentToolsEngineer extends AgentToolsHelper {
 
@@ -38,7 +40,13 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	 *
 	 */
 	const maxOutputLength = 50000;
-
+	
+	/**
+	 * debug mode: log request/response JSON to site/assets/logs/agent-tools-engineer.txt log
+	 *
+	 */
+	const debugMode = false;
+	
 	/**
 	 * Max conversation history pairs (user + assistant) to retain
 	 *
@@ -107,11 +115,23 @@ class AgentToolsEngineer extends AgentToolsHelper {
 
 			$readOnly = isset($options['readOnly']) ? (bool) $options['readOnly'] : (bool) $this->at->get('engineer_readonly');
 			$verbose = !empty($options['verbose']);
-			$systemPrompt = $this->buildSystemPrompt($readOnly, $request, $options);
+			$systemPrompt = $this->buildSystemPrompt($readOnly);
 			$tools = $readOnly ? [] : $this->getToolDefinitions($provider);
 
+			$providerRequest = new AgentToolsRequest();
+			$this->wire($providerRequest); 
+			$providerRequest->setArray([
+				'provider' => $provider,
+				'apiKey' => $apiKey,
+				'model' => $model,
+				'endpoint' => $endpoint,
+				'systemPrompt' => $systemPrompt,
+				'tools' => $tools,
+			]);
+
 			for($i = 0; $i < self::maxIterations; $i++) {
-				$response = $this->sendRequest($provider, $apiKey, $model, $endpoint, $systemPrompt, $messages, $tools);
+				$providerRequest->messages = $messages;
+				$response = $this->sendProviderRequest($providerRequest);
 				$toolCalls = $this->extractToolCalls($provider, $response);
 
 				if(empty($toolCalls)) {
@@ -323,19 +343,40 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	}
 
 	/**
-	 * Build the system prompt, including site map and schema context if available
+	 * Get a comma-separated list of API variables available to eval_php
 	 *
-	 * @param bool $readOnly
-	 * @param string $request
-	 * @param array $options Context options from ask():
-	 *  - `context` (string): 'all', 'custom', or 'none'
-	 *  - `contextItems` (array): Items to include when context='custom': sitemap_pages, sitemap_schema
+	 * Includes core variables plus any conditionally available ones (e.g. $languages, $forms).
+	 *
+	 * @param bool $withNotes Include parenthetical notes for non-obvious variables (default true)
 	 * @return string
 	 *
 	 */
-	protected function buildSystemPrompt(bool $readOnly = false, string $request = '', array $options = []): string {
+	protected function getEvalPhpVars(bool $withNotes = true): string {
+		$vars = [
+			'$pages', '$fields', '$templates', '$modules', '$users', '$roles', '$permissions',
+			'$config', '$sanitizer', '$datetime', '$files', '$database', '$urls',
+			$withNotes ? '$at (AgentTools module instance)' : '$at',
+		];
+		if($this->wire('languages')) {
+			$vars[] = $withNotes ? '$languages (multi-language support)' : '$languages';
+		}
+		if($this->wire('forms')) {
+			$vars[] = $withNotes ? '$forms (FormBuilder)' : '$forms';
+		}
+		return implode(', ', $vars);
+	}
 
-		$siteUrl = $this->wire()->config->httpRoot;
+	/**
+	 * Build the system prompt
+	 *
+	 * @param bool $readOnly
+	 * @return string
+	 *
+	 */
+	protected function buildSystemPrompt(bool $readOnly = false): string {
+
+		$siteUrl = rtrim($this->wire()->config->urls->httpRoot, '/');
+		$apiVars = $this->getEvalPhpVars();
 
 		$prompt =
 			"You are an expert ProcessWire CMS engineer with complete knowledge of the ProcessWire API " .
@@ -353,8 +394,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			"migrations for a single request unless the user explicitly asks for them, or unless the " .
 			"changes are technically unrelated and must be applied independently.\n\n" .
 
-			"ProcessWire API variables available to eval_php: \$pages, \$fields, \$templates, \$modules, " .
-			"\$users, \$roles, \$permissions, \$config, \$at (AgentTools module instance).\n\n" .
+			"ProcessWire API variables available to eval_php: $apiVars.\n\n" .
 
 			"Use the site_info tool to retrieve information about this site's pages or fields and templates. " .
 			"Call with type='pages' for a map of the site's page tree, or type='schema' for the site's " .
@@ -366,7 +406,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			"to know available options or method signatures.\n\n" .
 
 			"When referencing pages by path in your response, format them as markdown links using this " .
-			"site's base URL: $siteUrl (e.g. a page at /blog/post/ becomes [$siteUrl" . "blog/post/]($siteUrl" . "blog/post/)).\n\n" .
+			"site's base URL: $siteUrl (e.g. a page at /blog/post/ becomes [$siteUrl/blog/post/]($siteUrl/blog/post/)).\n\n" .
 
 			"When displaying dates or timestamps retrieved via eval_php, always format them as human-readable " .
 			"strings (e.g. date('Y-m-d H:i:s', \$page->modified)) rather than returning raw Unix timestamps.\n\n" .
@@ -456,6 +496,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		$docs = [];
 		$config = $this->wire()->config;
 		$searchPaths = [
+			$config->paths->root . 'wire/core/',
 			$config->paths->root . 'wire/modules/',
 			$config->paths->siteModules,
 		];
@@ -498,10 +539,10 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	 */
 	protected function getToolDefinitions(string $provider): array {
 
+		$apiVars = $this->getEvalPhpVars(false);
 		$evalDesc =
 			"Evaluate PHP code with full ProcessWire API access. Use echo to output results. " .
-			"Available variables: \$pages, \$fields, \$templates, \$modules, \$users, \$roles, " .
-			"\$permissions, \$config, \$at. Do not include an opening <?php tag.";
+			"Available variables: $apiVars. Do not include an opening <?php tag.";
 
 		$migrationDesc =
 			"Save a PHP migration file for the user to review and apply. Use for any changes to the site. " .
@@ -579,48 +620,89 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	}
 
 	/**
-	 * Send a request to the AI provider
+	 * Send a provider request from an AgentToolsRequest object
 	 *
-	 * @param string $provider Provider constant
-	 * @param string $apiKey API key (may be overridden per-model)
-	 * @param string $model Model identifier (empty string = use provider default)
-	 * @param string $endpoint Base URL for OpenAI-compatible providers (empty = module config or OpenAI default)
-	 * @param string $systemPrompt
-	 * @param array $messages
-	 * @param array $tools
-	 * @return array
+	 * This is the primary hookable dispatch point. Hook `AgentToolsEngineer::sendProviderRequest`
+	 * with a `before` hook to inspect or mutate the request before it is sent, or an `after` hook
+	 * to inspect or transform the raw response.
+	 *
+	 * ~~~~~~
+	 * // Example: set reasoning_effort on every OpenAI request
+	 * $wire->addHookBefore('AgentToolsEngineer::sendProviderRequest', function(HookEvent $e) {
+	 *     $request = $e->arguments(0); // AgentToolsRequest
+	 *     $opts = $request->options;
+	 *     $opts['openai']['reasoning_effort'] = 'high';
+	 *     $request->options = $opts;
+	 * });
+	 * ~~~~~~
+	 *
+	 * @param AgentToolsRequest $request
+	 * @return array Raw provider response — check provider docs for structure
 	 *
 	 */
-	public function sendRequest(string $provider, string $apiKey, string $model, string $endpoint, string $systemPrompt, array $messages, array $tools): array {
-		if($provider === self::providerAnthropic) {
-			if(!$model) $model = self::defaultAnthropicModel;
-			return $this->sendAnthropicRequest($apiKey, $model, $systemPrompt, $messages, $tools);
+	public function ___sendProviderRequest(AgentToolsRequest $request): array {
+		if($request->provider === self::providerAnthropic) {
+			if(!$request->model) $request->model = self::defaultAnthropicModel;
+			return $this->sendAnthropicRequest($request);
 		} else {
-			if(!$model) $model = self::defaultOpenAIModel;
-			if(!$endpoint) $endpoint = (string) $this->at->get('engineer_endpoint') ?: 'https://api.openai.com/v1';
-			$endpoint = rtrim($endpoint, '/');
-			return $this->sendOpenAIRequest($apiKey, $model, $endpoint, $systemPrompt, $messages, $tools);
+			if(!$request->model) $request->model = self::defaultOpenAIModel;
+			if(!$request->endpoint) {
+				$request->endpoint = (string) $this->at->get('engineer_endpoint') ?: 'https://api.openai.com/v1';
+			}
+			$request->endpoint = rtrim($request->endpoint, '/');
+			return $this->sendOpenAIRequest($request);
 		}
+	}
+
+	/**
+	 * Send request to the configured AI provider (backwards-compatible positional-arg form)
+	 *
+	 * For new code, prefer constructing an AgentToolsRequest and calling sendProviderRequest().
+	 * This method remains for backwards compatibility and delegates to sendProviderRequest().
+	 *
+	 * @param string $provider Provider name: 'anthropic' or 'openai'
+	 * @param string $apiKey API key for the provider
+	 * @param string $model Model ID to use
+	 * @param string $endpoint Base endpoint URL (OpenAI-compatible providers only)
+	 * @param string $systemPrompt System prompt, or empty string for none
+	 * @param array $messages Array of message objects: [['role' => 'user'|'assistant', 'content' => '...'], ...]
+	 * @param array $tools Tool definitions in provider format
+	 * @param array $options Optional request options — see AgentToolsRequest $options for keys
+	 * @return array Raw provider response — check provider docs for structure
+	 * @deprecated Use AgentToolsRequest + sendProviderRequest() instead
+	 *
+	 */
+	public function sendRequest(string $provider, string $apiKey, string $model, string $endpoint, string $systemPrompt, array $messages, array $tools = [], array $options = []): array {
+		$request = new AgentToolsRequest();
+		$request->setArray([
+			'provider' => $provider,
+			'apiKey' => $apiKey,
+			'model' => $model,
+			'endpoint' => $endpoint,
+			'systemPrompt' => $systemPrompt,
+			'messages' => $messages,
+			'tools' => $tools,
+			'options' => $options,
+		]);
+		return $this->sendProviderRequest($request);
 	}
 
 	/**
 	 * Send request to Anthropic Messages API
 	 *
-	 * @param string $apiKey
-	 * @param string $model
-	 * @param string $system
-	 * @param array $messages
-	 * @param array $tools
+	 * @param AgentToolsRequest $request
 	 * @return array
 	 *
 	 */
-	protected function sendAnthropicRequest(string $apiKey, string $model, string $system, array $messages, array $tools): array {
+	protected function sendAnthropicRequest(AgentToolsRequest $request): array {
 		$cache = ['type' => 'ephemeral', 'ttl' => '1h'];
+		$options = $request->options;
+		$tools = $request->tools;
 
 		// System prompt as a content block array so we can attach cache_control
 		// Omit entirely if empty — Anthropic rejects empty text blocks
-		$systemBlocks = $system !== ''
-			? [['type' => 'text', 'text' => $system, 'cache_control' => $cache]]
+		$systemBlocks = $request->systemPrompt !== ''
+			? [['type' => 'text', 'text' => $request->systemPrompt, 'cache_control' => $cache]]
 			: [];
 
 		// Cache tool definitions too — they are static per session
@@ -629,48 +711,65 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		}
 
 		$payload = [
-			'model' => $model,
+			'model' => $request->model,
 			'max_tokens' => self::maxTokens,
-			'messages' => $messages,
-			'tools' => $tools,
+			'messages' => $request->messages,
 		];
 		if(!empty($systemBlocks)) $payload['system'] = $systemBlocks;
+		if(!empty($tools)) $payload['tools'] = $tools;
+
+		// Merge caller-supplied Anthropic options, protecting core structural keys
+		if(!empty($options['anthropic'])) {
+			$reserved = array_flip(['model', 'messages', 'system', 'tools']);
+			$payload = array_merge($payload, array_diff_key($options['anthropic'], $reserved));
+		}
+
+		$timeout = isset($options['timeout']) ? (int) $options['timeout'] : 120;
 
 		return $this->curlPost(
 			'https://api.anthropic.com/v1/messages',
 			$payload,
 			[
-				'x-api-key: ' . $apiKey,
+				'x-api-key: ' . $request->apiKey,
 				'anthropic-version: 2023-06-01',
 				'content-type: application/json',
-			]
+			],
+			$timeout
 		);
 	}
 
 	/**
 	 * Send request to OpenAI-compatible Chat Completions API
 	 *
-	 * @param string $apiKey
-	 * @param string $model
-	 * @param string $endpoint Base URL, e.g. https://api.openai.com/v1
-	 * @param string $system
-	 * @param array $messages
-	 * @param array $tools
+	 * @param AgentToolsRequest $request
 	 * @return array
 	 *
 	 */
-	protected function sendOpenAIRequest(string $apiKey, string $model, string $endpoint, string $system, array $messages, array $tools): array {
+	protected function sendOpenAIRequest(AgentToolsRequest $request): array {
+		$options = $request->options;
+
+		$payload = [
+			'model' => $request->model,
+			'messages' => array_merge([['role' => 'system', 'content' => $request->systemPrompt]], $request->messages),
+		];
+		if(!empty($request->tools)) $payload['tools'] = $request->tools;
+
+		// Merge caller-supplied OpenAI options, protecting core structural keys
+		if(!empty($options['openai'])) {
+			$reserved = array_flip(['model', 'messages', 'tools']);
+			$payload = array_merge($payload, array_diff_key($options['openai'], $reserved));
+		}
+
+		$timeout = isset($options['timeout']) ? (int) $options['timeout'] : 120;
+
 		return $this->curlPost(
-			$endpoint . '/chat/completions',
+			$request->endpoint . '/chat/completions',
+			$payload,
 			[
-				'model' => $model,
-				'messages' => array_merge([['role' => 'system', 'content' => $system]], $messages),
-				'tools' => $tools,
-			],
-			[
-				'Authorization: Bearer ' . $apiKey,
+				'Authorization: Bearer ' . $request->apiKey,
 				'content-type: application/json',
-			]
+			],
+			$timeout
 		);
 	}
 
@@ -866,18 +965,19 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	 * @param string $url
 	 * @param array $payload Request body (will be JSON encoded)
 	 * @param array $headers HTTP headers in "Name: value" format
+	 * @param int $timeout Request timeout in seconds (default 120)
 	 * @return array Decoded JSON response
 	 * @throws WireException on network error, non-JSON response, or HTTP error status
 	 *
 	 */
-	protected function curlPost(string $url, array $payload, array $headers): array {
+	protected function curlPost(string $url, array $payload, array $headers, int $timeout = 120): array {
 		$ch = curl_init($url);
 		curl_setopt_array($ch, [
 			CURLOPT_POST => true,
 			CURLOPT_POSTFIELDS => json_encode($payload),
 			CURLOPT_HTTPHEADER => $headers,
 			CURLOPT_RETURNTRANSFER => true,
-			CURLOPT_TIMEOUT => 120,
+			CURLOPT_TIMEOUT => $timeout,
 		]);
 		$response = curl_exec($ch);
 		$httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
@@ -886,11 +986,19 @@ class AgentToolsEngineer extends AgentToolsHelper {
 
 		$data = json_decode($response, true);
 		if(!is_array($data)) throw new WireException("Invalid API response: expected JSON");
-
+		
+		if(self::debugMode) $this->message([
+			'url' => $url,
+			'headers' => $headers, 
+			'request' => $payload,
+			'response' => $data
+		]);
+		
 		if($httpCode >= 400) {
 			$error = $data['error']['message'] ?? $data['error'] ?? $data['message'] ?? null;
 			if($error === null) $error = trim($response) ?: 'Unknown error';
 			if(is_array($error)) $error = json_encode($error);
+			if(self::debugMode) $this->error("$httpCode: $error"); 
 			throw new WireException("API error ($httpCode): $error");
 		}
 

@@ -1,5 +1,32 @@
 # Changelog
 
+## Version 9
+
+### AgentToolsRequest
+
+- **`AgentToolsRequest`** — new class encapsulating all parameters for a provider request: `provider`, `apiKey`, `model`, `endpoint`, `systemPrompt`, `messages`, `tools`, `options`
+- Constructor accepts an optional `AgentToolsAgent` to auto-populate connection properties via `setAgent()`
+- `set()` normalizes `endpointUrl` → `endpoint` for compatibility with `AgentToolsAgent` property names
+
+### Provider request API
+
+- **`AgentToolsEngineer::sendProviderRequest(AgentToolsRequest $request)`** — new hookable (`___`) dispatch method; replaces `sendRequest()` as the primary hook point; hook `before` to mutate the request, `after` to inspect the raw response
+- **`AgentToolsAgent::sendProviderRequest(AgentToolsRequest $request)`** — new method; delegates to `$at->engineer->sendProviderRequest()`
+- **`AgentToolsAgent::ask()`** — added `array $options = []` parameter, threaded through to `sendProviderRequest()`
+- **`$options` array** — supported keys: `timeout` (int, seconds), `anthropic` (array merged into Anthropic payload), `openai` (array merged into OpenAI payload); core structural keys protected from override; unsupported keys ignored by provider
+- **`AgentToolsEngineer::sendRequest()`** — deprecated; now delegates to `sendProviderRequest()` via `AgentToolsRequest`; no longer hookable
+- **`AgentToolsAgent::sendRequest()`** — deprecated; now delegates to `sendProviderRequest()` via `AgentToolsRequest`; backwards-compatible signature preserved
+- `curlPost()` timeout parameterized (was hardcoded 120s); controlled via `$options['timeout']`
+- `tools` key omitted from provider payloads when tools array is empty, avoiding issues with providers that reject `"tools": []`
+
+### Engineer improvements
+
+- **`getEvalPhpVars()`** — new helper returning the API variable list for system prompt and tool description; expanded list adds `$sanitizer`, `$datetime`, `$files`, `$database`, `$urls`; conditionally adds `$languages` (if LanguageSupport installed) and `$forms` (if FormBuilder installed)
+- **`listApiDocs()`** — added `wire/core/` to search paths; `wire/core/*/API.md` files (e.g. `Pages/API.md`) are now discovered and accessible via the `api_docs` tool
+- **`buildSystemPrompt()`** — fixed site URL using correct `$config->urls->httpRoot`; removed stale `$request` and `$options` parameters left over from v5 context-selector feature
+
+---
+
 ## Version 8
 
 ### Agents configuration UI
