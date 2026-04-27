@@ -647,9 +647,18 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		} else {
 			if(!$request->model) $request->model = self::defaultOpenAIModel;
 			if(!$request->endpoint) {
-				$request->endpoint = (string) $this->at->get('engineer_endpoint') ?: 'https://api.openai.com/v1';
+				$request->endpoint = (string) $this->at->get('engineer_endpoint') ?: 'https://api.openai.com/v1/chat/completions';
 			}
-			$request->endpoint = rtrim($request->endpoint, '/');
+			// map legacy base URLs (stored before full-URL convention) to their full equivalents
+			$legacyBaseUrls = [
+				'https://api.openai.com/v1' => 'https://api.openai.com/v1/chat/completions',
+				'https://api.groq.com/openai/v1' => 'https://api.groq.com/openai/v1/chat/completions',
+				'https://openrouter.ai/api/v1' => 'https://openrouter.ai/api/v1/chat/completions',
+				'https://generativelanguage.googleapis.com/v1beta/openai' => 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
+				'https://generativelanguage.googleapis.com/v1beta/openai/' => 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
+			];
+			$endpoint = rtrim($request->endpoint, '/');
+			$request->endpoint = $legacyBaseUrls[$endpoint] ?? $legacyBaseUrls[$request->endpoint] ?? $request->endpoint;
 			return $this->sendOpenAIRequest($request);
 		}
 	}
@@ -727,7 +736,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		$timeout = isset($options['timeout']) ? (int) $options['timeout'] : 120;
 
 		return $this->curlPost(
-			'https://api.anthropic.com/v1/messages',
+			$request->endpoint ?: 'https://api.anthropic.com/v1/messages',
 			$payload,
 			[
 				'x-api-key: ' . $request->apiKey,
@@ -763,7 +772,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		$timeout = isset($options['timeout']) ? (int) $options['timeout'] : 120;
 
 		return $this->curlPost(
-			$request->endpoint . '/chat/completions',
+			$request->endpoint,
 			$payload,
 			[
 				'Authorization: Bearer ' . $request->apiKey,
