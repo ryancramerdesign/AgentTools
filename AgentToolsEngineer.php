@@ -1109,7 +1109,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			$this->_('This field contains your agents configuration in pipe-separated format (one agent per line).') . ' ' .
 			$this->_('You can copy this value to transfer your agent configuration to another installation, or paste a configuration from another installation here.');
 		$f->attr('rows', 6);
-		$f->val($this->at->get('engineer_additional_models') ?: '');
+		$f->val($this->at->getAgents()->getString()); 
 		$outerFs->add($f);
 		$inputfields->add($outerFs);
 	}

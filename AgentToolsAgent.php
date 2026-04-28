@@ -54,11 +54,14 @@ class AgentToolsAgent extends WireData {
 	 * 
 	 */
 	public function setString($line) {
-		// model | api-key | endpoint-url | label
 		if(strpos($line, '|') === false) return false;
-		if(stripos($line, 'anthropic') === 0 || stripos($line, 'openai') === 0) {
+		$line = trim($line);
+		if($line === 'anthropic' || $line === 'openai') {
+			// provider | model | api-key | endpoint-url | label
 			[$provider, $line] = explode('|', $line, 2);
 			parent::set('provider', trim($provider));
+		} else {
+			// model | api-key | endpoint-url | label
 		}
 		$parts = explode('|', $line); 
 		foreach($parts as $key => $part) $parts[$key] = trim($part);
