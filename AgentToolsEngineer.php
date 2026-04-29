@@ -756,23 +756,41 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	 */
 	protected function sendOpenAIRequest(AgentToolsRequest $request): array {
 		$options = $request->options;
+		$endpoint = (string) $request->endpoint;
+		$path = (string) parse_url($endpoint, PHP_URL_PATH);
+		$isResponses = str_ends_with($path, '/responses');
 
-		$payload = [
-			'model' => $request->model,
-			'messages' => array_merge([['role' => 'system', 'content' => $request->systemPrompt]], $request->messages),
-		];
-		if(!empty($request->tools)) $payload['tools'] = $request->tools;
+		if($isResponses) {
+			$payload = [
+				'model' => $request->model,
+				'input' => $this->buildOpenAIResponsesInput($request->messages),
+			];
+			if($request->systemPrompt !== '') $payload['instructions'] = $request->systemPrompt;
+			if(!empty($request->tools)) $payload['tools'] = $request->tools;
 
-		// Merge caller-supplied OpenAI options, protecting core structural keys
-		if(!empty($options['openai'])) {
-			$reserved = array_flip(['model', 'messages', 'tools']);
-			$payload = array_merge($payload, array_diff_key($options['openai'], $reserved));
+			// Merge caller-supplied OpenAI options, protecting core structural keys
+			if(!empty($options['openai'])) {
+				$reserved = array_flip(['model', 'input', 'instructions', 'tools']);
+				$payload = array_merge($payload, array_diff_key($options['openai'], $reserved));
+			}
+		} else {
+			$payload = [
+				'model' => $request->model,
+				'messages' => array_merge([['role' => 'system', 'content' => $request->systemPrompt]], $request->messages),
+			];
+			if(!empty($request->tools)) $payload['tools'] = $request->tools;
+
+			// Merge caller-supplied OpenAI options, protecting core structural keys
+			if(!empty($options['openai'])) {
+				$reserved = array_flip(['model', 'messages', 'tools']);
+				$payload = array_merge($payload, array_diff_key($options['openai'], $reserved));
+			}
 		}
 
 		$timeout = isset($options['timeout']) ? (int) $options['timeout'] : 120;
 
 		return $this->curlPost(
-			$request->endpoint,
+			$endpoint,
 			$payload,
 			[
 				'Authorization: Bearer ' . $request->apiKey,
@@ -780,6 +798,40 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			],
 			$timeout
 		);
+	}
+
+	/**
+	 * Convert Chat Completions-style messages into Responses API input items
+	 *
+	 * @param array $messages
+	 * @return array
+	 *
+	 */
+	protected function buildOpenAIResponsesInput(array $messages): array {
+		$input = [];
+		foreach($messages as $message) {
+			if(!is_array($message)) continue;
+			$role = (string) ($message['role'] ?? 'user');
+			$content = $message['content'] ?? '';
+			if(!is_string($content)) {
+				$content = is_scalar($content) ? (string) $content : json_encode($content);
+			}
+			$type = $role === 'assistant' ? 'output_text' : 'input_text';
+			$input[] = [
+				'role' => in_array($role, ['user', 'assistant', 'system'], true) ? $role : 'user',
+				'content' => [[
+					'type' => $type,
+					'text' => (string) $content,
+				]],
+			];
+		}
+		return $input ?: [[
+			'role' => 'user',
+			'content' => [[
+				'type' => 'input_text',
+				'text' => '',
+			]],
+		]];
 	}
 
 	/**
