@@ -891,9 +891,11 @@ class ProcessAgentTools extends Process {
 		$appliedCount = count($migrationFiles) - $pendingCount;
 		$this->message(sprintf($this->_('%d applied, %d pending'), $appliedCount, $pendingCount));
 
-		// Pass confirmation message to JS
+		// Pass confirmation message and overlay text to JS
 		$this->wire()->config->js('AgentTools', [
 			'confirmDelete' => $this->_('Are you sure you want to delete the checked migration files? This cannot be undone.'),
+			'processingText' => $this->_('Still processing… this may take up to 30 seconds.'),
+			'timeoutText' => $this->_('If you see a server error, reload the page before resubmitting — your changes may already have been applied.'),
 		]);
 
 		/** @var InputfieldForm $form */

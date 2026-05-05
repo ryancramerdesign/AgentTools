@@ -115,8 +115,12 @@ class AgentToolsEngineer extends AgentToolsHelper {
 
 			$readOnly = isset($options['readOnly']) ? (bool) $options['readOnly'] : (bool) $this->at->get('engineer_readonly');
 			$verbose = !empty($options['verbose']);
-			$systemPrompt = $this->buildSystemPrompt($readOnly);
-			$tools = $readOnly ? [] : $this->getToolDefinitions($provider);
+			$systemPrompt = isset($options['systemPrompt']) ? $options['systemPrompt'] : $this->buildSystemPrompt($readOnly);
+			if(array_key_exists('tools', $options)) {
+				$tools = $options['tools'];
+			} else {
+				$tools = $readOnly ? [] : $this->getToolDefinitions($provider);
+			}
 
 			$providerRequest = new AgentToolsRequest();
 			$this->wire($providerRequest); 
@@ -143,7 +147,8 @@ class AgentToolsEngineer extends AgentToolsHelper {
 						['role' => 'user', 'content' => $request],
 						['role' => 'assistant', 'content' => $responseText],
 					]);
-					$maxEntries = $this->maxHistoryPairs * 2;
+					$maxPairs = (int) $this->at->get('engineer_mem_qty') ?: $this->maxHistoryPairs;
+				$maxEntries = $maxPairs * 2;
 					if(count($updatedHistory) > $maxEntries) {
 						$updatedHistory = array_slice($updatedHistory, -$maxEntries);
 					}
@@ -351,7 +356,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	 * @return string
 	 *
 	 */
-	protected function getEvalPhpVars(bool $withNotes = true): string {
+	public function getEvalPhpVars(bool $withNotes = true): string {
 		$vars = [
 			'$pages', '$fields', '$templates', '$modules', '$users', '$roles', '$permissions',
 			'$config', '$sanitizer', '$datetime', '$files', '$database', '$urls',
@@ -420,6 +425,9 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			"and suggest approaches, but you cannot execute code or create migration files. " .
 			"If asked to make a change, explain what would need to be done and provide example code, " .
 			"but note that changes must be applied manually or via the CLI.";
+
+		$instructions = trim((string) $this->at->get('engineer_instructions'));
+		if(strlen($instructions)) $prompt .= "\n\n" . $instructions;
 
 		// Keep sitemaps current so site_info tool returns fresh data
 		$siteMapFile = $this->at->getFilesPath() . 'site-map.json';
@@ -499,6 +507,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			$config->paths->root . 'wire/core/',
 			$config->paths->root . 'wire/modules/',
 			$config->paths->siteModules,
+			$config->paths->site . 'classes/',
 		];
 		foreach($searchPaths as $basePath) {
 			if(!is_dir($basePath)) continue;
@@ -537,7 +546,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	 * @return array
 	 *
 	 */
-	protected function getToolDefinitions(string $provider): array {
+	public function getToolDefinitions(string $provider): array {
 
 		$apiVars = $this->getEvalPhpVars(false);
 		$evalDesc =
@@ -1150,6 +1159,29 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		$f->label = $this->_('Read-only mode');
 		$f->description = $this->_('When enabled, the Engineer can answer questions and suggest changes but cannot execute code or create migration files.');
 		$f->val((int) $this->at->get('engineer_readonly'));
+		$f->columnWidth = 50;
+		$outerFs->add($f);
+
+		/** @var InputfieldInteger $f */
+		$f = $modules->get('InputfieldInteger');
+		$f->attr('name', 'engineer_mem_qty');
+		$f->label = $this->_('Conversation memory (message pairs)');
+		$f->description = $this->_('Number of past request/response pairs to retain in the AI context window. Older pairs are dropped first. Applies to both the Site Engineer and Page Engineer.');
+		$f->attr('min', 1);
+		$f->attr('max', 100);
+		$val = (int) $this->at->get('engineer_mem_qty');
+		$f->val($val ?: $this->maxHistoryPairs);
+		$f->columnWidth = 50;
+		$outerFs->add($f);
+
+		/** @var InputfieldTextarea $f */
+		$f = $modules->get('InputfieldTextarea');
+		$f->attr('name', 'engineer_instructions');
+		$f->label = $this->_('Custom instructions');
+		$f->description = $this->_('Additional instructions appended to the Engineer system prompt. Use this to provide site-specific context, point the Engineer to custom API.md files, or restrict its behavior for this installation.');
+		$f->attr('rows', 5);
+		$f->val($this->at->get('engineer_instructions') ?: '');
+		$f->collapsed = Inputfield::collapsedBlank;
 		$outerFs->add($f);
 
 		/** @var InputfieldTextarea $f */

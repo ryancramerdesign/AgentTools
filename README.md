@@ -1,6 +1,6 @@
 # Agent Tools module for ProcessWire
 
-Enables AI coding agents to access ProcessWire’s API. Also provides a content migration system.
+Enables AI coding agents to access ProcessWire’s API. Also provides a content migration system and a page-editor AI assistant.
 
 ## Introduction
 
@@ -45,6 +45,41 @@ admin application (Setup > Agent Tools), currently with the following features:
 - **Migrations**: This tool enables you to create, apply, list, view, and delete migrations
   that were created by the Engineer or by your AI agent using the command line tools of
   this module.
+
+### Page Engineer (AI assistant in the page editor)
+
+The **Page Engineer** is an AI content assistant that lives directly inside the ProcessWire
+page editor. It is provided as a fieldtype (`FieldtypePageEngineer`) that you can add to
+any template, giving editors a natural-language interface for editing page content without
+leaving the page editor.
+
+Editors submit requests like *"Rewrite the intro paragraph in a friendlier tone"* or
+*"Translate the title and body to French"* and the agent updates the appropriate page
+fields directly. Each exchange is recorded in a conversation history shown in the field,
+and editors can undo the most recent AI edit or reset the full conversation at any time.
+If the PagesVersions module is installed, the Page Engineer automatically creates a backup
+of the page before applying any changes.
+
+**Setup:**
+
+1. In your ProcessWire admin, go to **Setup > Fields > Add New** and choose the
+   **Page Engineer** fieldtype.
+2. In the field settings, configure the agent scope (current page, page and children,
+   or children only), add any custom instructions for the agent, and optionally restrict
+   which fields the agent is allowed to edit.
+3. Add the field to any template where you want AI content assistance available.
+
+**Notes:**
+
+- Requires an API key configured in the AgentTools module settings (Setup > Agent Tools).
+- The agent runs after the page is saved, so requests can take 30 seconds or more.
+  A processing overlay appears immediately on submit so editors know their request is
+  being handled. See [Troubleshooting](#troubleshooting) if you hit timeout errors.
+- The agent selection dropdown in the field lets editors choose which configured model
+  to use, identical to the model selector in the Engineer.
+- **Only add the Page Engineer field to templates used by trusted editors.** The agent
+  has full ProcessWire API access and can read and modify any content on the site that
+  the API allows. It should not be added to templates accessible by untrusted users.
 
 ### Tools for module authors
 
@@ -184,6 +219,38 @@ See the resulting post here: [ProcessWire and AI](https://processwire.com/blog/p
 
 - This migrations system is somewhat experimental and not intended to replace a mature system like RockMigrations.
 - File-based assets are not yet supported by migrations. 
+
+## Troubleshooting
+
+### Engineer timeouts or HTTP 500/504 errors
+
+**If you submit the Engineer form and it occasionally takes 30 seconds followed by a 500 or 504 error, 
+this section is for you.**
+
+When the browser shows a 500 or 504 error, the AI request is likely still completing on the server in the 
+background. By reloading or revisiting the page, you may find that the requested updates are already completed.
+
+This error usually happens because you are using Apache + FastCGI, nginx + PHP-FPM, or mod_fcgid, and they have
+a 30 second timeout by default. 
+
+#### Correcting the issue in Apache + FastCGI
+To correct the error in Apache + FastCGI, you need to edit the web server settings (http.conf). On the line that configures FastCGI
+you need to add or update the `-idle-timeout` setting to a value higher than 30 seconds. We use `-idle-timeout 300`.
+Here is what the setting looks like in my MAMP `/Applications/MAMP/conf/apache/httpd.conf` file below, but the 
+solution is likely similar in whatever LAMP software you are using. 
+```
+FastCgiServer /Applications/MAMP/fcgi-bin/php.fcgi -socket httpdFastCGI.sock -idle-timeout 300
+```
+*Note that this is separate from the Apache (or equivalent) `TimeOut` directive, which defaults to 60 seconds in newer
+versions of Apache (2.4+) and 300 seconds in older versions. It is typically not the issue. However, you may
+still want to increase the ` TimeOut` setting to match what you specified for FastCGI.*
+
+#### Correcting the issue in nginx + PHP-FPM or mod_fcgid
+
+The path is similar to correcting the issue for Apache + FastCGI except that in nginx + PHP-FPM 
+the setting equivalent to `-idle-timeout` is `fastcgi_read_timeout`, and in `mod_fcgid` 
+it is `FcgidIOTimeout`.
+
 
 ---
 

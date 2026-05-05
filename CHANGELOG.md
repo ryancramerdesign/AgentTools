@@ -1,5 +1,37 @@
 # Changelog
 
+## Version 10
+
+### Page Engineer (FieldtypePageEngineer)
+
+A new fieldtype that embeds an AI content assistant directly in the ProcessWire page editor.
+
+- **`FieldtypePageEngineer`** — fieldtype module; adds the Page Engineer field to any template
+- **`PageEngineerField`** — field configuration class; settings for scope, custom instructions,
+  allowed fields, and backup behavior
+- **`PageEngineerItem`** — a single conversation message (user request or agent response);
+  properties: `from`, `when`, `text`, `isAgent`; agent messages are rendered via TextformatterMarkdownExtra
+- **`PageEngineerItems`** — WireArray collection of `PageEngineerItem` objects; handles
+  JSON serialization and conversation history display
+- **`PageEngineerField.js`** — shows a full-screen processing overlay after 10 seconds on form
+  submit when the Page Engineer textarea has content, warning the editor before the FastCGI timeout
+- **`PageEngineerField.css`** — styles for the processing overlay
+
+**How the agent runs:** uses a `ProcessPageEdit::processSaveRedirect` hook so the agent
+executes after ProcessPageEdit has completed its full page save, avoiding any stale-form-overwrite
+where POST values could clobber the agent's database changes.
+
+**Features:**
+- Conversation history displayed in the field after each exchange
+- Undo last agent edit (restores all fields the agent modified)
+- Reset conversation (clears history)
+- Automatic page backup via PagesVersions before applying changes (if module installed)
+- Agent/model selector matches the Engineer's Control room model dropdown
+- Scope setting: current page only, page and children, or children only
+- Optional field restriction: limit which fields the agent is allowed to edit
+
+---
+
 ## Version 9
 
 ### AgentToolsRequest

@@ -19,6 +19,8 @@
  * @property string $engineer_endpoint
  * @property string $engineer_label
  * @property int|bool $engineer_readonly
+ * @property string $engineer_instructions
+ * @property int $engineer_mem_qty
  * @property string $engineer_additional_models
  *
  */
@@ -29,10 +31,10 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 			'title' => 'Agent Tools',
 			'summary' => "Enables AI coding agents to access ProcessWire's API and provides a database migration system.",
 			'icon' => 'at',
-			'version' => 9,
+			'version' => 10,
 			'author' => 'Ryan Cramer and Claude (Anthropic)',
 			'requires' => 'ProcessWire>=3.0.255',
-			'installs' => 'ProcessAgentTools',
+			'installs' => 'ProcessAgentTools, FieldtypePageEngineer',
 			'autoload' => true,
 			'singular' => true,
 			'cli' => 'at', // cli name recognized by ProcessWire 3.0.259+
@@ -81,7 +83,8 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 		// establish config variables with defaults
 		$keys = [ 
 			'provider', 'api_key', 'model', 'endpoint', 
-			'label', 'readonly', 'additional_models' 
+			'label', 'readonly', 'additional_models',
+			'instructions', 'mem_qty',
 		];
 		foreach($keys as $key) {
 			$this->set("engineer_$key", "");
