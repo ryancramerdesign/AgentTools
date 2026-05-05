@@ -821,6 +821,9 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		foreach($messages as $message) {
 			if(!is_array($message)) continue;
 			$role = (string) ($message['role'] ?? 'user');
+			// Tool result messages use a different Responses API format (function_call_output)
+			// that is not yet implemented — skip them to avoid malformed payloads.
+			if($role === 'tool') continue;
 			$content = $message['content'] ?? '';
 			if(!is_string($content)) {
 				$content = is_scalar($content) ? (string) $content : json_encode($content);
@@ -834,13 +837,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 				]],
 			];
 		}
-		return $input ?: [[
-			'role' => 'user',
-			'content' => [[
-				'type' => 'input_text',
-				'text' => '',
-			]],
-		]];
+		return $input;
 	}
 
 	/**
