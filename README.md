@@ -98,10 +98,13 @@ I had to restore anything, just the nature of the module means that you should u
 
 ## Requirements
 
+PHP 8.0 or newer is required. 
+
 ProcessWire 3.0.255 or newer is recommended, but almost any 3.x version of ProcessWire should still work.
 If you use ProcessWire 3.0.258 or newer, the Engineer becomes smarter when working with fields,
 as ProcessWire 3.0.258 and newer include API.md files that the Engineer retrieves on demand via
 its `api_docs` tool. More API.md files covering other parts of ProcessWire are being added over time.
+The newer your ProcessWire version, the smarter this module will be.
 
 CLI-compatable AI helper of your choice in order to use the CLI tools to full effect. Examples 
 include Claude Code and OpenAI Codex, though it should work with others as well. This module

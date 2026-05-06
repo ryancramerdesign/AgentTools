@@ -1038,38 +1038,51 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	 *
 	 */
 	protected function curlPost(string $url, array $payload, array $headers, int $timeout = 120): array {
-		$ch = curl_init($url);
-		curl_setopt_array($ch, [
-			CURLOPT_POST => true,
-			CURLOPT_POSTFIELDS => json_encode($payload),
-			CURLOPT_HTTPHEADER => $headers,
-			CURLOPT_RETURNTRANSFER => true,
-			CURLOPT_TIMEOUT => $timeout,
-		]);
-		$response = curl_exec($ch);
-		$httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-		$curlError = curl_error($ch);
-		if($response === false) throw new WireException("API request failed: $curlError");
+		$retryDelays = [2, 4, 8]; // seconds to sleep between attempts on 529
+		$attempt = 0;
 
-		$data = json_decode($response, true);
-		if(!is_array($data)) throw new WireException("Invalid API response: expected JSON");
-		
-		if(self::debugMode) $this->message([
-			'url' => $url,
-			'headers' => $headers, 
-			'request' => $payload,
-			'response' => $data
-		]);
-		
-		if($httpCode >= 400) {
-			$error = $data['error']['message'] ?? $data['error'] ?? $data['message'] ?? null;
-			if($error === null) $error = trim($response) ?: 'Unknown error';
-			if(is_array($error)) $error = json_encode($error);
-			if(self::debugMode) $this->error("$httpCode: $error"); 
-			throw new WireException("API error ($httpCode): $error");
+		while(true) {
+			$ch = curl_init($url);
+			curl_setopt_array($ch, [
+				CURLOPT_POST => true,
+				CURLOPT_POSTFIELDS => json_encode($payload),
+				CURLOPT_HTTPHEADER => $headers,
+				CURLOPT_RETURNTRANSFER => true,
+				CURLOPT_TIMEOUT => $timeout,
+			]);
+			$response = curl_exec($ch);
+			$httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+			$curlError = curl_error($ch);
+			curl_close($ch);
+
+			if($response === false) throw new WireException("API request failed: $curlError");
+
+			$data = json_decode($response, true);
+			if(!is_array($data)) throw new WireException("Invalid API response: expected JSON");
+
+			if(self::debugMode) $this->message([
+				'url' => $url,
+				'headers' => $headers,
+				'request' => $payload,
+				'response' => $data
+			]);
+
+			// Retry on 529 (overloaded) with exponential backoff
+			if($httpCode === 529 && $attempt < count($retryDelays)) {
+				sleep($retryDelays[$attempt++]);
+				continue;
+			}
+
+			if($httpCode >= 400) {
+				$error = $data['error']['message'] ?? $data['error'] ?? $data['message'] ?? null;
+				if($error === null) $error = trim($response) ?: 'Unknown error';
+				if(is_array($error)) $error = json_encode($error);
+				if(self::debugMode) $this->error("$httpCode: $error");
+				throw new WireException("API error ($httpCode): $error");
+			}
+
+			return $data;
 		}
-
-		return $data;
 	}
 
 	/**

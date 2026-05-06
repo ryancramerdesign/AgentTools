@@ -1,5 +1,47 @@
 # Changelog
 
+## Version 11
+
+### Migration export/import (copy/paste between installations)
+
+Migrations can now be exported as a signed bundle string and imported on another installation
+of the same site (e.g. dev → production). The bundle is signed with HMAC-SHA256 using
+`$config->atMigrationSecret` (if set), falling back to `$config->tableSalt`, then
+`$config->userAuthSalt`. Because dev and production share the same `site/config.php`, the
+signature verifies automatically with no configuration required.
+
+**Export:**
+- Check one or more migrations in the Migrations list and click **Export checked** — appears
+  alongside Apply checked and Delete checked when any migration is checked
+- Or open any migration via **View migration** and click the **Export** button
+- Both routes show a read-only monospace textarea containing the bundle (click to select all)
+- The bundle begins with a human-readable title line so you can identify it at a glance
+
+**Import:**
+- Click **Import** on the Migrations list to open the import form
+- Paste the bundle and click **Import** — the signature is verified before any files are written
+- Already-existing migrations are skipped; new ones are saved as pending for review and apply
+- After import, redirects to the Migrations list where the imported files appear as pending
+
+**Security:** the HMAC prevents a compromised admin account from importing arbitrary PHP.
+Forging a valid bundle requires filesystem access to `site/config.php` — the same bar as
+uploading PHP files directly.
+
+**Cross-site transfers:** for different sites with different salts, set
+`$config->atMigrationSecret` to the same value on both sites.
+
+### Other changes
+
+- **Retry on 529:** `curlPost()` now retries up to 3 times with exponential backoff (2s, 4s, 8s)
+  when the API returns a 529 (overloaded) response, then surfaces the error as normal if all
+  attempts fail
+- **Apply confirmation:** the "Apply N pending migrations" button on the Migrations list now
+  shows a confirmation dialog before proceeding (the Apply button on the View migration screen
+  is unaffected)
+- **PHP 8 requirement** added to module info and README
+
+---
+
 ## Version 10
 
 ### Page Engineer (FieldtypePageEngineer)

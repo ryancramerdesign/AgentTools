@@ -264,14 +264,7 @@ class FieldtypePageEngineer extends Fieldtype implements Module {
 			$config->js('FieldtypePageEngineer', [
 				'processingText' => $this->_('Saving page and processing Engineer request…'),
 				'timeoutText' => $this->_('Please be patient, this may take a minute. If you see a server error, the Engineer is still working — reload the page before resubmitting.'),
-				'thinkingWords' => [
-					'Backwashing', 'Bargaining', 'Basting', 'Cogitating', 'Deliberating',
-					'Discombobulating', 'Expediting', 'Finagling', 'Flibbertigibbeting',
-					'Gallivanting', 'Gesticulating', 'Jawboning', 'Kibbitzing', 'Lollygagging',
-					'Meandering', 'Negotiating', 'Percolating', 'Ruminating', 'Schmeering',
-					'Schmoozing', 'Shilly-shallying', 'Skedaddling', 'Solidifying', 'Speculating',
-					'Waffling', 'Wrangling',
-				],
+				'thinkingWords' => include(__DIR__ . '/words.php')
 			]);
 		}
 

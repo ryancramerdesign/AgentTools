@@ -15,7 +15,7 @@ class ProcessAgentTools extends Process {
 		return [
 			'title' => 'Agent Tools',
 			'summary' => 'Admin interface for AgentTools migrations and AI engineer.',
-			'version' => 5,
+			'version' => 6,
 			'author' => 'Claude (Anthropic) and Ryan Cramer',
 			'icon' => 'at',
 			'requires' => 'AgentTools',
@@ -45,48 +45,7 @@ class ProcessAgentTools extends Process {
 	 * @var string[] 
 	 * 
 	 */
-	protected $thinkingWords = [
-		'Backwashing',
-		'Bargaining',
-		'Basting',
-		'Coding',
-		'Cogitating',
-		'Deliberating',
-		'Discombobulating',
-		'Expediting',
-		'Finagling',
-		'Flibbertigibbeting',
-		'Gallivanting',
-		'Gesticulating',
-		'Hemming',
-		'Jawboning',
-		'Kibbitzing',
-		'Loitering',
-		'Lollygagging',
-		'Meandering',
-		'Negotiating',
-		'Nesting',
-		'Outsourcing',
-		'Percolating',
-		'Ruminating',
-		'Schmeering',
-		'Schmoozing',
-		'Schooling',
-		'Scuttering',
-		'Sensating',
-		'Shilly-shallying',
-		'Shrimping',
-		'Shucking',
-		'Siphoning',
-		'Sizzling',
-		'Skedaddling',
-		'Skimming',
-		'Snagging',
-		'Solidifying',
-		'Speculating',
-		'Waffling',
-		'Wrangling',
-	];
+	protected $thinkingWords = [];
 	
 	/**
 	 * Require superuser for all actions
@@ -100,6 +59,7 @@ class ProcessAgentTools extends Process {
 			$this->at = $this->wire()->modules->getInstall('AgentTools');
 			if(!$this->at) throw new WireException('This module requires the AgentTools module');
 		}
+		$this->thinkingWords = include(__DIR__ . '/FieldtypePageEngineer/words.php'); 
 		parent::init();
 	}
 	
@@ -113,20 +73,23 @@ class ProcessAgentTools extends Process {
 	protected function label($name) {
 		switch($name) {
 			case 'agent-tools': return $this->_('Agent Tools');
-			case 'agents': return $this->_('Agents'); 
-			case 'applied': return $this->ukLabel($this->_('Applied'), 'success'); 
+			case 'agents': return $this->_('Agents');
+			case 'applied': return $this->ukLabel($this->_('Applied'), 'success');
 			case 'ask-create-migration': return $this->_('Ask the engineer to create a migration');
 			case 'back': return $this->_('Back');
-			case 'date-time': return $this->_('Date/time'); 
+			case 'date-time': return $this->_('Date/time');
 			case 'engineer': return $this->_('Engineer');
+			case 'export': return $this->_('Export');
+			case 'export-checked': return $this->_('Export checked');
 			case 'failed': return $this->ukLabel($this->_('Failed'), 'danger');
-			case 'file': return $this->_('File'); 
+			case 'file': return $this->_('File');
+			case 'import': return $this->_('Import');
 			case 'migration': return $this->_('Migration');
 			case 'migrations': return $this->_('Migrations');
-			case 'pending': return $this->ukLabel($this->_('Pending')); 
-			case 'status': return $this->_('Status'); 
+			case 'pending': return $this->ukLabel($this->_('Pending'));
+			case 'status': return $this->_('Status');
 		}
-		return $name;	
+		return $name;
 	}
 	
 	/**
@@ -145,7 +108,9 @@ class ProcessAgentTools extends Process {
 			case 'back': return 'arrow-left';
 			case 'delete': return 'trash-o';
 			case 'engineer': return 'commenting';
+			case 'export': return 'share-square-o';
 			case 'failed': return 'times';
+			case 'import': return 'download';
 			case 'migrations': return 'database';
 		}
 		return 'question-circle';
@@ -260,6 +225,10 @@ class ProcessAgentTools extends Process {
 
 		if($input->post('submit_apply_checked')) {
 			return $this->processApplyChecked();
+		}
+
+		if($input->post('submit_export_checked')) {
+			return $this->processExportChecked();
 		}
 
 		if($input->post('submit_delete_checked')) {
@@ -782,6 +751,15 @@ class ProcessAgentTools extends Process {
 			$session->CSRF()->validate();
 			return $this->runMigrationFiles([$file], '?name=' . urlencode($name));
 		}
+
+		// Handle export POST
+		if($input->post('submit_export')) {
+			$session->CSRF()->validate();
+			$this->breadcrumb('../migrations/', $this->label('migrations'));
+			$this->breadcrumb('?name=' . urlencode($name), $title);
+			$this->headline($this->label('export'));
+			return $this->renderBundleOutput([$file], '?name=' . urlencode($name));
+		}
 		
 		$status = $this->label($applied ? 'applied' : 'pending');
 	
@@ -823,15 +801,22 @@ class ProcessAgentTools extends Process {
 		$f->attr('name', 'submit_apply');
 		$f->showInHeader(true);
 		$f->icon = $applied ? 'refresh' : $this->iconName('apply');
-		$f->val($applied ? 
-			$this->_('Re-apply migration') : 
+		$f->val($applied ?
+			$this->_('Re-apply migration') :
 			$this->_('Apply migration')
 		);
 		$form->add($f);
 
+		$f = $form->InputfieldSubmit;
+		$f->attr('name', 'submit_export');
+		$f->icon = $this->iconName('export');
+		$f->val($this->label('export'));
+		$f->setSecondary();
+		$form->add($f);
+
 		return
 			$table->render() .
-			$form->render();	
+			$form->render();
 	}
 	
 	/**
@@ -893,6 +878,7 @@ class ProcessAgentTools extends Process {
 
 		// Pass confirmation message and overlay text to JS
 		$this->wire()->config->js('AgentTools', [
+			'confirmApply' => $this->_('Apply all pending migrations to this site? This cannot be undone.'),
 			'confirmDelete' => $this->_('Are you sure you want to delete the checked migration files? This cannot be undone.'),
 			'processingText' => $this->_('Still processing… this may take up to 30 seconds.'),
 			'timeoutText' => $this->_('If you see a server error, reload the page before resubmitting — your changes may already have been applied.'),
@@ -912,7 +898,8 @@ class ProcessAgentTools extends Process {
 			/** @var InputfieldSubmit $f */
 			$f = $modules->get('InputfieldSubmit');
 			$f->attr('name', 'submit_apply');
-			$f->icon = $this->iconName('apply'); 
+			$f->attr('data-confirm', '1');
+			$f->icon = $this->iconName('apply');
 			$f->val($label);
 			$form->add($f);
 		}
@@ -923,6 +910,16 @@ class ProcessAgentTools extends Process {
 		$f->attr('id', 'submit_apply_checked');
 		$f->icon = 'check';
 		$f->val($this->_('Apply checked'));
+		$f->setSecondary();
+		$f->attr('hidden', 'hidden');
+		$form->add($f);
+
+		/** @var InputfieldSubmit $f */
+		$f = $modules->get('InputfieldSubmit');
+		$f->attr('name', 'submit_export_checked');
+		$f->attr('id', 'submit_export_checked');
+		$f->icon = $this->iconName('export');
+		$f->val($this->label('export-checked'));
 		$f->setSecondary();
 		$f->attr('hidden', 'hidden');
 		$form->add($f);
@@ -942,6 +939,15 @@ class ProcessAgentTools extends Process {
 		$btn->href = '../engineer/?migration=1';
 		$btn->icon = $this->iconName('engineer');
 		$btn->val($this->_('New migration'));
+		$btn->showInHeader(true);
+		$btn->setSecondary();
+		$form->add($btn);
+
+		/** @var InputfieldButton $btn */
+		$btn = $modules->get('InputfieldButton');
+		$btn->href = $this->wire()->page->url . 'import-migration/';
+		$btn->icon = $this->iconName('import');
+		$btn->val($this->label('import'));
 		$btn->setSecondary();
 		$form->add($btn);
 
@@ -1147,10 +1153,180 @@ class ProcessAgentTools extends Process {
 	}
 	
 	/**
-	 * Select random thinking words 
-	 * 
+	 * Export checked migrations as a signed bundle and render a copyable textarea
+	 *
 	 * @return string
-	 * 
+	 *
+	 */
+	protected function processExportChecked(): string {
+		$this->headline($this->label('export'));
+		$this->breadcrumb('../migrations/', $this->label('migrations'));
+
+		$checked = $this->getCheckedMigrations();
+		if(!$checked) {
+			$session = $this->wire()->session;
+			$session->warning($this->_('No migrations were checked.'));
+			$session->location('./');
+		}
+
+		sort($checked); // chronological order by timestamp prefix
+		return $this->renderBundleOutput($checked, './');
+	}
+
+	/**
+	 * Render the export bundle textarea and back button
+	 *
+	 * @param array $files Full file paths to export
+	 * @param string $backUrl URL for the back button
+	 * @return string
+	 *
+	 */
+	protected function renderBundleOutput(array $files, string $backUrl): string {
+		$bundle = $this->at->migrations->exportBundle($files);
+		$count = count($files);
+
+		$this->message(sprintf(
+			$this->_n('%d migration exported.', '%d migrations exported.', $count),
+			$count
+		));
+
+		$modules = $this->wire()->modules;
+		$form = $modules->get('InputfieldForm');
+
+		$f = $form->InputfieldTextarea;
+		$f->label = $this->_('Migration bundle');
+		$f->description = $this->_('Copy this bundle and paste it into the Import form on the destination installation.');
+		$f->val($bundle);
+		$f->attr('rows', 8);
+		$f->attr('readonly', 'readonly');
+		$f->attr('onclick', 'this.select()');
+		$f->attr('style', 'font-family: monospace; font-size: 0.8em; word-break: break-all;');
+		$form->add($f);
+
+		$btn = $modules->get('InputfieldButton');
+		$btn->href = $backUrl;
+		$btn->icon = $this->iconName('back');
+		$btn->val($this->label('back'));
+		$btn->setSecondary();
+		$form->add($btn);
+
+		return $form->render();
+	}
+
+	/**
+	 * Import migration bundle: show form (GET) or process paste (POST)
+	 *
+	 * @return string
+	 *
+	 */
+	public function ___executeImportMigration(): string {
+		$this->headline($this->label('import'));
+		$this->breadcrumb('../migrations/', $this->label('migrations'));
+
+		$input = $this->wire()->input;
+
+		if($input->requestMethod('post')) {
+			$this->wire()->session->CSRF()->validate();
+			if($input->post('submit_import')) {
+				return $this->processImportMigration();
+			}
+		}
+
+		return $this->renderImportForm();
+	}
+
+	/**
+	 * Render the import bundle form
+	 *
+	 * @param string $prefill Optional bundle text to pre-fill the textarea
+	 * @return string
+	 *
+	 */
+	protected function renderImportForm(string $prefill = ''): string {
+		$modules = $this->wire()->modules;
+
+		/** @var InputfieldForm $form */
+		$form = $modules->get('InputfieldForm');
+		$form->attr('method', 'post');
+
+		$f = $form->InputfieldTextarea;
+		$f->attr('name', 'migration_bundle');
+		$f->label = $this->_('Migration bundle');
+		$f->description = $this->_('Paste the migration bundle copied from the source installation.');
+		$f->attr('rows', 8);
+		$f->attr('style', 'font-family: monospace; font-size: 0.8em;');
+		$f->val($prefill);
+		$form->add($f);
+
+		$f = $form->InputfieldSubmit;
+		$f->attr('name', 'submit_import');
+		$f->icon = $this->iconName('import');
+		$f->val($this->label('import'));
+		$form->add($f);
+
+		return $form->render();
+	}
+
+	/**
+	 * Process a pasted migration bundle: verify, save files, redirect to migrations list
+	 *
+	 * @return string
+	 *
+	 */
+	protected function processImportMigration(): string {
+		$bundle = trim((string) $this->wire()->input->post('migration_bundle'));
+
+		if(!strlen($bundle)) {
+			$this->error($this->_('Please paste a migration bundle.'));
+			return $this->renderImportForm();
+		}
+
+		$result = $this->at->migrations->importBundle($bundle);
+
+		if($result['error']) {
+			$this->error($result['error']);
+			return $this->renderImportForm($bundle);
+		}
+
+		$migrationsDir = $this->at->getFilesPath('migrations');
+		if(!is_dir($migrationsDir)) $this->wire()->files->mkdir($migrationsDir);
+
+		$saved = [];
+		$skipped = [];
+
+		foreach($result['migrations'] as $item) {
+			$file = $migrationsDir . $item['filename'];
+			if(is_file($file)) {
+				$skipped[] = $item['filename'];
+				continue;
+			}
+			file_put_contents($file, $item['content']);
+			$saved[] = $item['filename'];
+		}
+
+		$session = $this->wire()->session;
+
+		if(empty($saved) && !empty($skipped)) {
+			$session->warning($this->_('All migrations in the bundle already exist — nothing new was imported.'));
+			$session->location('../migrations/');
+		}
+
+		foreach($saved as $name) {
+			$session->message(sprintf($this->_('Imported: %s'), $name));
+		}
+		foreach($skipped as $name) {
+			$session->warning(sprintf($this->_('Already exists (skipped): %s'), $name));
+		}
+
+		$session->location('../migrations/');
+		return ''; // unreachable; session->location() exits
+	}
+
+	/**
+	 * Select random thinking words
+	 *
+	 * @return string
+	 *
 	 */
 	protected function renderThinkingWords() {
 		$qty = count($this->thinkingWords);

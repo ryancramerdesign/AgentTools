@@ -24,7 +24,19 @@ $(function() {
 	// Migrations: show/hide checked-action buttons based on checkbox state
 	$(document).on('change', '.migration-checkbox', function() {
 		var anyChecked = $('.migration-checkbox:checked').length > 0;
-		$('#submit_apply_checked, #submit_delete_checked').prop('hidden', !anyChecked);
+		$('#submit_apply_checked, #submit_export_checked, #submit_delete_checked').prop('hidden', !anyChecked);
+	});
+
+	// Migrations: confirm before applying all pending migrations (list page only)
+	$(document).on('click', '[name="submit_apply"][data-confirm]', function(e) {
+		e.preventDefault();
+		var $btn = $(this);
+		var $form = $btn.closest('form');
+		var message = ProcessWire.config.AgentTools ? ProcessWire.config.AgentTools.confirmApply : 'Apply all pending migrations?';
+		ProcessWire.confirm(message, function() {
+			$('<input>').attr({ type: 'hidden', name: $btn.attr('name'), value: $btn.val() }).appendTo($form);
+			$form.submit();
+		}, function() {});
 	});
 
 	// Migrations: confirm before deleting checked migrations
