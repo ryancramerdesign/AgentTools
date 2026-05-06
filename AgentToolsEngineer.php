@@ -380,12 +380,17 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	 */
 	protected function buildSystemPrompt(bool $readOnly = false): string {
 
-		$siteUrl = rtrim($this->wire()->config->urls->httpRoot, '/');
+		$config = $this->wire()->config;
+		$siteUrl = rtrim($config->urls->httpRoot, '/');
+		$pwVersion = $config->version;
+		$timezone = $config->timezone;
 		$apiVars = $this->getEvalPhpVars();
 
 		$prompt =
 			"You are an expert ProcessWire CMS engineer with complete knowledge of the ProcessWire API " .
 			"and full access to this specific installation.\n\n" .
+
+			"Site: $siteUrl | ProcessWire $pwVersion | Timezone: $timezone\n\n" .
 
 			"For informational requests, respond with clear concise text. Use the eval_php tool when " .
 			"you need to query live site data.\n\n" .
@@ -393,6 +398,10 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			"For requests that make changes to the site (creating or modifying fields, templates, pages, " .
 			"content, etc.), always use the save_migration tool rather than applying changes directly via " .
 			"eval_php. This allows the user to review changes before they are applied. " .
+			"Migrations can contain any PHP including file operations — use save_migration to create or " .
+			"modify template files, config files, or other site assets that would otherwise require manual creation. " .
+			"When writing files in a migration, prefer \$files->filePutContents(\$path, \$content) over " .
+			"file_put_contents() as it respects the site's configured file permissions. " .
 			"Before writing a migration, use eval_php to verify current state (e.g. whether a field or " .
 			"template already exists) so the migration is accurate. " .
 			"Combine all changes for a single request into one migration file. Do not create multiple " .
@@ -401,12 +410,19 @@ class AgentToolsEngineer extends AgentToolsHelper {
 
 			"ProcessWire API variables available to eval_php: $apiVars.\n\n" .
 
-			"Use the site_info tool to retrieve information about this site's pages or fields and templates. " .
-			"Call with type='pages' for a map of the site's page tree, or type='schema' for the site's " .
-			"fields and templates structure. Fetch only what the request requires.\n\n" .
+			"Use the site_info tool to retrieve information about this site. " .
+			"Call with type='pages' for a map of the site's page tree, type='schema' for the site's " .
+			"fields and templates structure, or type='modules' for a list of all installed modules " .
+			"(useful for knowing whether modules like FormBuilder, ProCache, or specific Fieldtypes are available). " .
+			"Fetch only what the request requires.\n\n" .
+
+			"Use the read_file tool to read the contents of any file within this ProcessWire installation, " .
+			"such as template files (site/templates/home.php), _init.php, or module files. " .
+			"Useful for inspecting existing implementations before making changes or additions.\n\n" .
 
 			"Use the api_docs tool to discover and retrieve ProcessWire API documentation when needed. " .
-			"Call with action='list' to see all available doc names, then action='get' with the doc name to read it. " .
+			"Call with action='list' to see all available doc names with brief descriptions, then " .
+			"action='get' with the doc name to read the full documentation. " .
 			"Retrieve API docs before creating or modifying fields, templates, or other items where you need " .
 			"to know available options or method signatures.\n\n" .
 
@@ -500,6 +516,26 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	 * @return array [ 'FieldtypeText' => '/path/to/API.md', ... ] sorted by name
 	 *
 	 */
+	/**
+	 * Extract a one-line description from an API.md file (first non-heading paragraph line)
+	 *
+	 * @param string $file Full path to the API.md file
+	 * @return string Description, or empty string if none found
+	 *
+	 */
+	protected function getApiDocDescription(string $file): string {
+		$pastHeading = false;
+		foreach(explode("\n", (string) file_get_contents($file)) as $line) {
+			$line = trim($line);
+			if(!$pastHeading) {
+				if(strpos($line, '# ') === 0) $pastHeading = true;
+				continue;
+			}
+			if(strlen($line) && $line[0] !== '#' && $line[0] !== '-') return $line;
+		}
+		return '';
+	}
+
 	public function listApiDocs(): array {
 		$docs = [];
 		$config = $this->wire()->config;
@@ -576,24 +612,41 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		];
 
 		$siteInfoDesc =
-			"Retrieve information about this ProcessWire site. Use type='pages' for a map of the page tree, " .
-			"or type='schema' for the site's fields and templates structure.";
+			"Retrieve information about this ProcessWire site. Use type='pages' for the page tree, " .
+			"type='schema' for fields and templates structure, or type='modules' for a list of all " .
+			"installed modules.";
 
 		$siteInfoParams = [
 			'type' => 'object',
 			'properties' => [
 				'type' => [
 					'type' => 'string',
-					'enum' => ['pages', 'schema'],
-					'description' => "Use 'pages' for the site page tree, 'schema' for fields and templates",
+					'enum' => ['pages', 'schema', 'modules'],
+					'description' => "Use 'pages' for the site page tree, 'schema' for fields and templates, 'modules' for installed modules",
 				],
 			],
 			'required' => ['type'],
 		];
 
+		$readFileDesc =
+			"Read the contents of a file within this ProcessWire installation. " .
+			"Accepts paths relative to the site root (e.g. 'site/templates/home.php') or absolute paths. " .
+			"Files larger than 100KB cannot be read directly — use eval_php for those.";
+
+		$readFileParams = [
+			'type' => 'object',
+			'properties' => [
+				'path' => [
+					'type' => 'string',
+					'description' => "File path relative to the ProcessWire root (e.g. 'site/templates/home.php') or absolute",
+				],
+			],
+			'required' => ['path'],
+		];
+
 		$apiDocsDesc =
-			"Access ProcessWire API documentation. Use action='list' to get available doc names, " .
-			"then action='get' with the doc name to retrieve its contents.";
+			"Access ProcessWire API documentation. Use action='list' to get available doc names with " .
+			"brief descriptions, then action='get' with the doc name to retrieve its full contents.";
 
 		$apiDocsParams = [
 			'type' => 'object',
@@ -616,6 +669,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 				['name' => 'eval_php', 'description' => $evalDesc, 'input_schema' => $evalParams],
 				['name' => 'save_migration', 'description' => $migrationDesc, 'input_schema' => $migrationParams],
 				['name' => 'site_info', 'description' => $siteInfoDesc, 'input_schema' => $siteInfoParams],
+				['name' => 'read_file', 'description' => $readFileDesc, 'input_schema' => $readFileParams],
 				['name' => 'api_docs', 'description' => $apiDocsDesc, 'input_schema' => $apiDocsParams],
 			];
 		} else {
@@ -623,6 +677,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 				['type' => 'function', 'function' => ['name' => 'eval_php', 'description' => $evalDesc, 'parameters' => $evalParams]],
 				['type' => 'function', 'function' => ['name' => 'save_migration', 'description' => $migrationDesc, 'parameters' => $migrationParams]],
 				['type' => 'function', 'function' => ['name' => 'site_info', 'description' => $siteInfoDesc, 'parameters' => $siteInfoParams]],
+				['type' => 'function', 'function' => ['name' => 'read_file', 'description' => $readFileDesc, 'parameters' => $readFileParams]],
 				['type' => 'function', 'function' => ['name' => 'api_docs', 'description' => $apiDocsDesc, 'parameters' => $apiDocsParams]],
 			];
 		}
@@ -857,24 +912,45 @@ class AgentToolsEngineer extends AgentToolsHelper {
 				(string) ($input['description'] ?? 'migration'),
 				(string) ($input['summary'] ?? '')
 			);
+		} else if($name === 'read_file') {
+			$path = (string) ($input['path'] ?? '');
+			$root = $this->wire()->config->paths->root;
+			// Resolve relative paths from site root
+			if(strpos($path, '/') !== 0) $path = $root . $path;
+			// Block path traversal — the only meaningful attack vector here
+			if(strpos($path, '..') !== false) return "Access denied: path traversal not allowed.";
+			if(!is_file($path)) return "File not found: $path";
+			$size = filesize($path);
+			if($size > 102400) return "File too large ($size bytes). Use eval_php to read specific portions.";
+			return (string) file_get_contents($path);
 		} else if($name === 'site_info') {
 			$type = (string) ($input['type'] ?? '');
 			$filesPath = $this->at->getFilesPath();
-			if($type === 'pages') {
+			if($type === 'modules') {
+				$stmt = $this->wire()->database->query("SELECT class FROM modules ORDER BY class");
+				$names = $stmt->fetchAll(\PDO::FETCH_COLUMN);
+				return $names ? implode("\n", $names) : 'No modules found.';
+			} else if($type === 'pages') {
 				$file = $filesPath . 'site-map.json';
 				return is_file($file) ? (string) file_get_contents($file) : 'Site map not found. Run --at-sitemap-generate to generate it.';
 			} else if($type === 'schema') {
 				$file = $filesPath . 'site-map-schema.json';
 				return is_file($file) ? (string) file_get_contents($file) : 'Schema not found. Run --at-sitemap-generate-schema to generate it.';
 			}
-			return "Invalid type '$type'. Use 'pages' or 'schema'.";
+			return "Invalid type '$type'. Use 'pages', 'schema', or 'modules'.";
 		} else if($name === 'api_docs') {
 			$action = (string) ($input['action'] ?? 'list');
 			if($action === 'get') {
 				return $this->getApiDocs((string) ($input['name'] ?? ''));
 			}
-			$names = array_keys($this->listApiDocs());
-			return $names ? implode("\n", $names) : 'No API documentation files found.';
+			$docs = $this->listApiDocs();
+			if(!$docs) return 'No API documentation files found.';
+			$lines = [];
+			foreach($docs as $docName => $file) {
+				$desc = $this->getApiDocDescription($file);
+				$lines[] = $desc ? "$docName: $desc" : $docName;
+			}
+			return implode("\n", $lines);
 		}
 		return "Unknown tool: $name";
 	}
