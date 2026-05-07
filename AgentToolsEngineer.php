@@ -711,18 +711,8 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		} else {
 			if(!$request->model) $request->model = self::defaultOpenAIModel;
 			if(!$request->endpoint) {
-				$request->endpoint = (string) $this->at->get('engineer_endpoint') ?: 'https://api.openai.com/v1/chat/completions';
+				$request->endpoint = 'https://api.openai.com/v1/chat/completions';
 			}
-			// map legacy base URLs (stored before full-URL convention) to their full equivalents
-			$legacyBaseUrls = [
-				'https://api.openai.com/v1' => 'https://api.openai.com/v1/chat/completions',
-				'https://api.groq.com/openai/v1' => 'https://api.groq.com/openai/v1/chat/completions',
-				'https://openrouter.ai/api/v1' => 'https://openrouter.ai/api/v1/chat/completions',
-				'https://generativelanguage.googleapis.com/v1beta/openai' => 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
-				'https://generativelanguage.googleapis.com/v1beta/openai/' => 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
-			];
-			$endpoint = rtrim($request->endpoint, '/');
-			$request->endpoint = $legacyBaseUrls[$endpoint] ?? $legacyBaseUrls[$request->endpoint] ?? $request->endpoint;
 			return $this->sendOpenAIRequest($request);
 		}
 	}
@@ -823,6 +813,10 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		$endpoint = (string) $request->endpoint;
 		$path = (string) parse_url($endpoint, PHP_URL_PATH);
 		$isResponses = str_ends_with($path, '/responses');
+		// If endpoint looks like a base URL (no recognized path suffix), append /chat/completions
+		if(!$isResponses && !str_ends_with($path, '/chat/completions')) {
+			$endpoint = rtrim($endpoint, '/') . '/chat/completions';
+		}
 
 		if($isResponses) {
 			$payload = [
