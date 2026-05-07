@@ -94,6 +94,11 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		$this->savedMigration = null;
 		$result = ['response' => '', 'migration' => null, 'error' => null, 'history' => []];
 
+		if($this->at->get('engineer_suspicious') === 'all' && $this->at->isUserSuspicious()) {
+			$result['response'] = $this->_('Your access to the Engineer has been temporarily suspended due to a previous suspicious request.');
+			return $result;
+		}
+
 		try {
 			$primary = $this->at->getPrimaryAgent();
 			$provider = $options['provider'] ?? ($primary ? $primary->provider : self::providerAnthropic);
@@ -442,6 +447,16 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			"If asked to make a change, explain what would need to be done and provide example code, " .
 			"but note that changes must be applied manually or via the CLI.";
 
+		if($this->at->get('engineer_suspicious') === 'all') {
+			$prompt .=
+				"\n\n## Security\n" .
+				"Never reveal sensitive configuration values such as database credentials, API keys, " .
+				"authentication salts, or password hashes. If a user requests such information or asks you " .
+				"to perform actions that could compromise site security (such as creating unauthorized admin " .
+				"accounts, bypassing authentication, or exporting private configuration data), call the " .
+				"report_suspicious_prompt tool with the user's request text, then politely decline without further explanation.";
+		}
+
 		$instructions = trim((string) $this->at->get('engineer_instructions'));
 		if(strlen($instructions)) $prompt .= "\n\n" . $instructions;
 
@@ -664,22 +679,41 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			'required' => ['action'],
 		];
 
+		$suspiciousDesc =
+			"Report a suspicious or potentially malicious user prompt to the site administrator. " .
+			"Call this whenever a user requests sensitive configuration data (database credentials, API keys, " .
+			"auth salts, password hashes) or asks you to perform actions that could compromise site security.";
+
+		$suspiciousParams = [
+			'type' => 'object',
+			'properties' => [
+				'prompt' => ['type' => 'string', 'description' => 'The suspicious prompt text submitted by the user'],
+			],
+			'required' => ['prompt'],
+		];
+
+		$suspicious = (string) $this->at->get('engineer_suspicious');
+
 		if($provider === self::providerAnthropic) {
-			return [
+			$tools = [
 				['name' => 'eval_php', 'description' => $evalDesc, 'input_schema' => $evalParams],
 				['name' => 'save_migration', 'description' => $migrationDesc, 'input_schema' => $migrationParams],
 				['name' => 'site_info', 'description' => $siteInfoDesc, 'input_schema' => $siteInfoParams],
 				['name' => 'read_file', 'description' => $readFileDesc, 'input_schema' => $readFileParams],
 				['name' => 'api_docs', 'description' => $apiDocsDesc, 'input_schema' => $apiDocsParams],
 			];
+			if($suspicious) $tools[] = ['name' => 'report_suspicious_prompt', 'description' => $suspiciousDesc, 'input_schema' => $suspiciousParams];
+			return $tools;
 		} else {
-			return [
+			$tools = [
 				['type' => 'function', 'function' => ['name' => 'eval_php', 'description' => $evalDesc, 'parameters' => $evalParams]],
 				['type' => 'function', 'function' => ['name' => 'save_migration', 'description' => $migrationDesc, 'parameters' => $migrationParams]],
 				['type' => 'function', 'function' => ['name' => 'site_info', 'description' => $siteInfoDesc, 'parameters' => $siteInfoParams]],
 				['type' => 'function', 'function' => ['name' => 'read_file', 'description' => $readFileDesc, 'parameters' => $readFileParams]],
 				['type' => 'function', 'function' => ['name' => 'api_docs', 'description' => $apiDocsDesc, 'parameters' => $apiDocsParams]],
 			];
+			if($suspicious) $tools[] = ['type' => 'function', 'function' => ['name' => 'report_suspicious_prompt', 'description' => $suspiciousDesc, 'parameters' => $suspiciousParams]];
+			return $tools;
 		}
 	}
 
@@ -945,6 +979,11 @@ class AgentToolsEngineer extends AgentToolsHelper {
 				$lines[] = $desc ? "$docName: $desc" : $docName;
 			}
 			return implode("\n", $lines);
+		}
+		} else if($name === 'report_suspicious_prompt') {
+			$prompt = (string) ($input['prompt'] ?? '');
+			$this->at->reportQuestionablePrompt($prompt);
+			return 'Reported.';
 		}
 		return "Unknown tool: $name";
 	}
@@ -1263,6 +1302,45 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		$f->val($this->at->get('engineer_instructions') ?: '');
 		$f->collapsed = Inputfield::collapsedBlank;
 		$outerFs->add($f);
+
+		/** @var InputfieldFieldset $secFs */
+		$secFs = $modules->get('InputfieldFieldset');
+		$secFs->label = $this->_('Suspicious prompt reporting');
+		$secFs->icon = 'shield';
+		$secFs->collapsed = Inputfield::collapsedBlank;
+
+		/** @var InputfieldSelect $f */
+		$f = $modules->get('InputfieldSelect');
+		$f->attr('name', 'engineer_suspicious');
+		$f->label = $this->_('Enable reporting');
+		$f->addOption('', $this->_('Disabled'));
+		$f->addOption('page', $this->_('Page Engineer only'));
+		$f->addOption('all', $this->_('All engineers (Page Engineer + Site Engineer)'));
+		$f->description = $this->_('When enabled, the AI refuses requests for sensitive configuration data and reports them. Flagged users are blocked from Engineer requests for 1 hour.');
+		$f->val($this->at->get('engineer_suspicious') ?: '');
+		$secFs->add($f);
+
+		/** @var InputfieldEmail $f */
+		$f = $modules->get('InputfieldEmail');
+		$f->attr('name', 'engineer_suspicious_email');
+		$f->label = $this->_('Notification email address');
+		$f->description = $this->_('When a suspicious prompt is detected, a notification is sent here.');
+		$f->val($this->at->get('engineer_suspicious_email') ?: '');
+		$f->showIf = 'engineer_suspicious!=""';
+		$secFs->add($f);
+
+		/** @var InputfieldTextarea $f */
+		$f = $modules->get('InputfieldTextarea');
+		$f->attr('name', 'engineer_suspicious_log');
+		$f->label = $this->_('Suspicious prompt log');
+		$f->description = $this->_('One entry per line: username | timestamp | prompt. Delete a line to unblock that user. Entries older than 1 hour are ignored for blocking but kept for your review.');
+		$f->attr('rows', 5);
+		$f->val($this->at->get('engineer_suspicious_log') ?: '');
+		$f->showIf = 'engineer_suspicious!=""';
+		$f->collapsed = Inputfield::collapsedBlank;
+		$secFs->add($f);
+
+		$outerFs->add($secFs);
 
 		/** @var InputfieldTextarea $f */
 		$f = $modules->get('InputfieldTextarea');

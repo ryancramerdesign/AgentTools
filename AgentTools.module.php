@@ -81,10 +81,11 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 	public function __construct() {
 		parent::__construct();
 		// establish config variables with defaults
-		$keys = [ 
-			'provider', 'api_key', 'model', 'endpoint', 
+		$keys = [
+			'provider', 'api_key', 'model', 'endpoint',
 			'label', 'readonly', 'additional_models',
 			'instructions', 'mem_qty',
+			'suspicious', 'suspicious_email', 'suspicious_log',
 		];
 		foreach($keys as $key) {
 			$this->set("engineer_$key", "");
@@ -109,11 +110,13 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 	public function ready() {
 		if(php_sapi_name() === 'cli') {
 			$argv = $_SERVER['argv'];
-			$prefix = '--' . self::name . '-';
-			$command = empty($argv[1]) ? '' : $argv[1];
-			if(strpos($command, $prefix) === 0 || in_array($command, $this->helpCommands)) {
-				$atAction = str_replace($prefix, '', $command);
-				$this->cliReady($atAction);
+			if(count($argv) > 1) {
+				$prefix = '--' . self::name . '-';
+				$command = empty($argv[1]) ? '' : $argv[1];
+				if(strpos($command, $prefix) === 0 || in_array($command, $this->helpCommands)) {
+					$atAction = str_replace($prefix, '', $command);
+					$this->cliReady($atAction);
+				}
 			}
 		}
 		$at = $this;
@@ -381,6 +384,66 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 		);
 	}
 	
+	/**
+	 * Report a questionable prompt submitted by the current user
+	 *
+	 * Appends an entry to the engineer_suspicious_log module config, saves it,
+	 * and emails the configured engineer_suspicious_email address (if set).
+	 * The current user will be blocked from Engineer requests for 1 hour.
+	 *
+	 * @param string $prompt The suspicious prompt text
+	 *
+	 */
+	public function reportQuestionablePrompt(string $prompt): void {
+		$user = $this->wire()->user;
+		$prompt = str_replace(["\n", "|"], ' ', $prompt);
+		if(mb_strlen($prompt) > 200) $prompt = mb_substr($prompt, 0, 200) . '…';
+		$timestamp = date('Y-m-d\TH:i:s');
+		$line = "{$user->name} | $timestamp | $prompt";
+		$log = trim((string) $this->get('engineer_suspicious_log'));
+		$log = $log ? "$log\n$line" : $line;
+		$this->wire()->modules->saveConfig($this, ['engineer_suspicious_log' => $log]);
+		$email = trim((string) $this->get('engineer_suspicious_email'));
+		if($email) {
+			$config = $this->wire()->config;
+			$mail = wireMail();
+			$mail->to($email);
+			$mail->subject("Suspicious AI prompt on {$config->httpHost}");
+			$mail->body(
+				"User '{$user->name}' submitted a suspicious prompt:\n\n" .
+				"$prompt\n\n" .
+				"Time: $timestamp\n" .
+				"Site: " . rtrim($config->urls->httpRoot, '/')
+			);
+			$mail->send();
+		}
+	}
+
+	/**
+	 * Is the given user currently flagged as suspicious?
+	 *
+	 * Returns true if the user has an entry in engineer_suspicious_log dated
+	 * within the last hour. Expired entries are ignored but not removed.
+	 *
+	 * @param User|null $user User to check, or null for the current user
+	 * @return bool
+	 *
+	 */
+	public function isUserSuspicious(?User $user = null): bool {
+		if($user === null) $user = $this->wire()->user;
+		$log = trim((string) $this->get('engineer_suspicious_log'));
+		if(!$log) return false;
+		$oneHourAgo = time() - 3600;
+		foreach(explode("\n", $log) as $line) {
+			$parts = explode(' | ', $line, 3);
+			if(count($parts) < 2) continue;
+			if(trim($parts[0]) !== $user->name) continue;
+			$ts = strtotime(trim($parts[1]));
+			if($ts && $ts > $oneHourAgo) return true;
+		}
+		return false;
+	}
+
 	/**
 	 * Get primary agent
 	 *
