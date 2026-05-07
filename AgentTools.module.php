@@ -402,7 +402,8 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 		$line = "{$user->name} | $timestamp | $prompt";
 		$log = trim((string) $this->get('engineer_suspicious_log'));
 		$log = $log ? "$log\n$line" : $line;
-		$this->wire()->modules->saveConfig($this, ['engineer_suspicious_log' => $log]);
+		$this->set('engineer_suspicious_log', $log);
+		$this->wire()->modules->saveConfig($this, 'engineer_suspicious_log', $log);
 		$email = trim((string) $this->get('engineer_suspicious_email'));
 		if($email) {
 			$config = $this->wire()->config;
