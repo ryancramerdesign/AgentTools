@@ -210,6 +210,17 @@ class FieldtypePageEngineer extends Fieldtype implements Module {
 		$hasLastEdit = $lastItem && $lastItem->isAgent && !empty((array) $lastItem->get('backupVersions'));
 
 		$at = $this->wire('at'); /** @var AgentTools $at */
+		
+		$suspicious = (string) $at->get('engineer_suspicious');
+		if($suspicious && $at->isUserSuspicious()) {
+			$f->attr('disabled', 'disabled');
+			$f->attr('placeholder', $this->_('Temporarily disabled'));
+			$f->collapsed = Inputfield::collapsedYes;
+			$f->icon = 'ban';
+			$f->themeColor = 'warning';
+			return;
+		}
+		
 		$inputs = [];
 
 		$agents = $at->getAgents();

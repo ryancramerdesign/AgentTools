@@ -1212,6 +1212,25 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	public function getConfigInputfields(InputfieldWrapper $inputfields): void {
 		$modules = $this->wire()->modules;
 		$datalists = include(__DIR__ . '/datalists.php');
+	
+		if(!$this->at->engineer_model) {
+			// populate to primary agent fields, useful after an import
+			/** @var AgentToolsAgent $agent */
+			$agent = $this->at->getAgents()->first();
+			if($agent) {
+				$keys = [
+					'api_key' => 'apiKey',
+					'model' => 'model',
+					'label' => 'label', 
+					'endpoint' => 'endpointUrl', 
+				];
+				foreach($keys as $moduleKey => $agentKey) {
+					$moduleKey = 'engineer_' . $moduleKey;
+					$moduleValue = $this->at->get($moduleKey);
+					if(empty($moduleValue)) $this->at->set($moduleKey, $agent->get($agentKey)); 
+				}
+			}
+		}
 		
 		/** @var InputfieldFieldset $outerFs */
 		$outerFs = $modules->get('InputfieldFieldset');
