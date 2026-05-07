@@ -1,5 +1,55 @@
 # Changelog
 
+## Version 12
+
+### Suspicious prompt reporting (tattletale feature)
+
+Both the Site Engineer and Page Engineer can now detect and report suspicious or potentially
+malicious prompts to the site administrator.
+
+**Configuration** — in the Engineer section of module settings, a new *Suspicious prompt
+reporting* fieldset provides three settings:
+
+- **Enable reporting** — *Disabled*, *Page Engineer only*, or *All engineers* (Site Engineer +
+  Page Engineer)
+- **Notification email address** — where to send alert emails when a suspicious prompt is detected
+- **Suspicious prompt log** — one entry per line: `username | timestamp | prompt`; delete a line
+  to unblock that user; entries older than 1 hour are ignored for blocking but kept for review
+
+**How it works** — when enabled, a `report_suspicious_prompt` tool is added to the AI's tool
+list and a Security section is appended to the system prompt. The AI is instructed to call the
+tool (silently, without explaining to the user which rule was triggered) and then politely decline
+whenever a user requests:
+
+- Sensitive config values (database credentials, API keys, authentication salts, password hashes)
+- Unauthorized admin account creation or authentication bypass
+- Export or exfiltration of private configuration data
+- Writes to sensitive files (e.g. `site/config.php`, `.htaccess`, or paths outside the site root)
+- Execution of obfuscated or encoded code (e.g. base64-encoded `eval()` payloads)
+- Outbound HTTP requests that could exfiltrate site data
+- Instruction-override or jailbreak attempts ("ignore your previous instructions", etc.)
+
+Calling the tool logs the entry, emails the admin, and blocks the user from making further
+Engineer requests for 1 hour. In the Page Engineer, the field collapses with a ban icon and
+warning color while the user is suspended. In the Site Engineer, the page shows an error notice
+and returns early before rendering the form.
+
+**API** — two new methods on `$at`:
+
+- `$at->reportQuestionablePrompt(string $prompt)` — log, email, and block the current user
+- `$at->isUserSuspicious(?User $user = null): bool` — check whether a user is currently blocked
+
+### OpenAI-compatible endpoint fix
+
+Providers configured with a base URL (e.g. `https://api.z.ai/api/paas/v4`) rather than a full
+endpoint URL (ending in `/chat/completions`) now work correctly. `sendOpenAIRequest()` detects
+when the endpoint path lacks a recognized suffix and appends `/chat/completions` automatically.
+This restores compatibility with any provider affected by the Responses API branching added in
+v11 (PR #8), which changed the endpoint handling and inadvertently broke base-URL configurations.
+The now-redundant `legacyBaseUrls` map has been removed.
+
+---
+
 ## Version 11
 
 ### Migration export/import (copy/paste between installations)
