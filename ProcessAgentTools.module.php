@@ -247,8 +247,13 @@ class ProcessAgentTools extends Process {
 	public function ___executeEngineer() {
 		$input = $this->wire()->input;
 		$session = $this->wire()->session;
-		
+
 		$this->headline($this->label('engineer'));
+
+		if($this->at->get('engineer_suspicious') === 'all' && $this->at->isUserSuspicious()) {
+			$this->error($this->_('Engineer access is temporarily suspended due to a previous suspicious request.'));
+			return '';
+		}
 
 		if($input->post('submit_engineer')) {
 			$session->CSRF()->validate();
