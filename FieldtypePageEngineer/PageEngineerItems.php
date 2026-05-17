@@ -36,11 +36,13 @@ class PageEngineerItems extends WireArray {
 	public function setJson(string $str) {
 		if(strpos($str, '[') !== 0 && strpos($str, '{') !== 0) return;
 		$value = json_decode($str, true);
-		if($value === false) {
-			$this->error("Cannot decode JSON: $str");
+		if(json_last_error() !== JSON_ERROR_NONE) {
+			$this->error("Cannot decode JSON: " . json_last_error_msg());
 			return;
 		}
+		if(!is_array($value)) return;
 		foreach($value as $v) {
+			if(!is_array($v)) continue;
 			$item = $this->newItem();
 			$this->wire($item);
 			$item->setArray($v);

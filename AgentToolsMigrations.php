@@ -32,6 +32,7 @@ class AgentToolsMigrations extends AgentToolsHelper {
 			echo $this->at->renderHelp($this->cliHelp(), 'Migrations usage');
 			return true;
 		}
+		if(!in_array($atAction, ['apply', 'list', 'test'], true)) return null;
 		$at = $this->at;
 		$fuel = $this->wire()->fuel->getArray();
 		extract($fuel);
@@ -47,7 +48,8 @@ class AgentToolsMigrations extends AgentToolsHelper {
 	 *
 	 */
 	public function getName($file) {
-		[, $name] = explode('_', basename($file, '.php'), 2);
+		$parts = explode('_', basename($file, '.php'), 2);
+		$name = $parts[1] ?? $parts[0];
 		return $name;
 	}
 
@@ -118,6 +120,36 @@ class AgentToolsMigrations extends AgentToolsHelper {
 	}
 
 	/**
+	 * Acquire the migration apply lock
+	 *
+	 * The lock file may remain on disk after use; the OS releases the lock when
+	 * the process closes the file handle.
+	 *
+	 * @return resource|false
+	 *
+	 */
+	public function lockApply() {
+		$lockFile = $this->at->getFilesPath('migrations') . '.apply.lock';
+		$fp = fopen($lockFile, 'c');
+		if($fp === false) return false;
+		if(flock($fp, LOCK_EX | LOCK_NB)) return $fp;
+		fclose($fp);
+		return false;
+	}
+
+	/**
+	 * Release the migration apply lock
+	 *
+	 * @param resource|false|null $fp
+	 *
+	 */
+	public function unlockApply($fp): void {
+		if(!is_resource($fp)) return;
+		flock($fp, LOCK_UN);
+		fclose($fp);
+	}
+
+	/**
 	 * Extract ISO-8601 datetime string from migration filename
 	 *
 	 * @param string $file Full path or basename of migration file
@@ -140,7 +172,8 @@ class AgentToolsMigrations extends AgentToolsHelper {
 	 * 
 	 */
 	public function getTitle(string $file): string {
-		[, $title] = explode('_', basename($file, '.php'), 2);
+		$parts = explode('_', basename($file, '.php'), 2);
+		$title = $parts[1] ?? $parts[0];
 		$title = str_replace('_', ' ', $title);
 		return ucfirst($title);
 	}

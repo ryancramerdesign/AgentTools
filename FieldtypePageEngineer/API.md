@@ -66,7 +66,7 @@ $field->instructions = 'Help the user edit content for this product page.';
 // Requires the PagesVersions module to be installed.
 $field->backup = true;
 
-// Restrict which fields the agent is allowed to edit (default: empty = all fields)
+// Preferred fields to include in the AI instructions (default: empty = no preference)
 // Use field names, not IDs.
 $field->onlyFields = ['title', 'body', 'summary'];
 
@@ -99,7 +99,9 @@ These constants are defined on `PageEngineerField` and used for the `scope` sett
   `PageEngineerItems` object which you can iterate or render as markup.
 - The field is designed for use in the page editor. The agent runs after the page is saved
   and may take up to 30 seconds. A processing indicator appears in the browser after 10 seconds.
-- The `onlyFields` array uses field names (strings), not database IDs.
+- The `onlyFields` array uses field names (strings), not database IDs. These are advisory
+  preferred edit targets in the AI instructions, not a security boundary.
 - If `backup` is true and PagesVersions is not installed, the backup step is silently skipped.
+- Backups apply to the current page only; child-page edits are not preemptively backed up.
 - Multiple Page Engineer fields can be added to the same template with different scope or
   instruction settings.

@@ -23,9 +23,9 @@ class AgentToolsAgent extends WireData {
 	
 	/**
 	 * Construct
-	 * 
+	 *
 	 * @param string|array|null $data Optional array or "|" separated string of agent data
-	 * 
+	 *
 	 */
 	public function __construct($data = null) {
 		parent::__construct();
@@ -48,23 +48,20 @@ class AgentToolsAgent extends WireData {
 	
 	/**
 	 * Set string of agent data
-	 * 
-	 * @param string $line String in format: "model | api-key | endpoint-url | label"
+	 *
+	 * @param string $line String in format: "model | api-key | endpoint-url | label" or "provider | model | api-key | endpoint-url | label"
 	 * @return bool
 	 * 
 	 */
 	public function setString($line) {
 		if(strpos($line, '|') === false) return false;
 		$line = trim($line);
-		if($line === 'anthropic' || $line === 'openai') {
-			// provider | model | api-key | endpoint-url | label
-			[$provider, $line] = explode('|', $line, 2);
-			parent::set('provider', trim($provider));
-		} else {
-			// model | api-key | endpoint-url | label
-		}
 		$parts = explode('|', $line); 
 		foreach($parts as $key => $part) $parts[$key] = trim($part);
+		$first = $parts[0] ?? '';
+		if($first === 'anthropic' || $first === 'openai') {
+			parent::set('provider', array_shift($parts));
+		}
 		$this->model = array_shift($parts);
 		$this->apiKey = array_shift($parts);
 		if(count($parts)) $this->endpointUrl = array_shift($parts);
@@ -123,6 +120,10 @@ class AgentToolsAgent extends WireData {
 	 * Prefer this over sendRequest() for new code — the request object is self-documenting,
 	 * hookable, and extensible without signature changes.
 	 *
+	 * The request must already contain provider connection details. Construct it with
+	 * `new AgentToolsRequest($agent)` to populate provider, model, API key, and endpoint
+	 * from this agent.
+	 *
 	 * ~~~~~
 	 * $request = new AgentToolsRequest($agent);
 	 * $request->systemPrompt = 'You are a concise assistant.';
@@ -167,6 +168,6 @@ class AgentToolsAgent extends WireData {
 	}
 	
 	public function getHash() {
-		return md5("$this->model|$this->apiKey");
+		return md5("$this->model|$this->apiKey|$this->endpointUrl");
 	}
 }

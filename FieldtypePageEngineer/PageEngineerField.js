@@ -6,6 +6,10 @@
  */
 
 var PageEngineer = {
+	escapeHtml: function(text) {
+		return $('<div>').text(text).html();
+	},
+
 	showProcessingOverlay: function() {
 		if($('#at-processing-overlay').length) return; // already visible
 		var cfg = ProcessWire.config.FieldtypePageEngineer || {};
@@ -15,15 +19,17 @@ var PageEngineer = {
 			var idx1 = Math.floor(Math.random() * words.length);
 			var idx2;
 			do { idx2 = Math.floor(Math.random() * words.length); } while(idx2 === idx1);
-			thinkingHtml = '<p class="at-thinking-words" style="display:none">' + words[idx1] + ' and ' + words[idx2] + '\u2026</p>';
+			thinkingHtml = '<p class="at-thinking-words" style="display:none">' + PageEngineer.escapeHtml(words[idx1] + ' and ' + words[idx2] + '\u2026') + '</p>';
 		}
+		var processingText = PageEngineer.escapeHtml(cfg.processingText || 'Saving page and processing Engineer request\u2026');
+		var timeoutText = PageEngineer.escapeHtml(cfg.timeoutText || 'Please be patient, this may take a minute. If you see a server error, the Engineer is still working \u2014 reload the page before resubmitting.');
 		$('body').append(
 			'<div id="at-processing-overlay">' +
 				'<div id="at-processing-box">' +
 					'<div uk-spinner="ratio: 2"></div>' +
-					'<p><strong>' + (cfg.processingText || 'Saving page and processing Engineer request\u2026') + '</strong></p>' +
+					'<p><strong>' + processingText + '</strong></p>' +
 					thinkingHtml +
-					'<p class="at-processing-note">' + (cfg.timeoutText || 'Please be patient, this may take a minute. If you see a server error, the Engineer is still working \u2014 reload the page before resubmitting.') + '</p>' +
+					'<p class="at-processing-note">' + timeoutText + '</p>' +
 				'</div>' +
 			'</div>'
 		);

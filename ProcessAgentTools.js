@@ -4,15 +4,21 @@
  */
 
 var AtTools = {
+	escapeHtml: function(text) {
+		return $('<div>').text(text).html();
+	},
+
 	showProcessingOverlay: function() {
 		if($('#at-processing-overlay').length) return; // already visible
 		var cfg = ProcessWire.config.AgentTools || {};
+		var processingText = AtTools.escapeHtml(cfg.processingText || 'Still processing\u2026');
+		var timeoutText = AtTools.escapeHtml(cfg.timeoutText || 'If you see a server error, reload the page before resubmitting.');
 		$('body').append(
 			'<div id="at-processing-overlay">' +
 				'<div id="at-processing-box">' +
 					'<div uk-spinner="ratio: 2"></div>' +
-					'<p><strong>' + (cfg.processingText || 'Still processing\u2026') + '</strong></p>' +
-					'<p class="at-processing-note">' + (cfg.timeoutText || 'If you see a server error, reload the page before resubmitting.') + '</p>' +
+					'<p><strong>' + processingText + '</strong></p>' +
+					'<p class="at-processing-note">' + timeoutText + '</p>' +
 				'</div>' +
 			'</div>'
 		);

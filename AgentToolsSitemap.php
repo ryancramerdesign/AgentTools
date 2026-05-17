@@ -31,7 +31,7 @@ class AgentToolsSitemap extends AgentToolsHelper {
 	 * Max children to show per page node (remaining noted via children_count)
 	 *
 	 */
-	const childSample = 5;
+	const childSample = 10;
 
 	/**
 	 * Get array of CLI help [ 'syntax' => 'description' ]
@@ -88,7 +88,12 @@ class AgentToolsSitemap extends AgentToolsHelper {
 		$json = json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
 		$file = $this->at->getFilesPath() . self::outputFile;
 
-		if(file_put_contents($file, $json) !== false) {
+		if($json === false) {
+			echo "ERROR: Failed to encode site map JSON: " . json_last_error_msg() . "\n";
+			return false;
+		}
+
+		if($this->wire()->files->filePutContents($file, $json) !== false) {
 			echo "Site map written to: $file\n";
 			return true;
 		} else {
@@ -132,8 +137,12 @@ class AgentToolsSitemap extends AgentToolsHelper {
 
 		$json = json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PARTIAL_OUTPUT_ON_ERROR);
 		$file = $this->at->getFilesPath() . self::schemaFile;
+		if($json === false || json_last_error() !== JSON_ERROR_NONE) {
+			echo "ERROR: Failed to encode schema JSON: " . json_last_error_msg() . "\n";
+			return false;
+		}
 
-		if(file_put_contents($file, $json) !== false) {
+		if($this->wire()->files->filePutContents($file, $json) !== false) {
 			echo "Schema written to: $file\n";
 			return true;
 		} else {
@@ -412,17 +421,22 @@ class AgentToolsSitemap extends AgentToolsHelper {
 			'published' => !($page->status & Page::statusUnpublished),
 		];
 
-		$childCount = $page->numChildren(true);
+		$childCount = $page->numChildren();
 		$data['children_count'] = $childCount;
 
 		if($depth > 0 && $childCount > 0) {
-			$children = $page->children('include=all, status<' . Page::statusTrash . ', limit=' . self::childSample);
+			$sampleLimit = $page->id == 1 ? 0 : self::childSample;
+			$selector = 'include=all';
+			if($sampleLimit) $selector .= ', limit=' . $sampleLimit;
+			$children = $page->children($selector);
 			$data['children'] = [];
 			foreach($children as $child) {
 				$data['children'][] = $this->getPageData($child, $depth - 1);
 			}
-			if($childCount > self::childSample) {
-				$data['children_shown'] = self::childSample;
+			$data['children_shown'] = count($data['children']);
+			if($sampleLimit && $childCount > $sampleLimit) {
+				$data['children_sample_limit'] = $sampleLimit;
+				$data['children_truncated'] = true;
 			}
 		}
 

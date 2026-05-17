@@ -124,7 +124,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			if(array_key_exists('tools', $options)) {
 				$tools = $options['tools'];
 			} else {
-				$tools = $readOnly ? [] : $this->getToolDefinitions($provider);
+				$tools = $this->getToolDefinitions($provider, 'site', $readOnly);
 			}
 
 			$providerRequest = new AgentToolsRequest();
@@ -153,7 +153,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 						['role' => 'assistant', 'content' => $responseText],
 					]);
 					$maxPairs = (int) $this->at->get('engineer_mem_qty') ?: $this->maxHistoryPairs;
-				$maxEntries = $maxPairs * 2;
+					$maxEntries = $maxPairs * 2;
 					if(count($updatedHistory) > $maxEntries) {
 						$updatedHistory = array_slice($updatedHistory, -$maxEntries);
 					}
@@ -520,7 +520,8 @@ class AgentToolsEngineer extends AgentToolsHelper {
 
 		if($readOnly) $prompt .=
 			"\n\nYou are operating in read-only mode. You can answer questions, explain how things work, " .
-			"and suggest approaches, but you cannot execute code or create migration files. " .
+			"and suggest approaches. You may use eval_php to inspect live site data, but do not use it " .
+			"to change database records, files, configuration, or site behavior, and do not create migration files. " .
 			"If asked to make a change, explain what would need to be done and provide example code, " .
 			"but note that changes must be applied manually or via the CLI.";
 
@@ -807,7 +808,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	 * @return array
 	 *
 	 */
-	public function getToolDefinitions(string $provider): array {
+	public function getToolDefinitions(string $provider, string $context = 'site', bool $readOnly = false): array {
 
 		$apiVars = $this->getEvalPhpVars(false);
 		$evalDesc =
@@ -907,26 +908,27 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		];
 
 		$suspicious = (string) $this->at->get('engineer_suspicious');
+		$includeSuspiciousTool = $suspicious === 'all' || ($context === 'page' && $suspicious === 'page');
 
 		if($provider === self::providerAnthropic) {
 			$tools = [
 				['name' => 'eval_php', 'description' => $evalDesc, 'input_schema' => $evalParams],
-				['name' => 'save_migration', 'description' => $migrationDesc, 'input_schema' => $migrationParams],
 				['name' => 'site_info', 'description' => $siteInfoDesc, 'input_schema' => $siteInfoParams],
 				['name' => 'read_file', 'description' => $readFileDesc, 'input_schema' => $readFileParams],
 				['name' => 'api_docs', 'description' => $apiDocsDesc, 'input_schema' => $apiDocsParams],
 			];
-			if($suspicious) $tools[] = ['name' => 'report_suspicious_prompt', 'description' => $suspiciousDesc, 'input_schema' => $suspiciousParams];
+			if(!$readOnly) $tools[] = ['name' => 'save_migration', 'description' => $migrationDesc, 'input_schema' => $migrationParams];
+			if($includeSuspiciousTool) $tools[] = ['name' => 'report_suspicious_prompt', 'description' => $suspiciousDesc, 'input_schema' => $suspiciousParams];
 			return $tools;
 		} else {
 			$tools = [
 				['type' => 'function', 'function' => ['name' => 'eval_php', 'description' => $evalDesc, 'parameters' => $evalParams]],
-				['type' => 'function', 'function' => ['name' => 'save_migration', 'description' => $migrationDesc, 'parameters' => $migrationParams]],
 				['type' => 'function', 'function' => ['name' => 'site_info', 'description' => $siteInfoDesc, 'parameters' => $siteInfoParams]],
 				['type' => 'function', 'function' => ['name' => 'read_file', 'description' => $readFileDesc, 'parameters' => $readFileParams]],
 				['type' => 'function', 'function' => ['name' => 'api_docs', 'description' => $apiDocsDesc, 'parameters' => $apiDocsParams]],
 			];
-			if($suspicious) $tools[] = ['type' => 'function', 'function' => ['name' => 'report_suspicious_prompt', 'description' => $suspiciousDesc, 'parameters' => $suspiciousParams]];
+			if(!$readOnly) $tools[] = ['type' => 'function', 'function' => ['name' => 'save_migration', 'description' => $migrationDesc, 'parameters' => $migrationParams]];
+			if($includeSuspiciousTool) $tools[] = ['type' => 'function', 'function' => ['name' => 'report_suspicious_prompt', 'description' => $suspiciousDesc, 'parameters' => $suspiciousParams]];
 			return $tools;
 		}
 	}
@@ -1515,7 +1517,8 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		$f = $modules->get('InputfieldToggle');
 		$f->attr('name', 'engineer_readonly');
 		$f->label = $this->_('Read-only mode');
-		$f->description = $this->_('When enabled, the Engineer can answer questions and suggest changes but cannot execute code or create migration files.');
+		$f->description = $this->_('When enabled, the Site Engineer can query live site data and suggest changes, but cannot create migration files or intentionally change site behavior.');
+		$f->notes = $this->_('This setting does not apply to Page Engineer fields, if you are using any.');
 		$f->val((int) $this->at->get('engineer_readonly'));
 		$f->columnWidth = 50;
 		$outerFs->add($f);

@@ -32,7 +32,6 @@ $datalists = [
 	'endpointUrl' => [
 		'Claude' => 'https://api.anthropic.com/v1/messages',
 		'OpenAI' => 'https://api.openai.com/v1/chat/completions',
-		'OpenAI Responses API' => 'https://api.openai.com/v1/responses',
 		'Gemini' => 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
 		'Z.AI' => 'https://api.z.ai/api/paas/v4/chat/completions',
 		'Groq' => 'https://api.groq.com/openai/v1/chat/completions',

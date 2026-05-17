@@ -594,7 +594,9 @@ class ProcessAgentTools extends Process {
 				$o = '';
 				
 				foreach($examples as $label => $example) {
-					$o .= "<option value='$example' label='$label'>";
+					$value = htmlspecialchars($example, ENT_QUOTES, 'UTF-8');
+					$label = htmlspecialchars($label, ENT_QUOTES, 'UTF-8');
+					$o .= "<option value='$value' label='$label'>";
 				}
 				
 				$f->appendMarkup = "<datalist id='$name-examples'>$o</datalist>";
@@ -626,7 +628,7 @@ class ProcessAgentTools extends Process {
 	
 		// save settings (keeping legacy settings for now)
 		foreach($engineerKeys as $key => $prop) {
-			$data[$key] = $agent->get($prop);
+			$data[$key] = $agent ? $agent->get($prop) : '';
 		}
 		$data['engineer_additional_models'] = $agents->getString();
 		$modules->saveConfig($at, $data);
@@ -1048,41 +1050,55 @@ class ProcessAgentTools extends Process {
 		$results = [];
 		$passCount = 0;
 		$failFile = null;
-
-		foreach($migrationFiles as $file) {
-			ob_start();
-			try {
-				include($file);
-				$fileOutput = ob_get_clean();
-				$this->at->migrations->addApplied($file);
-				$passCount++;
-				$results[] = [
-					'file' => basename($file), 
-					'output' => $fileOutput, 
-					'success' => true
-				];
-			} catch(\Throwable $e) {
-				$fileOutput = ob_get_clean();
-				$results[] = [
-					'file' => basename($file),
-					'output' => trim($fileOutput) .
-						"\nERROR: " . $e->getMessage() .
-						"\n  File: " . $e->getFile() . " line " . $e->getLine(),
-					'success' => false,
-				];
-				$failFile = basename($file);
-				break;
-			}
+		$lockFp = $this->at->migrations->lockApply();
+		if($lockFp === false) {
+			$this->error($this->_('Another migration apply process is already running.'));
+			$btn = $this->wire()->modules->get('InputfieldButton');
+			$btn->href = $backUrl;
+			$btn->icon = 'arrow-left';
+			$btn->val($this->_('Back'));
+			$btn->setSecondary();
+			return $btn->render();
 		}
 
-		// Regenerate site-maps so they reflect the changes for future Engineer requests
-		if($passCount > 0) {
-			try {
-				$this->at->sitemap->generate();
-				$this->at->sitemap->generateSchema();
-			} catch(\Throwable $e) {
-				// Non-fatal: migration applied successfully even if sitemap update fails
+		try {
+			foreach($migrationFiles as $file) {
+				ob_start();
+				try {
+					include($file);
+					$fileOutput = ob_get_clean();
+					$this->at->migrations->addApplied($file);
+					$passCount++;
+					$results[] = [
+						'file' => basename($file),
+						'output' => $fileOutput,
+						'success' => true
+					];
+				} catch(\Throwable $e) {
+					$fileOutput = ob_get_clean();
+					$results[] = [
+						'file' => basename($file),
+						'output' => trim($fileOutput) .
+							"\nERROR: " . $e->getMessage() .
+							"\n  File: " . $e->getFile() . " line " . $e->getLine(),
+						'success' => false,
+					];
+					$failFile = basename($file);
+					break;
+				}
 			}
+
+			// Regenerate site-maps so they reflect the changes for future Engineer requests
+			if($passCount > 0) {
+				try {
+					$this->at->sitemap->generate();
+					$this->at->sitemap->generateSchema();
+				} catch(\Throwable $e) {
+					// Non-fatal: migration applied successfully even if sitemap update fails
+				}
+			}
+		} finally {
+			$this->at->migrations->unlockApply($lockFp);
 		}
 
 		$out = '';
@@ -1305,7 +1321,7 @@ class ProcessAgentTools extends Process {
 				$skipped[] = $item['filename'];
 				continue;
 			}
-			file_put_contents($file, $item['content']);
+			$this->wire()->files->filePutContents($file, $item['content']);
 			$saved[] = $item['filename'];
 		}
 

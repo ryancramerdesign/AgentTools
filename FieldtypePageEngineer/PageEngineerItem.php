@@ -38,7 +38,7 @@ class PageEngineerItem extends WireData {
 		/** @var TextformatterMarkdownExtra $markdown */
 		$markdown = $this->wire()->modules->get('TextformatterMarkdownExtra');
 		if(!$markdown) return '<p>' . htmlspecialchars($this->text) . '</p>';
-		if($this->isAgent) return $markdown->markdown($this->text);
+		if($this->isAgent) return $markdown->markdownSafe($this->text);
 		return '<p>' . nl2br(htmlspecialchars($this->text)) . '</p>';
 	}
 }

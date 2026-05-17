@@ -397,7 +397,7 @@ class FieldtypePageEngineer extends Fieldtype implements Module {
 
 		// Allow eval_php (to query/edit) and api_docs (to look up API documentation)
 		// Exclude save_migration and site_info — page context is already in the system prompt
-		$allTools = $at->engineer->getToolDefinitions($agent->provider);
+		$allTools = $at->engineer->getToolDefinitions($agent->provider, 'page');
 		$allowedTools = ['eval_php', 'api_docs'];
 		if($suspicious) $allowedTools[] = 'report_suspicious_prompt';
 		$tools = array_values(array_filter($allTools, function($tool) use($allowedTools) {
@@ -477,11 +477,12 @@ class FieldtypePageEngineer extends Fieldtype implements Module {
 			}
 		}
 
-		// Field restrictions
+		// Field guidance
 		if(!empty($onlyFields)) {
 			$fieldList = implode(', ', $onlyFields);
-			$prompt .= "## Field Restrictions\n";
-			$prompt .= "You may only modify these fields: $fieldList. Do not modify any other fields, even if the user requests it.\n\n";
+			$prompt .= "## Preferred Editable Fields\n";
+			$prompt .= "The editor has identified these fields as preferred targets for edits: $fieldList. " .
+				"Use these fields unless the user's request clearly requires something else, and explain before editing any other field.\n\n";
 		}
 
 		// Rules
@@ -522,7 +523,7 @@ class FieldtypePageEngineer extends Fieldtype implements Module {
 	}
 
 	/**
-	 * Take a PagesVersions backup of the page and any in-scope child pages
+	 * Take a PagesVersions backup of the current page
 	 *
 	 * @param Page $page
 	 * @param Field $field
@@ -536,13 +537,8 @@ class FieldtypePageEngineer extends Fieldtype implements Module {
 		$pagesVersions = $modules->get('PagesVersions');
 
 		$scope = (int) $field->scope;
-		$pagesToBackup = $scope === PageEngineerField::scopeChildren ? [] : [$page];
-
-		if($scope === PageEngineerField::scopePageAndChildren || $scope === PageEngineerField::scopeChildren) {
-			foreach($page->children('include=all') as $child) {
-				$pagesToBackup[] = $child;
-			}
-		}
+		if($scope === PageEngineerField::scopeChildren) return [];
+		$pagesToBackup = [$page];
 
 		$onlyFields = is_array($field->onlyFields) ? $field->onlyFields : [];
 
@@ -647,8 +643,8 @@ class FieldtypePageEngineer extends Fieldtype implements Module {
 
 		$f = $inputfields->InputfieldAsmSelect;
 		$f->attr('name', 'onlyFields');
-		$f->label = 'Limit scope of changes only these fields';
-		$f->notes = 'If no fields selected then AI Engineer may modify any field requested by the page editor.';
+		$f->label = 'Preferred editable fields';
+		$f->notes = 'These field names are included in the AI instructions as preferred edit targets. They are not a security boundary because the Page Engineer uses eval_php with ProcessWire API access.';
 		foreach($this->wire()->fields as $_field) {
 			if($_field->name === $field->name) continue;
 			$f->addOption($_field->name);

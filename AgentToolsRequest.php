@@ -2,31 +2,28 @@
 
 /**
  * Agent Tools Request
- *
  * Encapsulates all parameters for a single provider request. Pass an instance
  * to `AgentToolsAgent::sendProviderRequest()` or `AgentToolsEngineer::sendProviderRequest()`.
- *
  * ~~~~~~
  * $agent = $at->getPrimaryAgent();
- *
  * // create a new request
  * $request = new AgentToolsRequest($agent);
  * $request->systemPrompt = 'You are a concise assistant.';
  * $request->messages = [['role' => 'user', 'content' => 'List the top 3 templates.']];
  * $request->options = ['openai' => ['reasoning_effort' => 'high']];
- *
  * // send the request and get a response
  * $response = $agent->sendProviderRequest($request);
  * ~~~~~~
- *
  * Hook example — modify the request before dispatch:
  * ~~~~~~
  * $wire->addHookBefore('AgentToolsEngineer::sendProviderRequest', function(HookEvent $e) {
  *     $request = $e->arguments(0); // AgentToolsRequest
- *     $request->options['openai']['temperature'] = 0.2;
+ *     $opts = $request->options;
+ *     $opts['openai']['temperature'] = 0.2;
+ *     $request->options = $opts;
+ *     $e->arguments(0, $request);
  * });
  * ~~~~~~
- *
  * Copyright 2026 Ryan Cramer and Claude (Anthropic) | MIT
  *
  * @property string $provider Provider name: 'anthropic' or 'openai'
@@ -37,7 +34,6 @@
  * @property array $messages Array of message objects: [['role' => 'user'|'assistant', 'content' => '...'], ...]
  * @property array $tools Tool definitions in provider format
  * @property array $options Request options: timeout (int), anthropic (array), openai (array)
- *
  */
 class AgentToolsRequest extends WireData {
 

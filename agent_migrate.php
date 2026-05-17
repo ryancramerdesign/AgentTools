@@ -104,29 +104,39 @@ if(!$apply) {
 // Apply pending migrations
 // ----------------------------------------------------------------
 
+$lockFp = $at->migrations->lockApply();
+if($lockFp === false) {
+	echo "Another migration apply process is already running.\n\n";
+	return 0;
+}
+
 $passCount = 0;
 $failFile = null;
 
-foreach($pending as $file) {
-	echo str_repeat('-', 60) . "\n";
+try {
+	foreach($pending as $file) {
+		echo str_repeat('-', 60) . "\n";
 
-	ob_start();
-	try {
-		include($file);
-		$output = ob_get_clean();
-		if(strlen(trim($output))) echo $output;
+		ob_start();
+		try {
+			include($file);
+			$output = ob_get_clean();
+			if(strlen(trim($output))) echo $output;
 
-		$at->migrations->addApplied($file);
-		$passCount++;
+			$at->migrations->addApplied($file);
+			$passCount++;
 
-	} catch(\Throwable $e) {
-		$output = ob_get_clean();
-		if(strlen(trim($output))) echo $output;
-		echo "- ERROR: " . $e->getMessage() . "\n";
-		echo "  File: " . $e->getFile() . " line " . $e->getLine() . "\n";
-		$failFile = basename($file);
-		break;
+		} catch(\Throwable $e) {
+			$output = ob_get_clean();
+			if(strlen(trim($output))) echo $output;
+			echo "- ERROR: " . $e->getMessage() . "\n";
+			echo "  File: " . $e->getFile() . " line " . $e->getLine() . "\n";
+			$failFile = basename($file);
+			break;
+		}
 	}
+} finally {
+	$at->migrations->unlockApply($lockFp);
 }
 
 // ----------------------------------------------------------------

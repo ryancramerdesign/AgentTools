@@ -61,14 +61,6 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 	];
 	
 	/**
-	 * Commands that trigger module to output help for commands
-	 * 
-	 * @var string[] 
-	 * 
-	 */
-	protected $helpCommands = [ 'at', 'help', '--at', '--help' ];
-	
-	/**
 	 * @var AgentToolsAgents|null 
 	 * 
 	 */
@@ -113,7 +105,7 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 			if(count($argv) > 1) {
 				$prefix = '--' . self::name . '-';
 				$command = empty($argv[1]) ? '' : $argv[1];
-				if(strpos($command, $prefix) === 0 || in_array($command, $this->helpCommands)) {
+				if(strpos($command, $prefix) === 0) {
 					$atAction = str_replace($prefix, '', $command);
 					$this->cliReady($atAction);
 				}
@@ -122,10 +114,10 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 		$at = $this;
 		$methods = 'WireSaveableItems::saved, WireSaveableItems::added, WireSaveableItems::deleted';
 		$this->addHookAfter($methods, function(HookEvent $e) use($at) {
-			$path = $at->getFilesPath();
 			$item = $e->arguments(0); /** @var Template|Fieldgroup $template */
 			$name = strtolower($item->className());
 			if(in_array($name, [ 'template', 'fieldgroup', 'field' ])) {
+				$path = $at->getFilesPath();
 				if($name === 'fieldgroup') $name = 'template';
 				$method = $e->method;
 				$fp = fopen($path . "{$name}s.txt", 'a');
@@ -186,10 +178,6 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 			$code = file_get_contents('php://stdin');
 			if(strlen(trim($code))) $success = $this->cliEval($code, $fuel);
 			
-		} else if(in_array($atAction, $this->helpCommands)) { 
-			echo $this->renderHelp($this->cliHelp());
-			$success = true;
-
 		} else {
 			$found = false;
 			foreach(array_keys($this->helpers) as $name) {
@@ -209,6 +197,7 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 			}
 			if(!$found) {
 				echo "Unrecognized AgentTools action: $atAction\n";
+				if($atAction === 'help') $showHelpOnFailure = false;
 				$success = false;
 			}
 		}
@@ -364,6 +353,14 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 		$path = $this->wire()->config->paths->assets . self::name . '/';
 		if(!is_dir($path)) $this->wire()->files->mkdir($path);
 		if($subdir) {
+			$subdir = str_replace('\\', '/', (string) $subdir);
+			$isAbsolute = isset($subdir[0]) && $subdir[0] === '/';
+			$isWindowsAbsolute = preg_match('/^[a-zA-Z]:\//', $subdir);
+			$hasTraversal = preg_match('!(^|/)\.\.?(/|$)!', $subdir);
+			if(strpos($subdir, "\0") !== false || $isAbsolute || $isWindowsAbsolute || $hasTraversal) {
+				throw new WireException("Invalid AgentTools files subdirectory");
+			}
+			$subdir = trim($subdir, '/');
 			$path .= $subdir . '/';
 			if(!is_dir($path)) $this->wire()->files->mkdir($path);
 		}
