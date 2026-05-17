@@ -37,6 +37,13 @@ All commands are run from the ProcessWire root directory (where `index.php` live
 | `php index.php --at-migrations-test` | Preview pending without applying |
 | `php index.php --at-sitemap-generate` | Generate a JSON site map to `site/assets/at/site-map.json` |
 | `php index.php --at-sitemap-generate-schema` | Generate a schema JSON to `site/assets/at/site-map-schema.json` |
+| `php index.php --at-engineer "REQUEST"` | Ask the Engineer a question or request a change |
+| `php index.php --at-engineer-migrate "REQUEST"` | Have the Engineer create a migration; outputs the migration file path |
+| `php index.php --at-engineer-site-info pages\|schema\|modules [--refresh]` | Print generated site info JSON without calling an AI provider |
+| `php index.php --at-engineer-api-docs-list` | List available ProcessWire API.md documentation without calling an AI provider |
+| `php index.php --at-engineer-api-docs-get NAME` | Print a ProcessWire API.md documentation file without calling an AI provider |
+| `php index.php --at-engineer-api-docs-search TERM` | Search ProcessWire API.md documentation without calling an AI provider |
+| `php index.php --at-engineer-read-file PATH` | Read a local site file without calling an AI provider |
 
 ### When to use `--at-eval` vs `--at-stdin`
 
@@ -73,6 +80,38 @@ covering the full scope of the installation:
 
 Run this at the start of a session on an unfamiliar site to get a complete
 picture of its structure before making any changes.
+
+---
+
+## Engineer helper commands
+
+The Engineer can be called from the CLI when AgentTools has an AI provider
+configured:
+
+~~~~~
+php index.php --at-engineer "How many published pages does this site have?"
+php index.php --at-engineer-migrate "Add a subtitle text field to the blog-post template"
+~~~~~
+
+Use `--at-engineer` for questions or requested changes. Use
+`--at-engineer-migrate` when the response must create a migration file; successful
+output includes a `Migration: /full/path/to/file.php` line.
+
+Several read-only helper commands are available without calling an AI provider:
+
+| Command | Purpose |
+|---------|---------|
+| `php index.php --at-engineer-site-info pages [--refresh]` | Print `site/assets/at/site-map.json`; with `--refresh`, regenerate first |
+| `php index.php --at-engineer-site-info schema [--refresh]` | Print `site/assets/at/site-map-schema.json`; with `--refresh`, regenerate first |
+| `php index.php --at-engineer-site-info modules` | Print installed module class names as JSON |
+| `php index.php --at-engineer-api-docs-list` | Print available API docs as JSON with `name`, `description`, and `file` |
+| `php index.php --at-engineer-api-docs-get NAME` | Print the contents of an API.md file by name |
+| `php index.php --at-engineer-api-docs-search TERM` | Search API docs and print JSON matches with `name`, `file`, `line`, and `snippet` |
+| `php index.php --at-engineer-read-file PATH` | Print a file inside the ProcessWire root; paths outside the root are denied |
+
+Use these local helper commands when an external coding agent needs structured
+site context, ProcessWire API documentation, or a small local file without
+spending provider tokens.
 
 ---
 

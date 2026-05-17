@@ -75,11 +75,10 @@ class AgentToolsSkills extends AgentToolsHelper {
 	 *
 	 */
 	protected function getSkillPath($getSrc = false) {
-		$dir = 'agents/skills/processwire-agenttools/';
 		if($getSrc) {
-			$path = __DIR__ . "/$dir";
+			$path = __DIR__ . '/installable-skills/processwire-agenttools/';
 		} else {
-			$path = $this->wire()->config->paths->root . ".$dir";
+			$path = $this->wire()->config->paths->root . '.agents/skills/processwire-agenttools/';
 		}
 		return $path;
 	}

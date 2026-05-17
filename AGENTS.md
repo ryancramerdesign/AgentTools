@@ -24,6 +24,11 @@ Run from the ProcessWire root directory (where `index.php` lives):
 | `php index.php --at-cli` | Open an interactive agent CLI session |
 | `php index.php --at-engineer "REQUEST"` | Ask the Engineer a question or request a change |
 | `php index.php --at-engineer-migrate "REQUEST"` | Have the Engineer create a migration; outputs the migration file path |
+| `php index.php --at-engineer-site-info pages\|schema\|modules [--refresh]` | Print generated site info JSON without calling an AI provider |
+| `php index.php --at-engineer-api-docs-list` | List available ProcessWire API.md documentation without calling an AI provider |
+| `php index.php --at-engineer-api-docs-get NAME` | Print a ProcessWire API.md documentation file without calling an AI provider |
+| `php index.php --at-engineer-api-docs-search TERM` | Search ProcessWire API.md documentation without calling an AI provider |
+| `php index.php --at-engineer-read-file PATH` | Read a local site file without calling an AI provider |
 
 ## Getting oriented on a new site
 
@@ -59,8 +64,8 @@ Migrations can also be applied from the ProcessWire admin at **Setup > Agent Too
 
 The ProcessAgentTools module provides a browser-based Engineer at **Setup > Agent Tools > Engineer**.
 It connects to an AI provider (Anthropic, OpenAI, or any OpenAI-compatible endpoint) and gives it
-four tools: `eval_php`, `save_migration`, `site_info` (fetches page tree or schema on demand), and
-`api_docs` (discovers and retrieves ProcessWire API.md documentation on demand). The Engineer
+five tools: `eval_php`, `save_migration`, `site_info` (fetches page tree or schema on demand),
+`read_file` (reads local site files), and `api_docs` (discovers and retrieves ProcessWire API.md documentation on demand). The Engineer
 supports multi-turn conversation memory within a session.
 
 The Engineer is also available from the command line, which allows AI agents to spawn a
@@ -70,6 +75,11 @@ ProcessWire-specialist sub-agent without needing to understand ProcessWire thems
 |---------|---------|
 | `php index.php --at-engineer "REQUEST"` | Ask the Engineer a question or request a change |
 | `php index.php --at-engineer-migrate "REQUEST"` | Have the Engineer create a migration; outputs the migration file path |
+| `php index.php --at-engineer-site-info pages\|schema\|modules [--refresh]` | Print generated site info JSON without calling an AI provider |
+| `php index.php --at-engineer-api-docs-list` | List available ProcessWire API.md documentation without calling an AI provider |
+| `php index.php --at-engineer-api-docs-get NAME` | Print a ProcessWire API.md documentation file without calling an AI provider |
+| `php index.php --at-engineer-api-docs-search TERM` | Search ProcessWire API.md documentation without calling an AI provider |
+| `php index.php --at-engineer-read-file PATH` | Read a local site file without calling an AI provider |
 
 Optional flags (placed before the request string):
 

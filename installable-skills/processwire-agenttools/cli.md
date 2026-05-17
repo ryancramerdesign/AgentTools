@@ -2,16 +2,21 @@
 
 ## Default interface
 
-Use the wrapper script by default:
+Run AgentTools commands directly from the ProcessWire root directory, where
+`index.php` lives:
 
 ```bash
-bash .agents/skills/processwire-agenttools/scripts/pw-at.sh ...
+php index.php --at-eval 'CODE'
+echo 'CODE' | php index.php --at-stdin
+php index.php --at-cli
 ```
 
-It selects the correct runtime automatically. For DDEV projects it runs inside the
-web container. Otherwise it uses host-side `php`.
+The `scripts/pw-at.sh` wrapper is only a compatibility layer for Docker or
+similar environments where direct PHP commands are unreliable because of DDEV,
+container selection, or command transport. Use the wrapper in those environments,
+or when debugging wrapper behavior.
 
-Compatibility helpers:
+Wrapper-only compatibility helpers:
 
 - `eval-b64` for inline code when the execution environment rewrites `$variables`
 - `stdin-b64` for multi-line code when command transport is unreliable
@@ -21,28 +26,28 @@ Compatibility helpers:
 Evaluate a single PHP expression. The `ProcessWire` namespace is injected automatically — do not add it.
 
 ```bash
-bash .agents/skills/processwire-agenttools/scripts/pw-at.sh eval 'echo wire()->pages->count() . " pages\n";'
+php index.php --at-eval 'echo wire()->pages->count() . " pages\n";'
 ```
 
 **Use only for simple one-liners.** Shell escaping rules apply — single quotes, double quotes, `$`, and backticks in the PHP code can conflict with the shell.
 
-With the wrapper, inline code is transported correctly in DDEV without needing
-manual escaping like `\$p`:
+Direct PHP commands are preferred when they work in the current environment:
 
 ```bash
-bash .agents/skills/processwire-agenttools/scripts/pw-at.sh eval 'echo wire()->pages->count() . " pages\n";'
-bash .agents/skills/processwire-agenttools/scripts/pw-at.sh eval 'foreach(wire("pages")->find("limit=2") as $p) echo $p->id . "\n";'
+php index.php --at-eval 'echo wire()->pages->count() . " pages\n";'
+php index.php --at-eval 'foreach(wire("pages")->find("limit=2") as $p) echo $p->id . "\n";'
 ```
 
-If the command runner still rewrites `$p` before the wrapper receives it, use
-`eval-b64` instead of `eval`.
+If the command runner rewrites `$p` before PHP receives it, switch to
+`--at-stdin` with a single-quoted heredoc. In Docker-like environments where that
+transport still fails, use the wrapper's `eval-b64` mode.
 
 ## --at-stdin
 
 Evaluate multi-line PHP from stdin. Use a **single-quoted heredoc** (`<<'PHP'`) to prevent the shell from expanding PHP `$variables`:
 
 ```bash
-cat <<'PHP' | bash .agents/skills/processwire-agenttools/scripts/pw-at.sh stdin
+cat <<'PHP' | php index.php --at-stdin
 $items = $pages->find("template=blog-post, sort=-modified, limit=10");
 foreach($items as $item) {
     $date = date('Y-m-d', $item->modified);
@@ -65,7 +70,7 @@ bash .agents/skills/processwire-agenttools/scripts/pw-at.sh stdin-b64 'BASE64_PA
 ```
 
 Generate the payload with a local encoder and pass the result to the wrapper as a
-single argument.
+single argument. This is a wrapper-specific fallback, not normal AgentTools usage.
 
 ## --at-cli
 
@@ -80,7 +85,7 @@ Everything above the marker is bootstrap code — do not modify it. All API vari
 Then run:
 
 ```bash
-bash .agents/skills/processwire-agenttools/scripts/pw-at.sh cli
+php index.php --at-cli
 ```
 
 Each run executes the file once — state does not persist between runs. Use for extended multi-step operations where you update the code and re-run.
@@ -96,8 +101,9 @@ Each run executes the file once — state does not persist between runs. Use for
 ## Common mistakes
 
 - Using `--at-eval` for complex code — shell escaping silently corrupts the PHP
-- Bypassing the wrapper and calling `php index.php --at-*` directly in a DDEV project
-- Using plain `eval` or `stdin` in an environment that rewrites `$variables` in command strings instead of switching to `eval-b64` or `stdin-b64`
+- Reaching for the wrapper before trying the authoritative `php index.php --at-*` commands
+- In Docker-like environments, continuing to use direct commands after command transport or DDEV/container selection has proven unreliable
+- Using plain wrapper `eval` or `stdin` in an environment that rewrites `$variables` in command strings instead of switching to `eval-b64` or `stdin-b64`
 - Passing a bare expression to `eval` and expecting printed output — write `echo $pages->count();` instead
 - Using a **double-quoted** heredoc (`<<PHP` instead of `<<'PHP'`) — bash expands `$variables`
 - Adding `namespace ProcessWire;` in eval/stdin code — it is injected automatically and doubling it causes errors

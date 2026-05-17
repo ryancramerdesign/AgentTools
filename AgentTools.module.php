@@ -7,7 +7,7 @@
  * via CLI, and provides a database migration system for transferring changes
  * across environments.
  *
- * Copyright 2026 Ryan Cramer and Claude (Anthropic) | MIT
+ * Copyright 2026 Ryan Cramer, Claude (Anthropic), GPT 5.5 Codex | MIT
  * 
  * @property AgentToolsMigrations $migrations
  * @property AgentToolsSitemap $sitemap
@@ -32,7 +32,7 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 			'summary' => "Enables AI coding agents to access ProcessWire's API and provides a database migration system.",
 			'icon' => 'at',
 			'version' => 12,
-			'author' => 'Ryan Cramer and Claude (Anthropic)',
+			'author' => 'Ryan Cramer, Claude (Anthropic), GPT 5.5 Codex',
 			'requires' => 'ProcessWire>=3.0.255, PHP>=8.0.0',
 			'installs' => 'ProcessAgentTools, FieldtypePageEngineer',
 			'autoload' => true,
@@ -153,6 +153,7 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 
 		$at = $this;
 		$success = false;
+		$showHelpOnFailure = true;
 		$fuel = $this->wire()->fuel->getArray();
 		extract($fuel);
 
@@ -177,14 +178,17 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 			}
 
 		} else if($atAction === 'eval' && !empty($GLOBALS['argv'][2])) {
+			$showHelpOnFailure = false;
 			$success = $this->cliEval($GLOBALS['argv'][2], $fuel);
 
 		} else if($atAction === 'stdin') {
+			$showHelpOnFailure = false;
 			$code = file_get_contents('php://stdin');
 			if(strlen(trim($code))) $success = $this->cliEval($code, $fuel);
 			
 		} else if(in_array($atAction, $this->helpCommands)) { 
-			$this->renderHelp($this->cliHelp()); 
+			echo $this->renderHelp($this->cliHelp());
+			$success = true;
 
 		} else {
 			$found = false;
@@ -199,6 +203,7 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 				$helper = $this->getHelper($name);
 				if(!$helper) continue;
 				$success = $helper->cliExecute($act);
+				$showHelpOnFailure = ($success === null);
 				$found = true;
 				break;
 			}
@@ -211,8 +216,11 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 		chdir($originalDir);
 		$this->wire()->finished();
 
-		if(!$success) {
+		if(!$success && $showHelpOnFailure) {
 			echo $this->renderHelp();
+		}
+
+		if(!$success) {
 			exit(1);
 		}
 

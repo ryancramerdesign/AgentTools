@@ -291,5 +291,5 @@ where POST values could clobber the agent's database changes.
 
 - `AGENTS.md` — updated with `--at-sitemap-generate-schema` command
 - `agent_cli.md` — updated with `--at-sitemap-generate-schema` command
-- `agents/skills/processwire-agenttools/SKILL.md` — added sitemap commands
+- `installable-skills/processwire-agenttools/SKILL.md` — added sitemap commands
 - `README.md` — updated to reflect Engineer feature, admin UI, prompt caching, and new CLI commands

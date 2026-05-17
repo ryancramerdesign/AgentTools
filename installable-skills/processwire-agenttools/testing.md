@@ -1,7 +1,10 @@
 # Testing
 
-Use this only when validating or debugging the wrapper layer. It is not part of
-normal AgentTools usage.
+Use this only when validating or debugging the optional compatibility wrapper.
+It is not part of normal AgentTools usage. The authoritative commands are the
+direct `php index.php --at-*` commands documented in `AGENTS.md`; the wrapper is
+for Docker or similar environments that need DDEV/container or command-transport
+adaptation.
 
 ## Scope
 

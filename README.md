@@ -30,10 +30,10 @@ Also packaged with the AgentTools module is the ProcessAgentTools module. This p
 admin application (Setup > Agent Tools), currently with the following features:
 
 - **Engineer**: A natural language AI interface to your site. Ask questions, request changes,
-  or have it create migrations — all from your browser. The Engineer has four tools available
+  or have it create migrations — all from your browser. The Engineer has five tools available
   to it: `eval_php` (query live site data), `save_migration` (create a migration for review),
-  `site_info` (fetch the site's page tree or fields/templates schema on demand), and
-  `api_docs` (discover and retrieve ProcessWire API documentation on demand). The Engineer
+  `site_info` (fetch the site's page tree or fields/templates schema on demand), `read_file`
+  (read local site files), and `api_docs` (discover and retrieve ProcessWire API documentation on demand). The Engineer
   supports conversation memory so it can refer back to earlier exchanges in the same session.
   Multiple AI providers and models can be configured and switched between from a Control room
   in the Engineer form.
@@ -152,9 +152,10 @@ Claude Code (below).
 
 ### Agent skill (optional)
 
-The module ships with an agent skill in `agents/skills/processwire-agenttools/` — a set of
-markdown docs that teach AI coding agents how to use the CLI and migration system. Agents that
-support the `.agents/skills/` convention will discover it automatically once installed.
+The module ships with an installable agent skill in
+`installable-skills/processwire-agenttools/` — a set of markdown docs that teach
+AI coding agents how to use the CLI and migration system. Agents that support the
+`.agents/skills/` convention will discover it automatically once installed.
 
 To install the skill to your project root, check "Install agent skill to project" in the module
 config (Modules > AgentTools) and submit. This copies the skill files to
@@ -298,6 +299,11 @@ from the command line without needing to enter an interactive session.
 | `php index.php --at-cli` | Open an interactive agent CLI session |
 | `php index.php --at-engineer "REQUEST"` | Ask the Engineer a question or request a change |
 | `php index.php --at-engineer-migrate "REQUEST"` | Have the Engineer create a migration; outputs the migration file path |
+| `php index.php --at-engineer-site-info pages\|schema\|modules [--refresh]` | Print generated site info JSON without calling an AI provider |
+| `php index.php --at-engineer-api-docs-list` | List available ProcessWire API.md documentation without calling an AI provider |
+| `php index.php --at-engineer-api-docs-get NAME` | Print a ProcessWire API.md documentation file without calling an AI provider |
+| `php index.php --at-engineer-api-docs-search TERM` | Search ProcessWire API.md documentation without calling an AI provider |
+| `php index.php --at-engineer-read-file PATH` | Read a local site file without calling an AI provider |
 
 **`--at-eval` example** — ask your AI agent how many pages are on your site:
 ```
@@ -459,4 +465,3 @@ $response = $agent->sendRequest($systemPrompt, $messages, $tools);
 
 - **[processwire-ai-docs](https://github.com/gebeer/processwire-ai-docs)** by gebeer — A collection of AI agent skills for ProcessWire, including an AgentTools skill with a DDEV wrapper script (`pw-at.sh`) that automatically routes `--at-*` commands into the DDEV container when appropriate.
 - **[processwire-boost](https://github.com/trk/processwire-boost)** by trk — An AI context bridge for ProcessWire that compiles guidelines and skill playbooks for 9 AI agents (Claude Code, Cursor, Copilot, Gemini, and more), generates a static schema map, and provides a live MCP server with 28 tools for querying and modifying a ProcessWire site.
-

@@ -216,6 +216,16 @@ class AgentToolsEngineer extends AgentToolsHelper {
 				'Ask the Engineer a question or request a change [--model=N] [--readonly] [--verbose]',
 			'php index.php --at-engineer-migrate "REQUEST"' =>
 				'Have the Engineer create a migration; outputs the migration file path [--model=N] [--verbose]',
+			'php index.php --at-engineer-site-info pages|schema|modules [--refresh]' =>
+				'Print generated site info JSON without calling an AI provider',
+			'php index.php --at-engineer-api-docs-list' =>
+				'List available ProcessWire API documentation files without calling an AI provider',
+			'php index.php --at-engineer-api-docs-get NAME' =>
+				'Print a ProcessWire API documentation file without calling an AI provider',
+			'php index.php --at-engineer-api-docs-search TERM' =>
+				'Search ProcessWire API documentation files without calling an AI provider',
+			'php index.php --at-engineer-read-file PATH' =>
+				'Read a file within this ProcessWire installation without calling an AI provider',
 		];
 	}
 
@@ -234,6 +244,10 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	 *
 	 */
 	public function cliExecute(string $action): ?bool {
+
+		if(in_array($action, ['site-info', 'api-docs-list', 'api-docs-get', 'api-docs-search', 'read-file'], true)) {
+			return $this->cliExecuteLocalTool($action);
+		}
 
 		if($action !== '' && $action !== 'migrate') return null;
 
@@ -258,7 +272,10 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			}
 		}
 
-		if(!$question) return false;
+		if(!$question) {
+			fwrite(STDERR, "ERROR: Usage: php index.php --at-engineer \"REQUEST\"\n");
+			return false;
+		}
 
 		// Select agent by index or fall back to primary
 		$agents = $this->at->getAgents();
@@ -299,6 +316,66 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		}
 
 		return true;
+	}
+
+	/**
+	 * Execute read-only Engineer helper tools from CLI without calling an AI provider
+	 *
+	 * @param string $action
+	 * @return bool
+	 *
+	 */
+	protected function cliExecuteLocalTool(string $action): bool {
+		$argv = $_SERVER['argv'];
+		$args = array_slice($argv, 2);
+
+		if($action === 'site-info') {
+			$type = (string) ($args[0] ?? '');
+			if(!in_array($type, ['pages', 'schema', 'modules'], true)) {
+				fwrite(STDERR, "ERROR: Usage: php index.php --at-engineer-site-info pages|schema|modules [--refresh]\n");
+				return false;
+			}
+			$refresh = in_array('--refresh', $args, true);
+			echo $this->executeTool('site_info', ['type' => $type, 'refresh' => $refresh]) . "\n";
+			return true;
+		}
+
+		if($action === 'api-docs-list') {
+			echo $this->getApiDocsListJson() . "\n";
+			return true;
+		}
+
+		if($action === 'api-docs-get') {
+			$name = (string) ($args[0] ?? '');
+			if($name === '') {
+				fwrite(STDERR, "ERROR: Usage: php index.php --at-engineer-api-docs-get NAME\n");
+				return false;
+			}
+			echo $this->executeTool('api_docs', ['action' => 'get', 'name' => $name]) . "\n";
+			return true;
+		}
+
+		if($action === 'api-docs-search') {
+			$term = trim(implode(' ', $args));
+			if($term === '') {
+				fwrite(STDERR, "ERROR: Usage: php index.php --at-engineer-api-docs-search TERM\n");
+				return false;
+			}
+			echo $this->searchApiDocsJson($term) . "\n";
+			return true;
+		}
+
+		if($action === 'read-file') {
+			$path = (string) ($args[0] ?? '');
+			if($path === '') {
+				fwrite(STDERR, "ERROR: Usage: php index.php --at-engineer-read-file PATH\n");
+				return false;
+			}
+			echo $this->executeTool('read_file', ['path' => $path]) . "\n";
+			return true;
+		}
+
+		return false;
 	}
 
 	/**
@@ -513,11 +590,14 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	 *
 	 */
 	protected function regenerateSitemap(): void {
+		ob_start();
 		try {
 			$this->at->sitemap->generate();
 			$this->at->sitemap->generateSchema();
 		} catch(\Throwable $e) {
 			// Silent: stale site-map is better than a broken Engineer request
+		} finally {
+			ob_end_clean();
 		}
 	}
 
@@ -542,7 +622,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	 *
 	 */
 	/**
-	 * Extract a one-line description from an API.md file (first non-heading paragraph line)
+	 * Extract a one-line description from an API.md file (first non-heading paragraph)
 	 *
 	 * @param string $file Full path to the API.md file
 	 * @return string Description, or empty string if none found
@@ -550,15 +630,56 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	 */
 	protected function getApiDocDescription(string $file): string {
 		$pastHeading = false;
+		$paragraph = [];
 		foreach(explode("\n", (string) file_get_contents($file)) as $line) {
 			$line = trim($line);
 			if(!$pastHeading) {
-				if(strpos($line, '# ') === 0) $pastHeading = true;
+				if(strpos($line, '# ') === 0 || preg_match('/^=+$/', $line)) $pastHeading = true;
 				continue;
 			}
-			if(strlen($line) && $line[0] !== '#' && $line[0] !== '-') return $line;
+			if($line === '') {
+				if($paragraph) break;
+				continue;
+			}
+			if($line[0] === '#' || $line[0] === '-' || strpos($line, '```') === 0 || strpos($line, '~~~') === 0) {
+				if($paragraph) break;
+				continue;
+			}
+			$paragraph[] = $line;
 		}
-		return '';
+		$description = trim(implode(' ', $paragraph));
+		return $description ? $this->truncateApiDocDescription($description, 240) : '';
+	}
+
+	/**
+	 * Truncate API doc descriptions without treating markdown/code fragments as markup
+	 *
+	 * @param string $description
+	 * @param int $maxLength
+	 * @return string
+	 *
+	 */
+	protected function truncateApiDocDescription(string $description, int $maxLength): string {
+		if(strlen($description) <= $maxLength) return $description;
+
+		$sentence = preg_split('/(?<=[.!?])\s+/', $description, 2);
+		if(!empty($sentence[0]) && strlen($sentence[0]) <= $maxLength) return $sentence[0];
+
+		$short = substr($description, 0, $maxLength + 1);
+		$space = strrpos($short, ' ');
+		if($space !== false && $space > 0) $short = substr($short, 0, $space);
+		return rtrim($short, " \t\n\r\0\x0B,;:") . '…';
+	}
+
+	/**
+	 * Does a documentation name look like a ProcessWire API surface?
+	 *
+	 * @param string $name
+	 * @return bool
+	 *
+	 */
+	protected function isProcessWireApiDocName(string $name): bool {
+		return preg_match('/^[A-Z][A-Za-z0-9_]*$/', $name) === 1;
 	}
 
 	public function listApiDocs(): array {
@@ -574,15 +695,94 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			if(!is_dir($basePath)) continue;
 			foreach(glob($basePath . '*/API.md') ?: [] as $file) {
 				$name = basename(dirname($file));
+				if(!$this->isProcessWireApiDocName($name)) continue;
 				$docs[$name] = $file;
 			}
 			foreach(glob($basePath . '*/*/API.md') ?: [] as $file) {
 				$name = basename(dirname($file));
+				if(!$this->isProcessWireApiDocName($name)) continue;
 				$docs[$name] = $file;
 			}
 		}
 		ksort($docs);
 		return $docs;
+	}
+
+	/**
+	 * Get API docs list data for structured CLI output
+	 *
+	 * @return array
+	 *
+	 */
+	public function getApiDocsListData(): array {
+		$data = [];
+		$root = $this->wire()->config->paths->root;
+		foreach($this->listApiDocs() as $name => $file) {
+			$data[] = [
+				'name' => $name,
+				'description' => $this->getApiDocDescription($file),
+				'file' => strpos($file, $root) === 0 ? substr($file, strlen($root)) : $file,
+			];
+		}
+		return $data;
+	}
+
+	/**
+	 * Get API docs list JSON for CLI output
+	 *
+	 * @return string
+	 *
+	 */
+	public function getApiDocsListJson(): string {
+		return (string) json_encode($this->getApiDocsListData(), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+	}
+
+	/**
+	 * Search API docs and return structured result data
+	 *
+	 * @param string $term
+	 * @return array
+	 *
+	 */
+	public function searchApiDocsData(string $term): array {
+		$term = trim($term);
+		$needle = strtolower($term);
+		$root = $this->wire()->config->paths->root;
+		$matches = [];
+		$totalLimit = 50;
+		$perDocLimit = 5;
+
+		if($needle === '') return $matches;
+
+		foreach($this->listApiDocs() as $name => $file) {
+			$docMatches = 0;
+			$lines = explode("\n", (string) file_get_contents($file));
+			foreach($lines as $index => $line) {
+				if(strpos(strtolower($line), $needle) === false) continue;
+				$matches[] = [
+					'name' => $name,
+					'file' => strpos($file, $root) === 0 ? substr($file, strlen($root)) : $file,
+					'line' => $index + 1,
+					'snippet' => $this->truncateApiDocDescription(trim($line), 240),
+				];
+				$docMatches++;
+				if(count($matches) >= $totalLimit) return $matches;
+				if($docMatches >= $perDocLimit) break;
+			}
+		}
+
+		return $matches;
+	}
+
+	/**
+	 * Search API docs and return JSON for CLI output
+	 *
+	 * @param string $term
+	 * @return string
+	 *
+	 */
+	public function searchApiDocsJson(string $term): string {
+		return (string) json_encode($this->searchApiDocsData($term), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
 	}
 
 	/**
@@ -648,6 +848,10 @@ class AgentToolsEngineer extends AgentToolsHelper {
 					'type' => 'string',
 					'enum' => ['pages', 'schema', 'modules'],
 					'description' => "Use 'pages' for the site page tree, 'schema' for fields and templates, 'modules' for installed modules",
+				],
+				'refresh' => [
+					'type' => 'boolean',
+					'description' => "Regenerate the site map and schema before reading pages or schema",
 				],
 			],
 			'required' => ['type'],
@@ -953,21 +1157,28 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		} else if($name === 'read_file') {
 			$path = (string) ($input['path'] ?? '');
 			$root = $this->wire()->config->paths->root;
-			// Resolve relative paths from site root
+			$rootReal = realpath($root);
+			if($rootReal === false) return "Access denied: unable to resolve ProcessWire root.";
+
 			if(strpos($path, '/') !== 0) $path = $root . $path;
-			// Block path traversal — the only meaningful attack vector here
-			if(strpos($path, '..') !== false) return "Access denied: path traversal not allowed.";
-			if(!is_file($path)) return "File not found: $path";
-			$size = filesize($path);
+			$realPath = realpath($path);
+			if($realPath === false || !is_file($realPath)) return "File not found: $path";
+			if(strpos($realPath . '/', rtrim($rootReal, '/') . '/') !== 0) {
+				return "Access denied: file is outside the ProcessWire root.";
+			}
+
+			$size = filesize($realPath);
 			if($size > 102400) return "File too large ($size bytes). Use eval_php to read specific portions.";
-			return (string) file_get_contents($path);
+			return (string) file_get_contents($realPath);
 		} else if($name === 'site_info') {
 			$type = (string) ($input['type'] ?? '');
+			$refresh = !empty($input['refresh']);
 			$filesPath = $this->at->getFilesPath();
+			if($refresh && ($type === 'pages' || $type === 'schema')) $this->regenerateSitemap();
 			if($type === 'modules') {
 				$stmt = $this->wire()->database->query("SELECT class FROM modules ORDER BY class");
 				$names = $stmt->fetchAll(\PDO::FETCH_COLUMN);
-				return $names ? implode("\n", $names) : 'No modules found.';
+				return (string) json_encode($names ?: [], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
 			} else if($type === 'pages') {
 				$file = $filesPath . 'site-map.json';
 				return is_file($file) ? (string) file_get_contents($file) : 'Site map not found. Run --at-sitemap-generate to generate it.';

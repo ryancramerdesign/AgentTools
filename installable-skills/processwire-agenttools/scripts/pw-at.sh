@@ -17,9 +17,10 @@ Usage:
   scripts/pw-at.sh engineer [--model=N] [--readonly] [--verbose] 'REQUEST'
   scripts/pw-at.sh engineer-migrate [--model=N] [--verbose] 'REQUEST'
 
-Wrapper for Ryan Cramer's AgentTools CLI.
-Preserves the original AgentTools command model while selecting the correct
-runtime for the current environment.
+Optional compatibility wrapper for the AgentTools CLI.
+Normal usage is the direct php index.php --at-* command documented in AGENTS.md.
+Use this wrapper for Docker or similar environments that need DDEV/container
+selection or command-transport adaptation.
 
 Environment overrides:
   PW_AT_RUNNER=auto|host|ddev

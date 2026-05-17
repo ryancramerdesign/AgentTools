@@ -7,7 +7,7 @@ A migration is a PHP file that makes repeatable, transferable changes to a Proce
 Always write the migration first, apply it on development, then transfer to other environments.
 
 1. Write the migration file in `site/assets/at/migrations/`
-2. Apply: `bash .agents/skills/processwire-agenttools/scripts/pw-at.sh migrations-apply`
+2. Apply: `php index.php --at-migrations-apply`
 3. Report the output — confirm success before proceeding
 4. User transfers the file to other environments (rsync, ftp, git)
 5. Apply there via CLI or admin UI (**Setup > Agent Tools**)
@@ -97,24 +97,29 @@ if(!$templates->get('blog')) {
 
 | Command | Purpose |
 |---------|---------|
-| `bash .agents/skills/processwire-agenttools/scripts/pw-at.sh migrations-apply` | Apply all pending |
-| `bash .agents/skills/processwire-agenttools/scripts/pw-at.sh migrations-list` | Show status of all |
-| `bash .agents/skills/processwire-agenttools/scripts/pw-at.sh migrations-test` | Preview without applying |
+| `php index.php --at-migrations-apply` | Apply all pending |
+| `php index.php --at-migrations-list` | Show status of all |
+| `php index.php --at-migrations-test` | Preview without applying |
 
 Migrations can also be applied from the admin: **Setup > Agent Tools**.
+
+If direct PHP commands are unreliable in a Docker or similar environment, the
+compatibility wrapper exposes the same modes as
+`bash .agents/skills/processwire-agenttools/scripts/pw-at.sh migrations-apply`,
+`migrations-list`, and `migrations-test`.
 
 ## Verifying after apply
 
 After applying, confirm the migration worked:
 
 ```bash
-bash .agents/skills/processwire-agenttools/scripts/pw-at.sh migrations-list
+php index.php --at-migrations-list
 ```
 
 Then spot-check the created state via CLI:
 
 ```bash
-bash .agents/skills/processwire-agenttools/scripts/pw-at.sh eval 'echo $templates->get("event")->name . "\n";'
+php index.php --at-eval 'echo $templates->get("event")->name . "\n";'
 ```
 
 Report the output to the user before proceeding.
