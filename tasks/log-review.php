@@ -24,7 +24,7 @@ return [
 			'label' => 'Logs to review',
 			'description' => 'Select one or more logs to review. If none are selected, the agent reviews recently modified logs.',
 			'options' => $logOptions,
-			'style' => "font-family:monospace"
+			'required' => true
 		],
 		'days' => [
 			'type' => 'select',

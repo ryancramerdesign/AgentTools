@@ -21,7 +21,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	const providerOpenAI = 'openai';
 
 	const defaultAnthropicModel = 'claude-sonnet-4-6';
-	const defaultOpenAIModel = 'gpt-4o';
+	const defaultOpenAIModel = 'gpt-5.5';
 
 	/**
 	 * Max tokens to request in each API response
@@ -525,7 +525,13 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			"template already exists) so the migration is accurate. " .
 			"Combine all changes for a single request into one migration file. Do not create multiple " .
 			"migrations for a single request unless the user explicitly asks for them, or unless the " .
-			"changes are technically unrelated and must be applied independently.\n\n" .
+			"changes are technically unrelated and must be applied independently. " .
+			"Write migrations defensively and idempotently: check whether fields, templates, pages, files, " .
+			"or settings already exist before creating, modifying, or deleting them, so the migration can " .
+			"be safely re-run. Order dependent operations carefully. Echo concise success/skip messages " .
+			"for important actions so admin/CLI output is useful. Do not suppress unexpected errors; " .
+			"let them throw or explicitly throw a WireException. If unsure about a ProcessWire API method, " .
+			"option, or current best practice, use api_docs or read_file before writing the migration.\n\n" .
 
 			"ProcessWire API variables available to eval_php: $apiVars.\n\n" .
 
