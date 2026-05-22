@@ -7,7 +7,7 @@ class FieldtypePageEngineer extends Fieldtype implements Module {
 	public static function getModuleInfo() {
 		return [
 			'title' => 'Page Engineer',
-			'version' => 1,
+			'version' => 2,
 			'summary' => 'Agent Tools Page Engineer is an AI agent Fieldtype to help you with any page editing task.',
 			'requires' => [ 'AgentTools' ],
 		];
@@ -210,7 +210,7 @@ class FieldtypePageEngineer extends Fieldtype implements Module {
 		$hasLastEdit = $lastItem && $lastItem->isAgent && !empty((array) $lastItem->get('backupVersions'));
 
 		$at = $this->wire('at'); /** @var AgentTools $at */
-		
+
 		$suspicious = (string) $at->get('engineer_suspicious');
 		if($suspicious && $at->isUserSuspicious()) {
 			$f->attr('disabled', 'disabled');
@@ -220,7 +220,7 @@ class FieldtypePageEngineer extends Fieldtype implements Module {
 			$f->themeColor = 'warning';
 			return;
 		}
-		
+
 		$inputs = [];
 
 		$agents = $at->getAgents();
@@ -270,13 +270,19 @@ class FieldtypePageEngineer extends Fieldtype implements Module {
 			$assetsLoaded = true;
 			$config = $this->wire()->config;
 			$moduleUrl = $config->urls('FieldtypePageEngineer');
+			$agentToolsUrl = $config->urls('AgentTools');
+			$config->scripts->add($agentToolsUrl . 'processing.js');
+			$config->styles->add($agentToolsUrl . 'processing.css');
 			$config->scripts->add($moduleUrl . 'PageEngineerField.js');
 			$config->styles->add($moduleUrl . 'PageEngineerField.css');
-			$config->js('FieldtypePageEngineer', [
-				'processingText' => $this->_('Saving page and processing Engineer request…'),
-				'timeoutText' => $this->_('Please be patient, this may take a minute. If you see a server error, the Engineer is still working — reload the page before resubmitting.'),
-				'thinkingWords' => include(__DIR__ . '/words.php')
-			]);
+			$atjs = $config->js('AgentTools');
+			if(!is_array($atjs)) $atjs = [];
+			$config->js('AgentTools', array_merge($atjs, [
+				'processingText' => $this->_('Saving page and processing engineer request…'),
+				'timeoutText' => $this->_("A response is now taking shape. If a server error appears, ask me about it on the next request and I can help you fix it."),
+				'thinkingWords' => include(__DIR__ . '/words.php'),
+				'formulas' => [ 'Hello ' . ucfirst($this->wire()->user->name) ]
+			]));
 		}
 
 		if(!$f->icon) $f->icon = 'commenting';

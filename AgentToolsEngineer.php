@@ -30,23 +30,23 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	const maxTokens = 8192;
 
 	/**
-	 * Max tool call iterations per ask() to prevent runaway loops
+	 * Default max tool call iterations per ask() to prevent runaway loops
 	 *
 	 */
-	const maxIterations = 10;
+	const defaultMaxIterations = 20;
 
 	/**
 	 * Max characters of eval_php output returned to the AI
 	 *
 	 */
 	const maxOutputLength = 50000;
-	
+
 	/**
 	 * debug mode: log request/response JSON to site/assets/logs/agent-tools-engineer.txt log
 	 *
 	 */
 	const debugMode = false;
-	
+
 	/**
 	 * Max conversation history pairs (user + assistant) to retain
 	 *
@@ -86,6 +86,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	 *  - `context` (string): 'all', 'custom', or 'none' (default: 'all')
 	 *  - `contextItems` (array): Items to include when context='custom': sitemap_pages, sitemap_schema
 	 *  - `history` (array): Prior conversation as [ ['role'=>'user','content'=>'...'], ['role'=>'assistant','content'=>'...'], ... ]
+	 *  - `maxIterations` (int): Max tool-use rounds before stopping
 	 * @return array [ 'response' => string, 'migration' => string|null, 'error' => string|null, 'history' => array ]
 	 *
 	 */
@@ -120,7 +121,9 @@ class AgentToolsEngineer extends AgentToolsHelper {
 
 			$readOnly = isset($options['readOnly']) ? (bool) $options['readOnly'] : (bool) $this->at->get('engineer_readonly');
 			$verbose = !empty($options['verbose']);
+			$maxIterations = $this->getMaxIterations($options);
 			$systemPrompt = isset($options['systemPrompt']) ? $options['systemPrompt'] : $this->buildSystemPrompt($readOnly);
+			$systemPrompt = $this->appendIterationBudget($systemPrompt, $maxIterations);
 			if(array_key_exists('tools', $options)) {
 				$tools = $options['tools'];
 			} else {
@@ -128,7 +131,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			}
 
 			$providerRequest = new AgentToolsRequest();
-			$this->wire($providerRequest); 
+			$this->wire($providerRequest);
 			$providerRequest->setArray([
 				'provider' => $provider,
 				'apiKey' => $apiKey,
@@ -138,7 +141,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 				'tools' => $tools,
 			]);
 
-			for($i = 0; $i < self::maxIterations; $i++) {
+			for($i = 0; $i < $maxIterations; $i++) {
 				$providerRequest->messages = $messages;
 				$response = $this->sendProviderRequest($providerRequest);
 				$toolCalls = $this->extractToolCalls($provider, $response);
@@ -170,13 +173,47 @@ class AgentToolsEngineer extends AgentToolsHelper {
 				}
 			}
 
-			$result['error'] = $this->_('Request exceeded maximum tool call iterations.');
+			$result['error'] = sprintf($this->_('Request exceeded maximum tool-use rounds (%d).'), $maxIterations);
 
 		} catch(\Throwable $e) {
 			$result['error'] = $e->getMessage();
 		}
 
 		return $result;
+	}
+
+	/**
+	 * Get max tool-use iterations for a request
+	 *
+	 * @param array $options
+	 * @return int
+	 *
+	 */
+	protected function getMaxIterations(array $options = []): int {
+		if(isset($options['maxIterations'])) {
+			$value = (int) $options['maxIterations'];
+		} else {
+			$value = (int) $this->at->get('engineer_max_iterations');
+		}
+		if($value < 1) $value = self::defaultMaxIterations;
+		if($value > 100) $value = 100;
+		return $value;
+	}
+
+	/**
+	 * Append tool-use budget instructions to the system prompt
+	 *
+	 * @param string $systemPrompt
+	 * @param int $maxIterations
+	 * @return string
+	 *
+	 */
+	protected function appendIterationBudget(string $systemPrompt, int $maxIterations): string {
+		$budget =
+			"Tool-use budget: You have a maximum of $maxIterations tool-use rounds for this request. " .
+			"Plan accordingly. Gather the most important information early, avoid exploratory loops, " .
+			"and return a useful partial result with follow-up recommendations rather than exhausting the budget trying to be complete.";
+		return rtrim($systemPrompt) . "\n\n" . $budget;
 	}
 
 	/**
@@ -513,6 +550,11 @@ class AgentToolsEngineer extends AgentToolsHelper {
 
 			"When displaying dates or timestamps retrieved via eval_php, always format them as human-readable " .
 			"strings (e.g. date('Y-m-d H:i:s', \$page->modified)) rather than returning raw Unix timestamps.\n\n" .
+
+			"If the user asks about a server error, timeout, HTTP 500 error, or HTTP 504 error that occurred " .
+			"while using AgentTools, refer them to the README.md Troubleshooting section titled " .
+			"\"Engineer timeouts or HTTP 500/504 errors\" and explain that the web server or FastCGI/PHP-FPM " .
+			"timeout may need to be increased for longer Engineer or Task requests.\n\n" .
 
 			"If a request is ambiguous, incomplete, or lacks sufficient context to act on confidently " .
 			"(for example, it references previous context you don't have), ask the user for clarification " .
@@ -1220,13 +1262,44 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	protected function executeEvalPhp(string $code): string {
 		$at = $this->at;
 		extract($this->wire()->fuel->getArray());
+		$errors = [];
+		set_error_handler(function($severity, $message, $file, $line) use(&$errors) {
+			$label = match($severity) {
+				E_WARNING, E_USER_WARNING => 'Warning',
+				E_NOTICE, E_USER_NOTICE => 'Notice',
+				E_DEPRECATED, E_USER_DEPRECATED => 'Deprecated',
+				default => 'PHP message',
+			};
+			$key = "$label|$message|$file|$line";
+			if(!isset($errors[$key])) {
+				$errors[$key] = [
+					'label' => $label,
+					'message' => $message,
+					'file' => $file,
+					'line' => $line,
+					'count' => 0,
+				];
+			}
+			$errors[$key]['count']++;
+			return true;
+		});
 		ob_start();
 		try {
 			eval('?>' . '<?php namespace ProcessWire; ' . $code);
 		} catch(\Throwable $e) {
 			echo "ERROR: " . $e->getMessage();
+		} finally {
+			restore_error_handler();
 		}
 		$output = ob_get_clean();
+		if(count($errors)) {
+			$errorLines = [];
+			foreach($errors as $error) {
+				$count = $error['count'] > 1 ? " ({$error['count']} times)" : '';
+				$errorLines[] = "{$error['label']}: {$error['message']} in {$error['file']}:{$error['line']}$count";
+			}
+			$output .= (strlen($output) ? "\n" : '') . implode("\n", $errorLines);
+		}
 		if(strlen($output) > self::maxOutputLength) {
 			$output = substr($output, 0, self::maxOutputLength) . "\n[output truncated]";
 		}
@@ -1425,7 +1498,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	public function getConfigInputfields(InputfieldWrapper $inputfields): void {
 		$modules = $this->wire()->modules;
 		$datalists = include(__DIR__ . '/datalists.php');
-	
+
 		if(!$this->at->engineer_model) {
 			// populate to primary agent fields, useful after an import
 			/** @var AgentToolsAgent $agent */
@@ -1434,24 +1507,32 @@ class AgentToolsEngineer extends AgentToolsHelper {
 				$keys = [
 					'api_key' => 'apiKey',
 					'model' => 'model',
-					'label' => 'label', 
-					'endpoint' => 'endpointUrl', 
+					'label' => 'label',
+					'endpoint' => 'endpointUrl',
 				];
 				foreach($keys as $moduleKey => $agentKey) {
 					$moduleKey = 'engineer_' . $moduleKey;
 					$moduleValue = $this->at->get($moduleKey);
-					if(empty($moduleValue)) $this->at->set($moduleKey, $agent->get($agentKey)); 
+					if(empty($moduleValue)) $this->at->set($moduleKey, $agent->get($agentKey));
 				}
 			}
 		}
-		
+
 		/** @var InputfieldFieldset $outerFs */
 		$outerFs = $modules->get('InputfieldFieldset');
 		$outerFs->label = $this->_('Engineer');
 		$outerFs->icon = 'commenting';
-		$outerFs->description = 
-			$this->_('Configure the primary AI agent here.') . ' ' . 
-			$this->_('You can also edit and add more AI agents at [Setup > AgentTools > Agents](../setup/agent-tools/agents/).'); 
+
+		$primaryFs = $modules->get('InputfieldFieldset');
+		$primaryFs->label = $this->_('Primary Agent');
+		$primaryFs->themeOffset = 1;
+		$outerFs->add($primaryFs);
+
+		$primaryFs->description =
+			$this->_('Configure the primary AI agent here.') . ' ' .
+			$this->_('You can also edit and add more AI agents at [Setup > AgentTools > Agents](../setup/agent-tools/agents/).') . ' ' .
+			$this->_('If you do not need AI tools in your admin then it is not necessary to add an agent here.') . ' ' .
+			$this->_('You can still use AgentTools in dev environments with local CLI agents or equivalent.');
 
 		/** @var InputfieldSelect $f */
 		$f = $modules->get('InputfieldSelect');
@@ -1461,7 +1542,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		$f->addOption(self::providerOpenAI, $this->_('OpenAI-compatible'));
 		$f->val($this->at->get('engineer_provider') ?: self::providerAnthropic);
 		$f->columnWidth = 50;
-		$outerFs->add($f);
+		$primaryFs->add($f);
 
 		/** @var InputfieldText $f */
 		$f = $modules->get('InputfieldText');
@@ -1470,7 +1551,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		$f->label = $this->_('API Key');
 		$f->val($this->at->get('engineer_api_key') ?: '');
 		$f->columnWidth = 50;
-		$outerFs->add($f);
+		$primaryFs->add($f);
 
 		$f = $modules->get('InputfieldText');
 		$f->attr('name', 'engineer_model');
@@ -1484,8 +1565,8 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		}
 		$f->appendMarkup = "<datalist id='model-list'>$o</datalist>";
 		$f->columnWidth = 50;
-		$outerFs->add($f);
-		
+		$primaryFs->add($f);
+
 		$f = $modules->get('InputfieldText');
 		$f->attr('name', 'engineer_label');
 		$f->attr('list', 'label-list');
@@ -1498,7 +1579,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		}
 		$f->appendMarkup = "<datalist id='label-list'>$o</datalist>";
 		$f->columnWidth = 50;
-		$outerFs->add($f);
+		$primaryFs->add($f);
 
 		/** @var InputfieldURL $f */
 		$f = $modules->get('InputfieldURL');
@@ -1511,7 +1592,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			$o .= "<option value='$endpointUrl' label='$endpointLabel'>";
 		}
 		$f->appendMarkup = "<datalist id='endpoint-list'>$o</datalist>";
-		$outerFs->add($f);
+		$primaryFs->add($f);
 
 		/** @var InputfieldToggle $f */
 		$f = $modules->get('InputfieldToggle');
@@ -1532,6 +1613,19 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		$f->attr('max', 100);
 		$val = (int) $this->at->get('engineer_mem_qty');
 		$f->val($val ?: $this->maxHistoryPairs);
+		$f->columnWidth = 50;
+		$outerFs->add($f);
+
+		/** @var InputfieldInteger $f */
+		$f = $modules->get('InputfieldInteger');
+		$f->attr('name', 'engineer_max_iterations');
+		$f->label = $this->_('Maximum tool-use rounds');
+		$f->description = $this->_('Maximum number of AI/tool response rounds allowed before AgentTools stops a request. Increase this for longer tasks that need more tool use, but higher values may run into web server or PHP timeouts.');
+		$f->notes = $this->_('The Engineer is told about this budget in its system prompt so it can plan its work.');
+		$f->attr('min', 1);
+		$f->attr('max', 100);
+		$val = (int) $this->at->get('engineer_max_iterations');
+		$f->val($val ?: self::defaultMaxIterations);
 		$f->columnWidth = 50;
 		$outerFs->add($f);
 
@@ -1576,7 +1670,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		$f->attr('name', 'engineer_suspicious_log');
 		$f->label = $this->_('Suspicious prompt log');
 		$f->description = $this->_('One entry per line: username | timestamp | prompt. Delete a line to unblock that user. Entries older than 1 hour are ignored for blocking but kept for your review.');
-		$f->notes = $this->_('This is populated automatically by the AI agent, you do not need to enter anything in here.'); 
+		$f->notes = $this->_('This is populated automatically by the AI agent, you do not need to enter anything in here.');
 		$f->attr('rows', 5);
 		$f->val($this->at->get('engineer_suspicious_log') ?: '');
 		$f->showIf = 'engineer_suspicious!=""';
@@ -1594,7 +1688,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			$this->_('This field contains your agents configuration in pipe-separated format (one agent per line).') . ' ' .
 			$this->_('You can copy this value to transfer your agent configuration to another installation, or paste a configuration from another installation here.');
 		$f->attr('rows', 6);
-		$f->val($this->at->getAgents()->getString()); 
+		$f->val($this->at->getAgents()->getString());
 		$outerFs->add($f);
 		$inputfields->add($outerFs);
 	}

@@ -98,7 +98,7 @@ These constants are defined on `PageEngineerField` and used for the `scope` sett
   with selectors or use in templates. Reading the field on the front end returns a
   `PageEngineerItems` object which you can iterate or render as markup.
 - The field is designed for use in the page editor. The agent runs after the page is saved
-  and may take up to 30 seconds. A processing indicator appears in the browser after 10 seconds.
+  and may take a few minutes. A processing indicator appears in the browser after a brief delay.
 - The `onlyFields` array uses field names (strings), not database IDs. These are advisory
   preferred edit targets in the AI instructions, not a security boundary.
 - If `backup` is true and PagesVersions is not installed, the backup step is silently skipped.

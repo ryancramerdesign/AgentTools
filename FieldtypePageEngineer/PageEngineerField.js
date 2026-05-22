@@ -1,50 +1,35 @@
 /**
  * FieldtypePageEngineer page-editor JS
- * 
+ *
  * Preview overlay: PageEngineer.showProcessingOverlay()
  *
  */
 
+function atEnsureProcessing() {
+	if(window.AgentToolsProcessing) return true;
+	var scriptUrl = '';
+	$('script[src*="/FieldtypePageEngineer/PageEngineerField.js"]').each(function() {
+		scriptUrl = this.src;
+	});
+	if(!scriptUrl) return false;
+	var cssUrl = scriptUrl.replace(/FieldtypePageEngineer\/PageEngineerField\.js.*/, 'processing.css');
+	if(!$('link[href*="/AgentTools/processing.css"]').length) {
+		$('head').append('<link rel="stylesheet" href="' + cssUrl + '">');
+	}
+	scriptUrl = scriptUrl.replace(/FieldtypePageEngineer\/PageEngineerField\.js.*/, 'processing.js');
+	$.ajax({ url: scriptUrl, dataType: 'script', async: false, cache: true });
+	return !!window.AgentToolsProcessing;
+}
+
 var PageEngineer = {
 	escapeHtml: function(text) {
-		return $('<div>').text(text).html();
+		if(!atEnsureProcessing()) return $('<div>').text(text).html();
+		return AgentToolsProcessing.escapeHtml(text);
 	},
 
 	showProcessingOverlay: function() {
-		if($('#at-processing-overlay').length) return; // already visible
-		var cfg = ProcessWire.config.FieldtypePageEngineer || {};
-		var words = cfg.thinkingWords || [];
-		var thinkingHtml = '';
-		if(words.length >= 2) {
-			var idx1 = Math.floor(Math.random() * words.length);
-			var idx2;
-			do { idx2 = Math.floor(Math.random() * words.length); } while(idx2 === idx1);
-			thinkingHtml = '<p class="at-thinking-words" style="display:none">' + PageEngineer.escapeHtml(words[idx1] + ' and ' + words[idx2] + '\u2026') + '</p>';
-		}
-		var processingText = PageEngineer.escapeHtml(cfg.processingText || 'Saving page and processing Engineer request\u2026');
-		var timeoutText = PageEngineer.escapeHtml(cfg.timeoutText || 'Please be patient, this may take a minute. If you see a server error, the Engineer is still working \u2014 reload the page before resubmitting.');
-		$('body').append(
-			'<div id="at-processing-overlay">' +
-				'<div id="at-processing-box">' +
-					'<div uk-spinner="ratio: 2"></div>' +
-					'<p><strong>' + processingText + '</strong></p>' +
-					thinkingHtml +
-					'<p class="at-processing-note">' + timeoutText + '</p>' +
-				'</div>' +
-			'</div>'
-		);
-		if(thinkingHtml) {
-			var $tw = $('#at-processing-box .at-thinking-words');
-			function atPickWords() {
-				var idx1 = Math.floor(Math.random() * words.length);
-				var idx2;
-				do { idx2 = Math.floor(Math.random() * words.length); } while(idx2 === idx1);
-				$tw.text(words[idx1] + ' and ' + words[idx2] + '\u2026');
-			}
-			function atFadeIn() { $tw.fadeIn('slow', function() { setTimeout(atFadeOut, 3000); }); }
-			function atFadeOut() { $tw.fadeOut('slow', function() { atPickWords(); atFadeIn(); }); }
-			atFadeIn();
-		}
+		if(!atEnsureProcessing()) return;
+		AgentToolsProcessing.showOverlay(ProcessWire.config.AgentTools || {});
 	}
 };
 
@@ -59,6 +44,6 @@ $(function() {
 		setTimeout(function() {
 			if(e.defaultPrevented) return;
 			PageEngineer.showProcessingOverlay();
-		}, 0);
+		}, 1500);
 	});
 });
