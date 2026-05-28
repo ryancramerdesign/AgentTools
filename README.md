@@ -46,6 +46,11 @@ admin application (Setup > Agent Tools), currently with the following features:
   that were created by the Engineer or by your AI agent using the command line tools of
   this module.
 
+- **Tasks**: Run predefined Engineer workflows from the admin, such as security scans,
+  log reviews, SEO/content reviews, migration reviews, accessibility checks, and static
+  phrase translation for multi-language sites. Custom prompt-based tasks can also be added
+  for common site-specific workflows.
+
 ### Page Engineer (AI assistant in the page editor)
 
 The **Page Engineer** is an AI content assistant that lives directly inside the ProcessWire
@@ -159,8 +164,13 @@ AI coding agents how to use the CLI and migration system. Agents that support th
 
 To install the skill to your project root, check "Install agent skill to project" in the module
 config (Modules > AgentTools) and submit. This copies the skill files to
-`.agents/skills/processwire-agenttools/` in your project root, and will keep them updated
-automatically on future module upgrades.
+`.agents/skills/processwire-agenttools/` in your project root. If the skill is already
+installed, AgentTools refreshes that copy during future module upgrades.
+
+The installed skill is a copied convenience package. If an agent is working in a project that
+contains `/site/modules/AgentTools/`, the module's root `AGENTS.md` and packaged skill source in
+`/site/modules/AgentTools/installable-skills/processwire-agenttools/` should be treated as the
+current source of truth.
 
 ### Migrations feature
 
@@ -237,6 +247,13 @@ background. By reloading or revisiting the page, you may find that the requested
 This error usually happens because you are using Apache + FastCGI, nginx + PHP-FPM, or mod_fcgid, and they have
 a 30 second timeout by default. 
 
+AgentTools also has an **AI request timeout (seconds)** setting in the module configuration.
+This controls the cURL timeout for each AI provider request and defaults to 300 seconds. When
+an Engineer or Task request starts, AgentTools also attempts to extend PHP's execution time
+limit to this value plus a small buffer with `set_time_limit()`. These settings do not override
+web server, FastCGI, PHP-FPM, or proxy timeouts, so the server settings below may still need to
+be raised for long requests.
+
 #### Correcting the issue in Apache + FastCGI
 To correct the error in Apache + FastCGI, you need to edit the web server settings (http.conf). On the line that configures FastCGI
 you need to add or update the `-idle-timeout` setting to a value higher than 30 seconds. We use `-idle-timeout 300`.
@@ -310,7 +327,8 @@ from the command line without needing to enter an interactive session.
 php index.php --at-eval 'echo wire()->pages->count() . " pages\n";'
 ```
 
-**`--at-stdin` example** — useful for multi-line code:
+**`--at-stdin` example** — useful for multi-line code. Snippets may include an opening
+`<?php` tag when piping a normal PHP file:
 ```
 cat <<'PHP' | php index.php --at-stdin
 $t = new Template();

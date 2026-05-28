@@ -138,7 +138,18 @@ class AgentToolsTasks extends WireArray {
 		}
 
 		$request = $task->renderPrompt($input);
-		$readOnly = array_key_exists('readOnly', $options) ? (bool) $options['readOnly'] : $task->mode === 'review';
+		if(array_key_exists('readOnly', $options)) {
+			$readOnly = (bool) $options['readOnly'];
+		} else {
+			$readOnly = $task->mode === 'review';
+			foreach($task->readOnlyWhen as $name => $value) {
+				if(!array_key_exists($name, $input)) continue;
+				if((string) $input[$name] === (string) $value) {
+					$readOnly = true;
+					break;
+				}
+			}
+		}
 		$options['readOnly'] = $readOnly;
 		if(!isset($options['maxIterations']) && (int) $task->maxIterations > 0) {
 			$options['maxIterations'] = (int) $task->maxIterations;

@@ -7,9 +7,17 @@ description: Provides ProcessWire CLI and migration workflows for sites using th
 
 CLI access to the ProcessWire API and a file based migration system.
 
-Treat the site's `AGENTS.md` file as authoritative when it differs from this
-skill. These notes are a portable helper for agents, not the source of truth for
-the module.
+## Source Of Truth
+
+This installed skill is a copied convenience package. If this project contains
+`site/modules/AgentTools/`, prefer that module's root `AGENTS.md` for AgentTools
+development and current operating instructions. The packaged source files in
+`site/modules/AgentTools/installable-skills/processwire-agenttools/` may also be
+newer than this installed copy.
+
+Use this installed skill as a portable helper when the module checkout is not yet
+known or available, or when you only need the standard ProcessWire CLI and
+migration workflow.
 
 The module registers `$at` as a ProcessWire API variable (`wire('at')`).
 

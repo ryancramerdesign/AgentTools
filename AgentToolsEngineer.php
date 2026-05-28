@@ -36,6 +36,12 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	const defaultMaxIterations = 20;
 
 	/**
+	 * Default timeout for AI provider API requests, in seconds
+	 *
+	 */
+	const defaultRequestTimeout = 300;
+
+	/**
 	 * Max characters of eval_php output returned to the AI
 	 *
 	 */
@@ -94,6 +100,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 
 		$this->savedMigration = null;
 		$result = ['response' => '', 'migration' => null, 'error' => null, 'history' => []];
+		$this->extendPhpTimeLimit();
 
 		if($this->at->get('engineer_suspicious') === 'all' && $this->at->isUserSuspicious()) {
 			$result['response'] = $this->_('Your access to the Engineer has been temporarily suspended due to a previous suspicious request.');
@@ -1085,7 +1092,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			$payload = array_merge($payload, array_diff_key($options['anthropic'], $reserved));
 		}
 
-		$timeout = isset($options['timeout']) ? (int) $options['timeout'] : 120;
+		$timeout = isset($options['timeout']) ? (int) $options['timeout'] : $this->getRequestTimeout();
 
 		return $this->curlPost(
 			$request->endpoint ?: 'https://api.anthropic.com/v1/messages',
@@ -1143,7 +1150,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			}
 		}
 
-		$timeout = isset($options['timeout']) ? (int) $options['timeout'] : 120;
+		$timeout = isset($options['timeout']) ? (int) $options['timeout'] : $this->getRequestTimeout();
 
 		return $this->curlPost(
 			$endpoint,
@@ -1442,7 +1449,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	 * @param string $url
 	 * @param array $payload Request body (will be JSON encoded)
 	 * @param array $headers HTTP headers in "Name: value" format
-	 * @param int $timeout Request timeout in seconds (default 120)
+	 * @param int $timeout Request timeout in seconds
 	 * @return array Decoded JSON response
 	 * @throws WireException on network error, non-JSON response, or HTTP error status
 	 *
@@ -1493,6 +1500,27 @@ class AgentToolsEngineer extends AgentToolsHelper {
 
 			return $data;
 		}
+	}
+
+	/**
+	 * Get AI provider request timeout in seconds
+	 *
+	 * @return int
+	 *
+	 */
+	protected function getRequestTimeout(): int {
+		$timeout = (int) $this->at->get('engineer_request_timeout');
+		return $timeout > 0 ? $timeout : self::defaultRequestTimeout;
+	}
+
+	/**
+	 * Extend PHP's execution time limit for long AI requests
+	 *
+	 */
+	protected function extendPhpTimeLimit(): void {
+		if(!function_exists('set_time_limit')) return;
+		$seconds = $this->getRequestTimeout() + 60;
+		@set_time_limit($seconds);
 	}
 
 	/**
@@ -1632,6 +1660,19 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		$f->attr('max', 100);
 		$val = (int) $this->at->get('engineer_max_iterations');
 		$f->val($val ?: self::defaultMaxIterations);
+		$f->columnWidth = 50;
+		$outerFs->add($f);
+
+		/** @var InputfieldInteger $f */
+		$f = $modules->get('InputfieldInteger');
+		$f->attr('name', 'engineer_request_timeout');
+		$f->label = $this->_('AI request timeout (seconds)');
+		$f->description = $this->_('Maximum time to wait for each AI provider API request. Longer translation or analysis tasks may need this to match your PHP/web server timeout settings.');
+		$f->notes = $this->_('Default is 300 seconds. Use 600 seconds only when your PHP and web server timeouts are also configured to allow long requests.');
+		$f->attr('min', 30);
+		$f->attr('max', 1200);
+		$val = (int) $this->at->get('engineer_request_timeout');
+		$f->val($val ?: self::defaultRequestTimeout);
 		$f->columnWidth = 50;
 		$outerFs->add($f);
 

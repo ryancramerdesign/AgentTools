@@ -15,7 +15,7 @@ class ProcessAgentTools extends Process {
 		return [
 			'title' => 'Agent Tools',
 			'summary' => 'Admin interface for AgentTools migrations and AI engineer.',
-			'version' => 8,
+			'version' => 9,
 			'author' => 'Claude (Anthropic), GPT 5.5 Codex and Ryan Cramer',
 			'icon' => 'at',
 			'requires' => 'AgentTools',

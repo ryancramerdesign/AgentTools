@@ -65,6 +65,9 @@ PHP
 The single-quoted delimiter (`<<'PHP'`) prevents the shell from interpreting
 `$variables`, so PHP variables pass through untouched.
 
+`--at-stdin` also accepts normal PHP file contents with an opening `<?php` tag,
+so generated PHP files can be piped directly.
+
 ---
 
 ## Site map

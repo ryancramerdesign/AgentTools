@@ -1,5 +1,39 @@
 # Changelog
 
+## Version 15
+
+### Tasks
+
+- Added **Static phrase translation**, a built-in Task for translating ProcessWire static
+  phrases found in PHP files via LanguageSupport `LanguagePorter`.
+- The translation task requires ProcessWire 3.0.264+ and LanguageSupport with at least one
+  non-default language; unmet requirements are reported before any AI request is made.
+- Translation imports use `LanguagePorter` CSV export/import, `include=untranslated`, and a
+  configurable batch limit so large modules can be translated over multiple runs.
+- Task prompts now tell agents to preserve placeholders, hashes, file paths, CSV structure,
+  plural/context distinctions, markdown links, and product names; agents may use `=` when a
+  translated value should intentionally remain identical to the default phrase.
+- Tasks can define generic requirements and input-dependent read-only behavior; review-only
+  modes can inspect data without allowing migrations/imports.
+- The Tasks screen now opens to **Built-in** tasks before **Custom** tasks.
+- "Run again" now pre-populates the task form with the last submitted values for that task.
+
+### Engineer timeouts
+
+- Added an **AI request timeout (seconds)** module setting; the default is 300 seconds and can
+  be increased for long-running Engineer or Task requests.
+- Engineer requests now call `set_time_limit()` defensively using the configured AI request
+  timeout plus a small buffer, reducing the need to edit `php.ini` for long requests.
+
+### CLI and skills
+
+- `--at-stdin` and `--at-eval` now accept whole PHP-file style input with an opening
+  `<?php` tag, including files with leading `declare(...)` statements or an explicit namespace.
+- The installed AgentTools skill now includes a **Source Of Truth** note directing agents to
+  `site/modules/AgentTools/AGENTS.md` and the packaged skill source when available.
+
+---
+
 ## Version 12
 
 ### Suspicious prompt reporting (tattletale feature)

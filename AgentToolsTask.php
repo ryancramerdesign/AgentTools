@@ -13,6 +13,8 @@
  * @property string $mode
  * @property array $inputs
  * @property string $prompt
+ * @property array $requires
+ * @property array $readOnlyWhen
  * @property bool|int $builtIn
  * @property bool|int $admin
  * @property bool|int $scheduleable
@@ -32,6 +34,8 @@ class AgentToolsTask extends WireData {
 		'mode' => 'review',
 		'inputs' => [],
 		'prompt' => '',
+		'requires' => [],
+		'readOnlyWhen' => [],
 		'builtIn' => 0,
 		'admin' => 1,
 		'scheduleable' => 0,
@@ -137,5 +141,25 @@ class AgentToolsTask extends WireData {
 	public function getConfigInputfields(?InputfieldWrapper $inputfields = null) {
 		if($inputfields === null) $inputfields = $this->wire()->modules->get('InputfieldForm');
 		return $inputfields->importArray($this->inputs);
+	}
+
+	/**
+	 * Does this task require LanguageSupport?
+	 *
+	 * @return bool
+	 *
+	 */
+	public function requiresLanguageSupport(): bool {
+		return !empty($this->requires['languages']);
+	}
+
+	/**
+	 * Minimum ProcessWire version required by this task, or blank when none
+	 *
+	 * @return string
+	 *
+	 */
+	public function requiresProcessWireVersion(): string {
+		return isset($this->requires['processWireVersion']) ? trim((string) $this->requires['processWireVersion']) : '';
 	}
 }

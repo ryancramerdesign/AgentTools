@@ -58,6 +58,9 @@ PHP
 
 Without the single-quoted delimiter, bash expands `$items`, `$item`, etc. before PHP sees them — causing silent failures or empty output.
 
+`--at-stdin` also accepts normal PHP file contents with an opening `<?php` tag,
+so generated PHP files can be piped directly.
+
 The `ProcessWire` namespace is injected automatically, same as `--at-eval`.
 
 **Prefer `--at-stdin` over `--at-eval`** for anything beyond a trivial one-liner.

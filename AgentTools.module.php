@@ -23,6 +23,7 @@
  * @property string $engineer_instructions
  * @property int $engineer_mem_qty
  * @property int $engineer_max_iterations
+ * @property int $engineer_request_timeout
  * @property string $engineer_additional_models
  *
  */
@@ -33,7 +34,7 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 			'title' => 'Agent Tools',
 			'summary' => "Enables AI coding agents to access ProcessWire's API and provides a database migration system.",
 			'icon' => 'at',
-			'version' => 14,
+			'version' => 15,
 			'author' => 'Ryan Cramer, Claude (Anthropic), GPT 5.5 Codex',
 			'requires' => 'ProcessWire>=3.0.255, PHP>=8.0.0',
 			'installs' => 'ProcessAgentTools, FieldtypePageEngineer',
@@ -57,9 +58,9 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 	 */
 	protected $helpers = [
 		'migrations' => null,
-		'skills' => null,
 		'sitemap' => null,
 		'engineer' => null,
+		'skills' => null,
 	];
 
 	/**
@@ -84,7 +85,7 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 		$keys = [
 			'provider', 'api_key', 'model', 'endpoint',
 			'label', 'readonly', 'additional_models',
-			'instructions', 'mem_qty', 'max_iterations',
+			'instructions', 'mem_qty', 'max_iterations', 'request_timeout',
 			'suspicious', 'suspicious_email', 'suspicious_log',
 		];
 		foreach($keys as $key) {
@@ -227,7 +228,7 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 	/**
 	 * Evaluate PHP code string in the context of PW API variables
 	 *
-	 * @param string $code PHP code to evaluate (without opening <?php tag)
+	 * @param string $code PHP code to evaluate, optionally with opening <?php tag
 	 * @param array $fuel ProcessWire API variables
 	 * @return bool
 	 *
@@ -235,7 +236,16 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 	protected function cliEval($code, array $fuel) {
 		$at = $this;
 		extract($fuel);
-		$code = '?>' . '<?php namespace ProcessWire; ' . $code;
+		$code = $this->normalizeCliEvalCode($code);
+		$declare = '';
+		while(preg_match('/^\s*(declare\s*\([^)]*\)\s*;)\s*/i', $code, $matches)) {
+			$declare .= $matches[1] . ' ';
+			$code = substr($code, strlen($matches[0]));
+		}
+		if(!preg_match('/^\s*namespace\s+/i', $code)) {
+			$code = 'namespace ProcessWire; ' . $code;
+		}
+		$code = $declare . $code;
 		try {
 			eval($code);
 			return true;
@@ -244,6 +254,23 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 			echo "  Line: " . $e->getLine() . "\n";
 			return false;
 		}
+	}
+
+	/**
+	 * Normalize CLI eval code from inline snippets, stdin, or whole PHP files
+	 *
+	 * @param string $code
+	 * @return string
+	 *
+	 */
+	protected function normalizeCliEvalCode($code) {
+		$code = (string) $code;
+		$code = preg_replace('/^\xEF\xBB\xBF/', '', $code);
+		$code = ltrim($code);
+		if(strpos($code, '<?') === 0) {
+			$code = preg_replace('/^<\?(?:php)?(?:\s+|$)/i', '', $code, 1);
+		}
+		return $code;
 	}
 
 	/**

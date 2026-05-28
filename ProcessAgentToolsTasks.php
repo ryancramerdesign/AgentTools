@@ -32,8 +32,8 @@ class ProcessAgentToolsTasks extends ProcessAgentToolsHelper {
 		$tabsItems = [];
 
 		$tasks = [
-			'Custom' => [],
 			'Built-in' => [],
+			'Custom' => [],
 		];
 
 		foreach($this->at->getTasks() as $task) {
@@ -119,6 +119,13 @@ class ProcessAgentToolsTasks extends ProcessAgentToolsHelper {
 			$session->error($this->_('This task is not available in the admin.'));
 			$session->location($parentUrl);
 		}
+		$requirementsError = $this->getTaskRequirementsError($task);
+		if($requirementsError) {
+			$this->headline(sprintf($this->_('Run task: %s'), $task->title));
+			$this->breadcrumb($parentUrl, $this->label('tasks'));
+			$this->error($requirementsError);
+			return '';
+		}
 		$this->headline(sprintf($this->_('Run task: %s'), $task->title));
 		$this->breadcrumb($parentUrl, $this->label('tasks'));
 		if(!$this->at->getPrimaryAgent()) {
@@ -130,6 +137,7 @@ class ProcessAgentToolsTasks extends ProcessAgentToolsHelper {
 			return '';
 		}
 		$form = $task->getConfigInputfields();
+		$this->populateTaskFormFromLastRun($task, $form);
 		$this->populateTaskFormFromQuery($task, $form);
 		$form->attr('method', 'post');
 		$this->addTaskAgentSelect($form);
@@ -213,10 +221,17 @@ class ProcessAgentToolsTasks extends ProcessAgentToolsHelper {
 		$tasksUrl = $adminUrl . 'tasks/';
 		$out = '';
 
+		$requirementsError = $this->getTaskRequirementsError($task);
+		if($requirementsError) {
+			$this->error($requirementsError);
+			return '';
+		}
+
 		$values = [];
 		foreach(array_keys($task->inputs) as $name) {
 			$values[$name] = $form->getValueByName($name);
 		}
+		$this->wire()->session->set($this->getTaskInputKey($task), $values);
 
 		$f = $form->getByName('tasks_model_index');
 		$modelIndex = $f ? $f->val() : false;
@@ -281,6 +296,33 @@ class ProcessAgentToolsTasks extends ProcessAgentToolsHelper {
 		$outForm->val($out);
 
 		return $outForm->render() . $this->renderTaskReplyForm($task, $modelIndex, $result);
+	}
+
+	/**
+	 * Get unmet task requirements error, or blank if requirements are met
+	 *
+	 * @param AgentToolsTask $task
+	 * @return string
+	 *
+	 */
+	protected function getTaskRequirementsError(AgentToolsTask $task): string {
+		$minVersion = $task->requiresProcessWireVersion();
+		if($minVersion !== '' && version_compare($this->wire()->config->version, $minVersion, '<')) {
+			return sprintf(
+				$this->_('This task requires ProcessWire %s or newer.'),
+				$minVersion
+			);
+		}
+		if($task->requiresLanguageSupport()) {
+			$languages = $this->wire('languages');
+			if(!$languages) return $this->_('This task requires LanguageSupport to be installed.');
+			foreach($languages as $language) {
+				/** @var Language $language */
+				if(!$language->isDefault()) return '';
+			}
+			return $this->_('This task requires at least one non-default language.');
+		}
+		return '';
 	}
 
 	/**
@@ -362,6 +404,34 @@ class ProcessAgentToolsTasks extends ProcessAgentToolsHelper {
 	 */
 	protected function getTaskHistoryKey(AgentToolsTask $task): string {
 		return 'at_task_history_' . $task->name;
+	}
+
+	/**
+	 * Get session key for last submitted task input values
+	 *
+	 * @param AgentToolsTask $task
+	 * @return string
+	 *
+	 */
+	protected function getTaskInputKey(AgentToolsTask $task): string {
+		return 'at_task_input_' . $task->name;
+	}
+
+	/**
+	 * Populate task form defaults from last submitted values
+	 *
+	 * @param AgentToolsTask $task
+	 * @param InputfieldWrapper $form
+	 *
+	 */
+	protected function populateTaskFormFromLastRun(AgentToolsTask $task, InputfieldWrapper $form): void {
+		$values = $this->wire()->session->get($this->getTaskInputKey($task));
+		if(!is_array($values)) return;
+		foreach($values as $name => $value) {
+			if(!array_key_exists($name, $task->inputs)) continue;
+			$f = $form->getChildByName($name);
+			if($f) $f->val($value);
+		}
 	}
 
 	/**
