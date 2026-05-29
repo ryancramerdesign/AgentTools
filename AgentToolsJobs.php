@@ -239,6 +239,7 @@ class AgentToolsJobs extends AgentToolsHelper {
 		$prompt = trim((string) ($job['prompt'] ?? ''));
 		if($prompt === '') throw new WireException('Engineer job has no prompt.');
 		$options = $this->getAgentOptions($job);
+		$options['backgroundJob'] = true;
 		if(isset($job['readOnly'])) $options['readOnly'] = (bool) $job['readOnly'];
 		if(isset($job['dryRun'])) $options['dryRun'] = (bool) $job['dryRun'];
 		if(!empty($job['history']) && is_array($job['history'])) $options['history'] = $job['history'];
@@ -264,6 +265,7 @@ class AgentToolsJobs extends AgentToolsHelper {
 		$input = $job['taskInput'] ?? [];
 		if(!is_array($input)) $input = [];
 		$options = $this->getAgentOptions($job);
+		$options['backgroundJob'] = true;
 		if(isset($job['readOnly'])) $options['readOnly'] = (bool) $job['readOnly'];
 		if(isset($job['dryRun'])) $options['dryRun'] = (bool) $job['dryRun'];
 		if(isset($job['maxIterations'])) $options['maxIterations'] = (int) $job['maxIterations'];

@@ -101,7 +101,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 
 		$this->savedMigration = null;
 		$result = ['response' => '', 'migration' => null, 'error' => null, 'history' => []];
-		$this->extendPhpTimeLimit();
+		$this->extendPhpTimeLimit($options);
 
 		if($this->at->get('engineer_suspicious') === 'all' && $this->at->isUserSuspicious()) {
 			$result['response'] = $this->_('Your access to the Engineer has been temporarily suspended due to a previous suspicious request.');
@@ -1543,9 +1543,13 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	 * Extend PHP's execution time limit for long AI requests
 	 *
 	 */
-	protected function extendPhpTimeLimit(): void {
+	protected function extendPhpTimeLimit(array $options = []): void {
 		if(!function_exists('set_time_limit')) return;
-		$seconds = $this->getRequestTimeout() + 60;
+		$requestTimeout = $this->getRequestTimeout();
+		$seconds = $requestTimeout + 60;
+		if(!empty($options['backgroundJob'])) {
+			$seconds = max($requestTimeout * 2, 1800);
+		}
 		@set_time_limit($seconds);
 	}
 

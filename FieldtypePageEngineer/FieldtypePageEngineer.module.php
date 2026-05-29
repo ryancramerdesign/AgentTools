@@ -459,6 +459,7 @@ class FieldtypePageEngineer extends Fieldtype implements Module {
 			'model' => $agent->model,
 			'endpoint' => $agent->endpointUrl,
 			'dryRun' => $dryRun,
+			'backgroundJob' => !empty($options['backgroundJob']),
 		]);
 
 		$responseText = $result['response'] ?: ($result['error'] ? $this->_('Error: ') . $result['error'] : $this->_('No response received.'));
@@ -572,6 +573,7 @@ class FieldtypePageEngineer extends Fieldtype implements Module {
 			$options = [];
 			if(!empty($job['history']) && is_array($job['history'])) $options['history'] = $job['history'];
 			if(isset($job['dryRun'])) $options['dryRun'] = (bool) $job['dryRun'];
+			$options['backgroundJob'] = true;
 			$responseItem = $this->sendAgentRequest($page, $field, $questionText, $values, $agent, $options);
 			if(!$responseItem) throw new WireException('Page Engineer job produced no response.');
 
