@@ -35,10 +35,9 @@ class PageEngineerItem extends WireData {
 	}
 
 	public function markupValue() {
-		/** @var TextformatterMarkdownExtra $markdown */
-		$markdown = $this->wire()->modules->get('TextformatterMarkdownExtra');
-		if(!$markdown) return '<p>' . htmlspecialchars($this->text) . '</p>';
-		if($this->isAgent) return $markdown->markdownSafe($this->text);
+		if($this->isAgent && $this->wire('at')) {
+			return $this->wire('at')->markdownToHtml($this->text, [ 'safe' => true ]);
+		}
 		return '<p>' . nl2br(htmlspecialchars($this->text)) . '</p>';
 	}
 }

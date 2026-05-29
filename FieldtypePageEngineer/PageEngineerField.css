@@ -2,3 +2,19 @@
  * FieldtypePageEngineer page-editor CSS
  *
  */
+.at-engineer-inputs {
+	select {
+		margin-top: 1em;
+	}
+}
+.at-engineer-checkboxes {
+	padding-top: 15px;
+	input {
+		margin-right: 0.5em;
+	}
+	label {
+		margin-right: 1em;
+	}
+	select {
+	}
+}

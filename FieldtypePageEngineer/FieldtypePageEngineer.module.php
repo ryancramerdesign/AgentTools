@@ -7,7 +7,7 @@ class FieldtypePageEngineer extends Fieldtype implements Module {
 	public static function getModuleInfo() {
 		return [
 			'title' => 'Page Engineer',
-			'version' => 2,
+			'version' => 3,
 			'summary' => 'Agent Tools Page Engineer is an AI agent Fieldtype to help you with any page editing task.',
 			'requires' => [ 'AgentTools' ],
 		];
@@ -162,9 +162,13 @@ class FieldtypePageEngineer extends Fieldtype implements Module {
 				$at = $t->wire('at'); /** @var AgentTools $at */
 				$input = $t->wire()->input;
 				if($input->post('_at_reset')) {
-					$blank = $t->getBlankValue($page, $field);
-					$page->setAndSave($field->name, $blank);
-				} else if($input->post('_at_undo')) {
+					$values = $t->getBlankValue($page, $field);
+					if(!strlen($text)) {
+						$page->setAndSave($field->name, $values);
+						return;
+					}
+				}
+				if($input->post('_at_undo')) {
 					$t->undoLastAgentEdit($page, $field, $values);
 				} else if(strlen($text)) {
 					$n = (int) $input->post('_at_agent');
@@ -172,7 +176,24 @@ class FieldtypePageEngineer extends Fieldtype implements Module {
 					$agent = isset($agents[$n]) ? $agents[$n] : null;
 					if($agent) $t->wire->session->setFor($t, 'agent', $n);
 					$requestItem = $values->newItem($text);
-					$responseItem = $t->sendAgentRequest($page, $field, $text, $values, $agent);
+					$dryRun = (bool) $input->post('_at_dry_run');
+					if($input->post('_at_background')) {
+						$error = $t->getBackgroundJobError();
+						if($error) {
+							$at->error($error);
+							return;
+						}
+						$job = $t->queueBackgroundJob($page, $field, $text, $values, $n, $dryRun);
+						$values->add($requestItem);
+						$page->setAndSave($field->name, $values);
+						$at->message(sprintf(
+							$t->_('Queued background Page Engineer job %1$s. The result will be emailed to %2$s.'),
+							$job['id'],
+							$job['notifyEmail']
+						), Notice::noGroup);
+						return;
+					}
+					$responseItem = $t->sendAgentRequest($page, $field, $text, $values, $agent, [ 'dryRun' => $dryRun ]);
 					if(!$responseItem) return;
 					$values->add($requestItem);
 					$values->add($responseItem);
@@ -236,7 +257,26 @@ class FieldtypePageEngineer extends Fieldtype implements Module {
 			}
 			$val = (int) $this->wire->session->getFor($this, 'agent');
 			$s->val($val);
-			$inputs[] = $s->render();
+			$f->appendMarkup .= "<div class='at-engineer-model uk-width-1-3@s uk-width-1-4@m'>" . $s->render() . "</div>";
+		}
+
+		/** @var InputfieldCheckbox $c */
+		$c = $modules->get('InputfieldCheckbox');
+		$c->attr('name', '_at_dry_run');
+		$c->label = $this->_('Preview only') . ' ' .
+			'[span.detail] ' . $this->_('(no changes)')  . ' [/span]';
+		$c->notes = $this->_('Inspect and explain what would be done without saving changes.');
+		$inputs[] = $c->render();
+
+		$email = htmlspecialchars($this->wire()->user->email);
+		if($email && $at->jobs()->isCronHealthy()) {
+			/** @var InputfieldCheckbox $c */
+			$c = $modules->get('InputfieldCheckbox');
+			$c->attr('name', '_at_background');
+			$c->label = $this->_('Run in background') . ' ' .
+				'[span.detail] ' . $this->_('(emails you)')  . ' [/span]';
+			$c->appendMarkup .= '<span class="detail">' . $this->_('(email results to: %s)') . '</span>';
+			$inputs[] = "<span uk-tooltip='$email'>" . $c->render() . "</span>";
 		}
 
 		if($hasLastEdit) {
@@ -253,13 +293,19 @@ class FieldtypePageEngineer extends Fieldtype implements Module {
 			/** @var InputfieldCheckbox $c */
 			$c = $modules->get('InputfieldCheckbox');
 			$c->attr('name', '_at_reset');
-			$c->label = sprintf($this->_('Reset conversation (%d messages)'), $numMessages);
+			$c->label = $this->_('Clear') . ' ' .
+				'[span.detail] ' . sprintf($this->_('(%d messages)'), $numMessages) . ' [/span]';
 			$inputs[] = $c->render();
 		}
 		if(count($inputs)) {
 			$f->addClass('InputfieldCheckbox', 'wrapClass');
-			$f->appendMarkup .= '<p>' . implode('&nbsp; &nbsp;', $inputs) . '</p>';
+			$f->appendMarkup .=
+				'<div class="at-engineer-checkboxes uk-width-2-3@s uk-width-3-4@m uk-flex uk-flex-middle">' .
+					'<div>' . implode(' ', $inputs) . '</div>' .
+				'</div>';
 		}
+
+		$f->appendMarkup = "<div class='at-engineer-inputs uk-grid uk-grid-small' uk-grid>$f->appendMarkup</div>";
 
 		// Identifying class for JS selector (added regardless of inputs)
 		$f->addClass('PageEngineerInput', 'wrapClass');
@@ -361,7 +407,7 @@ class FieldtypePageEngineer extends Fieldtype implements Module {
 	 * @return PageEngineerItem|null
 	 *
 	 */
-	protected function sendAgentRequest(Page $page, Field $field, $questionText, PageEngineerItems $values, $agent = null) {
+	protected function sendAgentRequest(Page $page, Field $field, $questionText, PageEngineerItems $values, $agent = null, array $options = []) {
 
 		if(!strlen($questionText)) return null;
 		set_time_limit(600);
@@ -385,25 +431,18 @@ class FieldtypePageEngineer extends Fieldtype implements Module {
 			);
 		}
 
-		// Take PagesVersions backup before the agent runs, if enabled
-		$backupVersions = $field->backup ? $this->backupPages($page, $field) : [];
+		$dryRun = !empty($options['dryRun']);
 
-		// Build conversation history from existing items, trimmed to configured memory limit
-		$history = [];
-		foreach($values->getArray() as $item) {
-			/** @var PageEngineerItem $item */
-			$history[] = [
-				'role' => $item->isAgent ? 'assistant' : 'user',
-				'content' => $item->text,
-			];
-		}
-		$maxPairs = (int) $at->get('engineer_mem_qty') ?: 10;
-		$maxEntries = $maxPairs * 2;
-		if(count($history) > $maxEntries) $history = array_slice($history, -$maxEntries);
+		// Take PagesVersions backup before the agent runs, if enabled
+		$backupVersions = (!$dryRun && $field->backup) ? $this->backupPages($page, $field) : [];
+
+		$history = isset($options['history']) && is_array($options['history']) ?
+			$options['history'] :
+			$this->buildHistory($values);
 
 		// Allow eval_php (to query/edit) and api_docs (to look up API documentation)
 		// Exclude save_migration and site_info — page context is already in the system prompt
-		$allTools = $at->engineer->getToolDefinitions($agent->provider, 'page');
+		$allTools = $at->engineer->getToolDefinitions($agent->provider, 'page', false, $dryRun);
 		$allowedTools = ['eval_php', 'api_docs'];
 		if($suspicious) $allowedTools[] = 'report_suspicious_prompt';
 		$tools = array_values(array_filter($allTools, function($tool) use($allowedTools) {
@@ -412,13 +451,14 @@ class FieldtypePageEngineer extends Fieldtype implements Module {
 		}));
 
 		$result = $at->engineer->ask($questionText, [
-			'systemPrompt' => $this->buildFieldSystemPrompt($page, $field),
+			'systemPrompt' => $this->buildFieldSystemPrompt($page, $field, $dryRun),
 			'tools' => $tools,
 			'history' => $history,
 			'provider' => $agent->provider,
 			'apiKey' => $agent->apiKey,
 			'model' => $agent->model,
 			'endpoint' => $agent->endpointUrl,
+			'dryRun' => $dryRun,
 		]);
 
 		$responseText = $result['response'] ?: ($result['error'] ? $this->_('Error: ') . $result['error'] : $this->_('No response received.'));
@@ -435,6 +475,170 @@ class FieldtypePageEngineer extends Fieldtype implements Module {
 	}
 
 	/**
+	 * Queue a Page Engineer background job
+	 *
+	 * @param Page $page
+	 * @param Field $field
+	 * @param string $questionText
+	 * @param PageEngineerItems $values Current conversation history before the new request is added
+	 * @param int $modelIndex
+	 * @param bool $dryRun
+	 * @return array
+	 * @throws WireException
+	 *
+	 */
+	protected function queueBackgroundJob(Page $page, Field $field, $questionText, PageEngineerItems $values, int $modelIndex, bool $dryRun = false): array {
+		/** @var AgentTools $at */
+		$at = $this->wire('at');
+		$user = $this->wire()->user;
+		$pageEditUrl = $page->editUrl([ 'http' => true, 'find' => $field->name ]);
+		return $at->jobs()->addJob([
+			'type' => 'page-engineer',
+			'userId' => (int) $user->id,
+			'userName' => (string) $user->name,
+			'notifyEmail' => trim((string) $user->email),
+			'modelIndex' => $modelIndex,
+			'url' => $pageEditUrl,
+			'agentToolsUrl' => $this->getAgentToolsAdminUrl(),
+			'pageId' => (int) $page->id,
+			'pageTitle' => (string) $page->get('title|name'),
+			'pageEditUrl' => $pageEditUrl,
+			'fieldName' => (string) $field->name,
+			'prompt' => (string) $questionText,
+			'dryRun' => $dryRun,
+			'history' => $this->buildHistory($values),
+		]);
+	}
+
+	/**
+	 * Get Page Engineer background queue error, or blank when available
+	 *
+	 * @return string
+	 *
+	 */
+	protected function getBackgroundJobError(): string {
+		/** @var AgentTools $at */
+		$at = $this->wire('at');
+		$email = trim((string) $this->wire()->user->email);
+		if($email === '') return $this->_('Your user account does not have an email address.');
+		if(!$at->jobs()->isCronHealthy()) {
+			return $this->_('AgentTools background cron has not run recently. Ask your developer to configure php index.php --at-cron.');
+		}
+		return '';
+	}
+
+	/**
+	 * Run a Page Engineer background job and append the response to the field
+	 *
+	 * @param array $job
+	 * @return array
+	 * @throws WireException
+	 *
+	 */
+	public function runBackgroundJob(array $job): array {
+		$pageId = (int) ($job['pageId'] ?? 0);
+		$fieldName = (string) ($job['fieldName'] ?? '');
+		$questionText = trim((string) ($job['prompt'] ?? ''));
+		if(!$pageId) throw new WireException('Page Engineer job has no page ID.');
+		if($fieldName === '') throw new WireException('Page Engineer job has no field name.');
+		if($questionText === '') throw new WireException('Page Engineer job has no prompt.');
+
+		$page = $this->wire()->pages->get($pageId);
+		if(!$page->id) throw new WireException("Page Engineer job page not found: $pageId");
+
+		$field = $this->wire()->fields->get($fieldName);
+		if(!$field || !$field->id || !($field->type instanceof FieldtypePageEngineer)) {
+			throw new WireException("Page Engineer job field not found: $fieldName");
+		}
+
+		$previousUser = $this->wire()->user;
+		$jobUserId = (int) ($job['userId'] ?? 0);
+		if($jobUserId) {
+			$jobUser = $this->wire()->users->get($jobUserId);
+			if($jobUser && $jobUser->id) $this->wire()->users->setCurrentUser($jobUser);
+		}
+
+		try {
+			$values = $page->getUnformatted($field->name);
+			if(!$values instanceof PageEngineerItems) $values = $this->getBlankValue($page, $field);
+
+			if(!$this->hasRequestItem($values, $questionText)) {
+				$values->add($values->newItem($questionText, (string) ($job['userName'] ?? ''), false));
+			}
+
+			$agents = $this->wire('at')->getAgents()->getArray();
+			$modelIndex = (int) ($job['modelIndex'] ?? 0);
+			$agent = isset($agents[$modelIndex]) ? $agents[$modelIndex] : null;
+			$options = [];
+			if(!empty($job['history']) && is_array($job['history'])) $options['history'] = $job['history'];
+			if(isset($job['dryRun'])) $options['dryRun'] = (bool) $job['dryRun'];
+			$responseItem = $this->sendAgentRequest($page, $field, $questionText, $values, $agent, $options);
+			if(!$responseItem) throw new WireException('Page Engineer job produced no response.');
+
+			$values->add($responseItem);
+			$page->setAndSave($field->name, $values);
+
+			$job['response'] = (string) $responseItem->text;
+			$job['pageTitle'] = (string) $page->get('title|name');
+			if(empty($job['pageEditUrl'])) $job['pageEditUrl'] = $page->editUrl([ 'http' => true, 'find' => $field->name ]);
+			$job['history'] = $this->buildHistory($values);
+			return $job;
+		} finally {
+			if($previousUser && $previousUser->id) $this->wire()->users->setCurrentUser($previousUser);
+		}
+	}
+
+	/**
+	 * Build conversation history from PageEngineer items
+	 *
+	 * @param PageEngineerItems $values
+	 * @return array
+	 *
+	 */
+	protected function buildHistory(PageEngineerItems $values): array {
+		/** @var AgentTools $at */
+		$at = $this->wire('at');
+		$history = [];
+		foreach($values->getArray() as $item) {
+			/** @var PageEngineerItem $item */
+			$history[] = [
+				'role' => $item->isAgent ? 'assistant' : 'user',
+				'content' => $item->text,
+			];
+		}
+		$maxPairs = (int) $at->get('engineer_mem_qty') ?: 10;
+		$maxEntries = $maxPairs * 2;
+		if(count($history) > $maxEntries) $history = array_slice($history, -$maxEntries);
+		return $history;
+	}
+
+	/**
+	 * Does the conversation already include this user request?
+	 *
+	 * @param PageEngineerItems $values
+	 * @param string $questionText
+	 * @return bool
+	 *
+	 */
+	protected function hasRequestItem(PageEngineerItems $values, string $questionText): bool {
+		$item = $values->last();
+		return $item && !$item->isAgent && trim((string) $item->text) === trim($questionText);
+	}
+
+	/**
+	 * Get AgentTools admin URL for job view/reply links
+	 *
+	 * @return string
+	 *
+	 */
+	protected function getAgentToolsAdminUrl(): string {
+		$page = $this->wire()->pages->get('template=admin, process=ProcessAgentTools');
+		if(!$page->id) $page = $this->wire()->pages->get('template=admin, name=agent-tools');
+		if($page->id) return $page->httpUrl();
+		return $this->wire()->config->urls->admin . 'setup/agent-tools/';
+	}
+
+	/**
 	 * Build the system prompt for the field's AI agent, including page context
 	 *
 	 * @param Page $page
@@ -442,7 +646,7 @@ class FieldtypePageEngineer extends Fieldtype implements Module {
 	 * @return string
 	 *
 	 */
-	protected function buildFieldSystemPrompt(Page $page, Field $field): string {
+	protected function buildFieldSystemPrompt(Page $page, Field $field, bool $dryRun = false): string {
 		/** @var AgentTools $at */
 		$at = $this->wire('at');
 		$scope = (int) $field->scope;
@@ -498,10 +702,16 @@ class FieldtypePageEngineer extends Fieldtype implements Module {
 			$prompt .= "- You may only make changes to child pages. Do not modify the page being edited, even if asked.\n";
 		}
 		$prompt .= "- Before modifying any page or field, verify it is editable: \$page->editable() and \$page->fieldEditable('field_name').\n";
-		$prompt .= "- Apply changes directly using eval_php. Do not create migration files.\n";
-		$prompt .= "- After completing changes, save the page with \$page->save(), \$page->save('field_name'), \$pages->save(\$page) or \$pages->saveField(\$page, 'field_name').\n";
+		if($dryRun) {
+			$prompt .= "- Preview-only mode is enabled. Inspect and explain what you would do, but do not make changes.\n";
+			$prompt .= "- You may use eval_php only for read-only inspection. Do not save, create, update, delete, clone, move, publish, unpublish, write files, or change configuration.\n";
+			$prompt .= "- Explain the proposed changes, the fields/pages you would touch, and any risks or assumptions.\n";
+		} else {
+			$prompt .= "- Apply changes directly using eval_php. Do not create migration files.\n";
+			$prompt .= "- After completing changes, save the page with \$page->save(), \$page->save('field_name'), \$pages->save(\$page) or \$pages->saveField(\$page, 'field_name').\n";
+		}
 		$prompt .= "- If the user's request is ambiguous, ask one clarifying question before proceeding.\n";
-		$prompt .= "- After changes are applied, briefly confirm what was done.\n";
+		$prompt .= $dryRun ? "- Keep the preview concise and actionable.\n" : "- After changes are applied, briefly confirm what was done.\n";
 		$prompt .= "- ProcessWire API variables available in eval_php: $apiVars.\n";
 
 		$suspicious = (string) $at->get('engineer_suspicious');

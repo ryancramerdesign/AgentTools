@@ -15,7 +15,7 @@ class ProcessAgentTools extends Process {
 		return [
 			'title' => 'Agent Tools',
 			'summary' => 'Admin interface for AgentTools migrations and AI engineer.',
-			'version' => 9,
+			'version' => 10,
 			'author' => 'Claude (Anthropic), GPT 5.5 Codex and Ryan Cramer',
 			'icon' => 'at',
 			'requires' => 'AgentTools',
@@ -124,9 +124,18 @@ class ProcessAgentTools extends Process {
 			case 'applied': return $this->ukLabel($this->_('Applied'), 'success');
 			case 'ask-create-migration': return $this->_('Ask the engineer to create a migration');
 			case 'back': return $this->_('Back');
+			case 'back-to-engineer': return $this->_('Back to Engineer');
+			case 'background-job': return $this->_('Background job');
+			case 'background-job-not-found': return $this->_('Background job not found.');
+			case 'background-job-email-missing': return $this->_('Your user account needs an email address before background jobs can notify you.');
+			case 'background-job-cron-stale': return $this->_('Background jobs require cron to run `php index.php --at-cron`. Cron has not checked in recently.');
 			case 'date-time': return $this->_('Date/time');
 			case 'edit': return $this->_('Edit');
+			case 'email': return $this->_('Email');
+			case 'email-error': return $this->_('Email error');
 			case 'engineer': return $this->_('Engineer');
+			case 'error': return $this->_('Error');
+			case 'example-add-summary-field': return $this->_('Example: Create a Text field named summary with the label Summary and add it to the basic-page template.');
 			case 'export': return $this->_('Export');
 			case 'export-checked': return $this->_('Export checked');
 			case 'failed': return $this->ukLabel($this->_('Failed'), 'danger');
@@ -135,10 +144,17 @@ class ProcessAgentTools extends Process {
 			case 'migration': return $this->_('Migration');
 			case 'migrations': return $this->_('Migrations');
 			case 'pending': return $this->ukLabel($this->_('Pending'));
+			case 'prompt': return $this->_('Prompt');
+			case 'refresh': return $this->_('Refresh');
+			case 'reply': return $this->_('Reply');
+			case 'response': return $this->_('Response');
+			case 'review-and-apply-migration': return $this->_('Review and apply migration');
 			case 'run': return $this->_('Run');
 			case 'save': return $this->_('Save');
 			case 'status': return $this->_('Status');
+			case 'task': return $this->_('Task');
 			case 'tasks': return $this->_('Tasks');
+			case 'view-queued-result': return $this->_('View queued result');
 		}
 		return $name;
 	}
@@ -151,10 +167,13 @@ class ProcessAgentTools extends Process {
 	 */
 	public function troubleshootingNote($prepend = '') {
 		$prepend = wireIconMarkup('warning') . " $prepend ";
-		return "<p class='detail'>$prepend" . sprintf(
-			$this->_('If you get timeouts or a server error please see the %s section of the AgentTools documentation for how to fix it.'),
-			'<a target="_blank" href="https://processwire.com/modules/agent-tools/#troubleshooting">' . $this->_('troubleshooting') . "</a>"
-		) . "</p>";
+		return
+			"<p class='detail'>$prepend" . sprintf(
+				$this->_('If you get timeouts or a server error please see the %s section of the AgentTools documentation for how to fix it.'),
+				'<a target="_blank" href="https://processwire.com/modules/agent-tools/#troubleshooting">' . $this->_('troubleshooting') . "</a>"
+				) . ' ' .
+				$this->_('You can also use "Run in background" mode, which can be much more reliable for long running tasks.') .
+			"</p>";
 	}
 
 	/**
@@ -346,9 +365,9 @@ class ProcessAgentTools extends Process {
 		$f->val($prefill);
 
 		if($forMigration) {
-			$f->label = $this->_('Ask the site engineer to create a new migration');
-			$f->attr('placeholder', $this->_('Example: Create a Text field named summary with the label Summary and add it to the basic-page template.'));
-			$this->message($this->_('Example: Create a Text field named summary with the label Summary and add it to the basic-page template.'));
+			$f->label = $this->label('ask-create-migration');
+			$f->attr('placeholder', $this->label('example-add-summary-field'));
+			$this->message($this->label('example-add-summary-field'));
 		} else {
 			$f->label = $this->_('Ask the site engineer');
 			$f->description =
@@ -357,6 +376,7 @@ class ProcessAgentTools extends Process {
 			$f->detail = $this->description('engineer');
 		}
 
+			$this->addEngineerOptionsRow($f);
 		$form->add($f);
 
 		if($savedMemory === 'yes' && !empty($history)) {
@@ -456,6 +476,9 @@ class ProcessAgentTools extends Process {
 			$options['endpoint'] = $entry['endpoint'];
 		}
 
+		$dryRun = (bool) $input->post('at_dry_run');
+		if($dryRun) $options['dryRun'] = true;
+
 		// Handle conversation memory
 		$memory = (string) $input->post('engineer_memory') === 'yes' ? 'yes' : 'no';
 		$memoryReset = (bool) $input->post('engineer_memory_reset');
@@ -474,6 +497,29 @@ class ProcessAgentTools extends Process {
 
 		/** @var InputfieldForm $form */
 		$form = $this->wire()->modules->get('InputfieldForm');
+
+		if($input->post('at_run_background')) {
+			$backgroundError = $this->getBackgroundJobError();
+			if($backgroundError) {
+				$this->error($backgroundError);
+				return $this->renderEngineerForm($request);
+			}
+			$job = $this->at->jobs()->addJob([
+				'type' => 'engineer',
+				'userId' => (int) $user->id,
+				'userName' => (string) $user->name,
+				'notifyEmail' => (string) $user->email,
+				'modelIndex' => $modelIndex,
+				'url' => $this->wire()->page->httpUrl(),
+				'agentToolsUrl' => $this->wire()->page->httpUrl(),
+				'prompt' => $request,
+				'history' => $memory === 'yes' ? ($options['history'] ?? []) : [],
+				'readOnly' => (bool) $this->at->get('engineer_readonly'),
+				'dryRun' => $dryRun,
+			]);
+			$session->set('at_engineer_prefill', $request);
+			return $this->renderQueuedJobConfirmation($job);
+		}
 
 		$result = $this->at->engineer->ask($request, $options);
 
@@ -502,7 +548,7 @@ class ProcessAgentTools extends Process {
 			$btn = $form->InputfieldButton;
 			$btn->href = $adminUrl . 'view-migration/?name=' . urlencode($filename);
 			$btn->icon = 'database';
-			$btn->val($this->_('Review and apply migration'));
+			$btn->val($this->label('review-and-apply-migration'));
 			$btn->showInHeader(true);
 			$form->add($btn);
 		}
@@ -537,7 +583,7 @@ class ProcessAgentTools extends Process {
 			$f = $replyForm->InputfieldTextarea;
 			$f->attr('name', 'engineer_request');
 			$f->addClass('at-engineer-request');
-			$f->label = $this->_('Reply');
+			$f->label = $this->label('reply');
 			$f->icon = 'commenting';
 			$f->attr('rows', 3);
 			$replyForm->add($f);
@@ -564,6 +610,176 @@ class ProcessAgentTools extends Process {
 		}
 
 		return $form->render() . $replyFormOutput;
+	}
+
+	/**
+	 * Restore a completed background job conversation and redirect to Engineer
+	 *
+	 * @return string
+	 *
+	 */
+	public function executeReplyJob(): string {
+		$input = $this->wire()->input;
+		$session = $this->wire()->session;
+		$id = (string) $input->get('id');
+		$job = $this->getViewableJob($id, true);
+		$url = $this->wire()->page->url . 'engineer/';
+		if(!$job) {
+			$session->error($this->label('background-job-not-found'));
+			$session->location($url);
+		}
+
+		if(!empty($job['history']) && is_array($job['history'])) {
+			$session->set('at_engineer_history', $job['history']);
+			$session->set('at_engineer_prefill', '');
+			$user = $this->wire()->user;
+			$meta = $user->meta('AgentTools') ?: [];
+			$meta['engineer_memory'] = 'yes';
+			if(isset($job['modelIndex'])) $meta['engineer_model_index'] = (int) $job['modelIndex'];
+			$user->meta('AgentTools', $meta);
+			$session->message($this->_('Background job conversation loaded. Use the Engineer form to continue.'));
+		} else {
+			$session->error($this->_('This background job does not have conversation history to restore.'));
+		}
+
+		$session->location($url);
+		return '';
+	}
+
+	/**
+	 * View a background job result
+	 *
+	 * @return string
+	 *
+	 */
+	public function executeViewJob(): string {
+		$input = $this->wire()->input;
+		$id = (string) $input->get('id');
+		$job = $this->getViewableJob($id);
+		if(!$job) {
+			$this->error($this->label('background-job-not-found'));
+			return '';
+		}
+
+		$this->headline($this->label('background-job'));
+		$this->breadcrumb($this->wire()->page->url . 'engineer/', $this->label('engineer'));
+
+		$form = $this->wire()->modules->get('InputfieldForm'); /** @var InputfieldForm $form */
+		$out = '';
+		$out .= '<h2>' . htmlspecialchars($job['id'] ?? '', ENT_QUOTES, 'UTF-8') . '</h2>';
+		$out .= '<ul class="uk-list uk-list-divider">';
+		$out .= '<li><strong>' . $this->label('status') . ':</strong> ' . htmlspecialchars($job['status'] ?? '', ENT_QUOTES, 'UTF-8') . '</li>';
+		$out .= '<li><strong>' . $this->_('Type') . ':</strong> ' . htmlspecialchars($job['type'] ?? '', ENT_QUOTES, 'UTF-8') . '</li>';
+		if(!empty($job['dryRun'])) {
+			$out .= '<li><strong>' . $this->_('Mode') . ':</strong> ' . htmlspecialchars($this->_('Preview only'), ENT_QUOTES, 'UTF-8') . '</li>';
+		}
+		if(!empty($job['taskName'])) {
+			$out .= '<li><strong>' . $this->label('task') . ':</strong> ' . htmlspecialchars($job['taskName'], ENT_QUOTES, 'UTF-8') . '</li>';
+		}
+		if(!empty($job['pageEditUrl'])) {
+			$pageTitle = trim((string) ($job['pageTitle'] ?? ''));
+			if($pageTitle === '') $pageTitle = $this->_('Edit page');
+			$out .= '<li><strong>' . $this->_('Page') . ':</strong> ' .
+				'<a href="' . htmlspecialchars($job['pageEditUrl'], ENT_QUOTES, 'UTF-8') . '">' .
+				htmlspecialchars($pageTitle, ENT_QUOTES, 'UTF-8') .
+				'</a></li>';
+		}
+		if(!empty($job['fieldName'])) {
+			$out .= '<li><strong>' . $this->_('Field') . ':</strong> ' . htmlspecialchars($job['fieldName'], ENT_QUOTES, 'UTF-8') . '</li>';
+		}
+		if(!empty($job['notifyEmail'])) {
+			$out .= '<li><strong>' . $this->label('email') . ':</strong> ' . htmlspecialchars($job['notifyEmail'], ENT_QUOTES, 'UTF-8') . '</li>';
+		}
+		if(!empty($job['emailError'])) {
+			$out .= '<li><strong>' . $this->label('email-error') . ':</strong> ' . htmlspecialchars($job['emailError'], ENT_QUOTES, 'UTF-8') . '</li>';
+		}
+		if(!empty($job['migration'])) {
+			$out .= '<li><strong>' . $this->label('migration') . ':</strong> ' . htmlspecialchars(basename($job['migration']), ENT_QUOTES, 'UTF-8') . '</li>';
+		}
+		$out .= '</ul>';
+
+		$ready = in_array((string) ($job['status'] ?? ''), [ 'done', 'failed' ], true);
+		if(!$ready) {
+			$out .= '<p class="uk-alert uk-alert-primary">' .
+				htmlspecialchars($this->_('This background job is not ready yet. Please refresh this page in a minute.'), ENT_QUOTES, 'UTF-8') .
+				'</p>';
+		}
+
+		if(!empty($job['prompt'])) {
+			$out .= '<h3>' . $this->label('prompt') . '</h3>';
+			$out .= '<blockquote><p>' . nl2br($this->wire()->sanitizer->entities($job['prompt'])) . '</p></blockquote>';
+		}
+
+		if(!empty($job['error'])) {
+			$out .= '<h3>' . $this->label('error') . '</h3>';
+			$out .= $this->pre($job['error']);
+		} else if(!empty($job['response'])) {
+			$out .= '<h3>' . $this->label('response') . '</h3>';
+			$out .= $this->formatEngineerResponse($job['response']);
+		}
+
+		if(!empty($job['migration'])) {
+			$btn = $form->InputfieldButton;
+			$btn->href = $this->wire()->page->url . 'view-migration/?name=' . urlencode(basename($job['migration']));
+			$btn->icon = 'database';
+			$btn->val($this->label('review-and-apply-migration'));
+			$btn->showInHeader(true);
+			$form->add($btn);
+		}
+
+		if(($job['type'] ?? '') !== 'page-engineer' && !empty($job['history']) && is_array($job['history'])) {
+			$btn = $form->InputfieldButton;
+			$btn->href = $this->wire()->page->url . 'reply-job/?id=' . rawurlencode($job['id']);
+			$btn->icon = 'reply';
+			$btn->val($this->label('reply'));
+			if(empty($job['migration'])) {
+				$btn->showInHeader(true);
+			} else {
+				$btn->setSecondary();
+			}
+			$form->add($btn);
+		}
+
+		$btn = $form->InputfieldButton;
+		$btn->href = $this->wire()->page->url . 'view-job/?id=' . rawurlencode($job['id']);
+		$btn->icon = 'refresh';
+		$btn->val($this->label('refresh'));
+		if(!$ready) {
+			$btn->showInHeader(true);
+		} else {
+			$btn->setSecondary();
+		}
+		$form->add($btn);
+
+		$btn = $form->InputfieldButton;
+		$btn->href = $this->wire()->page->url . 'engineer/';
+		$btn->icon = 'arrow-left';
+		$btn->val($this->label('back-to-engineer'));
+		$btn->setSecondary();
+		$form->add($btn);
+
+		$form->val($out);
+		return $form->render();
+	}
+
+	/**
+	 * Get a viewable background job or throw if forbidden
+	 *
+	 * @param string $id
+	 * @param bool $completedOnly Search only completed statuses?
+	 * @return array
+	 * @throws WirePermissionException
+	 *
+	 */
+	protected function getViewableJob(string $id, bool $completedOnly = false): array {
+		$statuses = $completedOnly ? [ 'done', 'failed' ] : [ 'done', 'failed', 'running', 'pending' ];
+		$job = $this->at->jobs()->getJob($id, $statuses);
+		if(!$job) return [];
+		$user = $this->wire()->user;
+		if(!empty($job['userId']) && (int) $job['userId'] !== (int) $user->id && !$user->isSuperuser()) {
+			throw new WirePermissionException('You do not have permission to view this background job.');
+		}
+		return $job;
 	}
 
 	/**
@@ -635,14 +851,9 @@ class ProcessAgentTools extends Process {
 			$response = $this->wire()->sanitizer->unentities($response);
 		}
 
-		$markdown = null;
 		if($this->isMarkdown($response)) {
-			$markdown = $this->wire()->modules->get('TextformatterMarkdownExtra');
-		}
-
-		if($markdown) {
 			// markdown
-			$response = $markdown->markdown($response);
+			$response = $this->at->markdownToHtml($response);
 		} else if(strpos($response, '   ') !== false) {
 			// preformatted text
 			$response = $this->pre($response);
@@ -651,13 +862,108 @@ class ProcessAgentTools extends Process {
 			$response = "<p>" . nl2br(htmlspecialchars($response)) . "</p>";
 		}
 
-		$findReplace = [
-			'<table>' => '<table class="uk-table uk-table-divider uk-table-small">',
-		];
-
-		$response = str_replace(array_keys($findReplace), array_values($findReplace), $response);
-
 		return $response;
+	}
+
+	/**
+	 * Add compact Engineer option checkboxes to form
+	 *
+	 * @param Inputfield $f
+	 *
+	 */
+	protected function addEngineerOptionsRow(Inputfield $f): void {
+		$modules = $this->wire()->modules;
+		$user = $this->wire()->user;
+		$email = trim((string) $user->email);
+		$healthy = $this->at->jobs()->isCronHealthy();
+		$items = [];
+
+		/** @var InputfieldCheckbox $c */
+		$c = $modules->get('InputfieldCheckbox');
+		$c->attr('name', 'at_dry_run');
+		$c->label =
+			$this->_('Preview only') . ' ' .
+			'[span.detail] ' . $this->_('(no changes)') . ' [/span]';
+		$items[] = $c->render();
+
+		if(!$email) {
+			$disabled = true;
+			$title = $this->label('background-job-email-missing');
+		} else if(!$healthy) {
+			$disabled = true;
+			$title = $this->label('background-job-cron-stale');
+		} else {
+			$disabled = false;
+			$title = sprintf($this->_('Result will be emailed to %s.'), $email);
+		}
+		$title = $this->wire()->sanitizer->entities1($title);
+
+		/** @var InputfieldCheckbox $c */
+		$c = $modules->get('InputfieldCheckbox');
+		$c->attr('name', 'at_run_background');
+		$c->label =
+			$this->_('Run in background') . ' ' .
+			'[span.detail] ' . $this->_('(email when done)') . ' [/span]';
+		$c->wrapAttr('uk-tooltip', $title);
+		if($email) $c->appendMarkup .= '<span class="detail">' . sprintf($this->_('(email results to: %s)'), $email) . '</span>';
+		if($disabled) $c->attr('disabled', 'disabled');
+		$items[] = "<span title='$title' uk-tooltip='$title'>" . $c->render() . "</span>";
+
+		$f->wrapClass('InputfieldCheckbox');
+		$f->appendMarkup .= '<p class="at-engineer-checkboxes">' . implode(' ', $items) . '</p>';
+	}
+
+	/**
+	 * Get background queue error, or blank when available
+	 *
+	 * @return string
+	 *
+	 */
+	public function getBackgroundJobError(): string {
+		$email = trim((string) $this->wire()->user->email);
+		if($email === '') return $this->label('background-job-email-missing');
+		if(!$this->at->jobs()->isCronHealthy()) {
+			return $this->label('background-job-cron-stale');
+		}
+		return '';
+	}
+
+	/**
+	 * Render queued background job confirmation
+	 *
+	 * @param array $job
+	 * @return string
+	 *
+	 */
+	public function renderQueuedJobConfirmation(array $job, string $returnUrl = '', string $returnLabel = '', string $returnIcon = ''): string {
+		$form = $this->wire()->modules->get('InputfieldForm'); /** @var InputfieldForm $form */
+		$email = (string) ($job['notifyEmail'] ?? '');
+		if($returnUrl === '') $returnUrl = $this->wire()->page->url . 'engineer/';
+		if($returnLabel === '') $returnLabel = $this->label('back-to-engineer');
+		if($returnIcon === '') $returnIcon = 'commenting';
+		$message = $email ?
+			sprintf($this->_('Queued background job %1$s. The result will be emailed to %2$s.'), $job['id'], $email) :
+			sprintf($this->_('Queued background job %s.'), $job['id']);
+		$this->message($message);
+		$out =
+			'<p class="uk-text-lead">' . htmlspecialchars($message, ENT_QUOTES, 'UTF-8') . '</p>';
+
+		$btn = $form->InputfieldButton;
+		$btn->href = $this->wire()->page->url . 'view-job/?id=' . rawurlencode($job['id']);
+		$btn->icon = 'eye';
+		$btn->val($this->label('view-queued-result'));
+		$btn->showInHeader(true);
+		$form->add($btn);
+
+		$btn = $form->InputfieldButton;
+		$btn->href = $returnUrl;
+		$btn->icon = $returnIcon;
+		$btn->val($returnLabel);
+		$btn->setSecondary();
+		$form->add($btn);
+
+		$form->val($out);
+		return $form->render();
 	}
 
 	/******************************************************************
@@ -740,7 +1046,6 @@ class ProcessAgentTools extends Process {
 	 * Reply to a task result
 	 *
 	 * @return string
-	 * @todo Methods beginning with "execute" translate to a URL accessible action. If that's not the intention, the method should be named differently.
 	 *
 	 */
 	public function executeReplyTask() {

@@ -19,6 +19,37 @@ class ProcessAgentToolsTasks extends ProcessAgentToolsHelper {
 	}
 
 	/**
+	 * Add background job checkbox to form
+	 *
+	 * @param InputfieldWrapper $form
+	 *
+	 */
+	protected function addBackgroundJobCheckbox(InputfieldWrapper $form): void {
+		$user = $this->wire()->user;
+		$email = trim((string) $user->email);
+		$healthy = $this->at->jobs()->isCronHealthy();
+
+		$f = $form->InputfieldCheckbox;
+		$f->attr('name', 'at_run_background');
+		$f->label = $this->_('Run in background?');
+		$f->icon = 'clock-o';
+		$f->description =
+			$this->_('Recommended because tasks sometimes need more time than http requests allow.');
+		if($email) {
+			$f->label2 = sprintf($this->_('Run in background and email [%s](mailto:%s) when done'), $email, $email);
+		} else {
+			$f->notes = $this->label('background-job-email-missing');
+			$f->attr('disabled', 'disabled');
+		}
+		if(!$healthy) {
+			$f->collapsed = Inputfield::collapsedYes;
+			$f->description = $this->label('background-job-cron-stale');
+			$f->attr('disabled', 'disabled');
+		}
+		$form->add($f);
+	}
+
+	/**
 	 * List tasks
 	 *
 	 * @return string
@@ -141,6 +172,8 @@ class ProcessAgentToolsTasks extends ProcessAgentToolsHelper {
 		$this->populateTaskFormFromQuery($task, $form);
 		$form->attr('method', 'post');
 		$this->addTaskAgentSelect($form);
+		$this->addBackgroundJobCheckbox($form);
+
 		$f = $form->InputfieldSubmit;
 		$f->attr('name', 'submit_run_task');
 		$f->addClass('at-show-thinking');
@@ -243,6 +276,34 @@ class ProcessAgentToolsTasks extends ProcessAgentToolsHelper {
 			$modelIndex = array_search($value, $options);
 		}
 		$modelIndex = (int) $modelIndex;
+
+		if($this->wire()->input->post('at_run_background')) {
+			$backgroundError = $this->getBackgroundJobError();
+			if($backgroundError) {
+				$this->error($backgroundError);
+				return '';
+			}
+			$user = $this->wire()->user;
+			$this->saveTaskModelIndex($modelIndex);
+			$job = $this->at->jobs()->addJob([
+				'type' => 'task',
+				'userId' => (int) $user->id,
+				'userName' => (string) $user->name,
+				'notifyEmail' => (string) $user->email,
+				'modelIndex' => $modelIndex,
+				'url' => $this->wire()->page->httpUrl(),
+				'agentToolsUrl' => $this->wire()->page->httpUrl(),
+				'taskName' => $task->name,
+				'taskInput' => $values,
+				'maxIterations' => (int) $task->maxIterations,
+			]);
+			return $this->renderQueuedJobConfirmation(
+				$job,
+				$tasksUrl,
+				$this->_('Back to Tasks'),
+				'arrow-left'
+			);
+		}
 
 		$options = $this->getTaskAgentOptions($modelIndex, true);
 
@@ -393,6 +454,21 @@ class ProcessAgentToolsTasks extends ProcessAgentToolsHelper {
 			$this->message(sprintf($this->_('Task run with agent: %s'), $entry['label']));
 		}
 		return $options;
+	}
+
+	/**
+	 * Save selected task model index to user meta
+	 *
+	 * @param int $modelIndex
+	 *
+	 */
+	protected function saveTaskModelIndex(int $modelIndex): void {
+		$availableModels = $this->at->engineer->getAvailableModels();
+		if(!isset($availableModels[$modelIndex])) return;
+		$meta = $this->wire()->user->meta('AgentTools') ?: [];
+		$meta['tasks_model_index'] = $modelIndex;
+		$this->wire()->user->meta('AgentTools', $meta);
+		$this->message(sprintf($this->_('Task queued with agent: %s'), $availableModels[$modelIndex]['label']));
 	}
 
 	/**
@@ -609,13 +685,9 @@ class ProcessAgentToolsTasks extends ProcessAgentToolsHelper {
 			$form->add($f);
 		}
 
-		$f1 = $form->InputfieldSubmit;
-		$f1->attr('name', 'submit_save_task');
-		$f1->val($this->label('save'));
-		//$f1->showInHeader(true);
-		$form->add($f1);
-
 		if($allowRun) {
+			$this->addBackgroundJobCheckbox($form);
+
 			$f2 = $form->InputfieldSubmit;
 			$f2->attr('name', 'submit_run_task');
 			$f2->val($this->label('run'));
@@ -624,8 +696,14 @@ class ProcessAgentToolsTasks extends ProcessAgentToolsHelper {
 			$f2->icon = 'send';
 			$f2->appendMarkup .= $this->renderThinkingWords();
 			$form->add($f2);
-			$f1->setSecondary();
 		}
+
+		$f1 = $form->InputfieldSubmit;
+		$f1->attr('name', 'submit_save_task');
+		$f1->val($this->label('save'));
+		//$f1->showInHeader(true);
+		if($allowRun) $f1->setSecondary();
+		$form->add($f1);
 
 		$form->prependMarkup .= $this->troubleshootingNote();
 

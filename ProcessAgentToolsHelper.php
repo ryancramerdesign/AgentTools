@@ -139,4 +139,25 @@ abstract class ProcessAgentToolsHelper extends Wire {
 	protected function formatEngineerResponse($response) {
 		return $this->pat->formatEngineerResponse($response);
 	}
+
+	/**
+	 * Get background queue error, or blank when available
+	 *
+	 * @return string
+	 *
+	 */
+	protected function getBackgroundJobError(): string {
+		return $this->pat->getBackgroundJobError();
+	}
+
+	/**
+	 * Render queued background job confirmation
+	 *
+	 * @param array $job
+	 * @return string
+	 *
+	 */
+	protected function renderQueuedJobConfirmation(array $job, string $returnUrl = '', string $returnLabel = '', string $returnIcon = ''): string {
+		return $this->pat->renderQueuedJobConfirmation($job, $returnUrl, $returnLabel, $returnIcon);
+	}
 }

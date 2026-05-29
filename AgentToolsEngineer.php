@@ -93,6 +93,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	 *  - `contextItems` (array): Items to include when context='custom': sitemap_pages, sitemap_schema
 	 *  - `history` (array): Prior conversation as [ ['role'=>'user','content'=>'...'], ['role'=>'assistant','content'=>'...'], ... ]
 	 *  - `maxIterations` (int): Max tool-use rounds before stopping
+	 *  - `dryRun` (bool): Preview only; inspect and explain without making changes
 	 * @return array [ 'response' => string, 'migration' => string|null, 'error' => string|null, 'history' => array ]
 	 *
 	 */
@@ -127,14 +128,16 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			$messages[] = ['role' => 'user', 'content' => $request];
 
 			$readOnly = isset($options['readOnly']) ? (bool) $options['readOnly'] : (bool) $this->at->get('engineer_readonly');
+			$dryRun = !empty($options['dryRun']);
 			$verbose = !empty($options['verbose']);
 			$maxIterations = $this->getMaxIterations($options);
-			$systemPrompt = isset($options['systemPrompt']) ? $options['systemPrompt'] : $this->buildSystemPrompt($readOnly);
+			$systemPrompt = isset($options['systemPrompt']) ? $options['systemPrompt'] : $this->buildSystemPrompt($readOnly, $dryRun);
+			if($dryRun && isset($options['systemPrompt'])) $systemPrompt = $this->appendDryRunInstructions($systemPrompt);
 			$systemPrompt = $this->appendIterationBudget($systemPrompt, $maxIterations);
 			if(array_key_exists('tools', $options)) {
 				$tools = $options['tools'];
 			} else {
-				$tools = $this->getToolDefinitions($provider, 'site', $readOnly);
+				$tools = $this->getToolDefinitions($provider, 'site', $readOnly, $dryRun);
 			}
 
 			$providerRequest = new AgentToolsRequest();
@@ -504,7 +507,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	 * @return string
 	 *
 	 */
-	protected function buildSystemPrompt(bool $readOnly = false): string {
+	protected function buildSystemPrompt(bool $readOnly = false, bool $dryRun = false): string {
 
 		$config = $this->wire()->config;
 		$siteUrl = rtrim($config->urls->httpRoot, '/');
@@ -580,6 +583,8 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			"If asked to make a change, explain what would need to be done and provide example code, " .
 			"but note that changes must be applied manually or via the CLI.";
 
+		if($dryRun) $prompt = $this->appendDryRunInstructions($prompt);
+
 		if($this->at->get('engineer_suspicious') === 'all') {
 			$prompt .=
 				"\n\n## Security\n" .
@@ -608,6 +613,22 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		if(is_file($siteMapFile) && $this->isSitemapStale($siteMapFile)) $this->regenerateSitemap();
 
 		return $prompt;
+	}
+
+	/**
+	 * Append preview-only instructions to a system prompt
+	 *
+	 * @param string $prompt
+	 * @return string
+	 *
+	 */
+	protected function appendDryRunInstructions(string $prompt): string {
+		return rtrim($prompt) . "\n\n" .
+			"## Preview only\n" .
+			"Preview-only mode is enabled. Inspect live site data as needed, then explain what you would do, " .
+			"what data or files you inspected, and any risks or assumptions. Do not make changes. Do not save, " .
+			"create, update, delete, clone, move, publish, unpublish, write files, change module configuration, " .
+			"or create migration files. You may use eval_php only for read-only inspection.";
 	}
 
 	/**
@@ -863,12 +884,17 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	 * @return array
 	 *
 	 */
-	public function getToolDefinitions(string $provider, string $context = 'site', bool $readOnly = false): array {
+	public function getToolDefinitions(string $provider, string $context = 'site', bool $readOnly = false, bool $dryRun = false): array {
 
 		$apiVars = $this->getEvalPhpVars(false);
 		$evalDesc =
 			"Evaluate PHP code with full ProcessWire API access. Use echo to output results. " .
 			"Available variables: $apiVars. Do not include an opening <?php tag.";
+		if($dryRun) {
+			$evalDesc .= " Preview-only mode is enabled: use this tool only for read-only inspection. " .
+				"Do not call save, delete, clone, move, publish, unpublish, file write, module config, " .
+				"or other mutation APIs.";
+		}
 
 		$migrationDesc =
 			"Save a PHP migration file for the user to review and apply. Use for any changes to the site. " .
@@ -972,7 +998,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 				['name' => 'read_file', 'description' => $readFileDesc, 'input_schema' => $readFileParams],
 				['name' => 'api_docs', 'description' => $apiDocsDesc, 'input_schema' => $apiDocsParams],
 			];
-			if(!$readOnly) $tools[] = ['name' => 'save_migration', 'description' => $migrationDesc, 'input_schema' => $migrationParams];
+			if(!$readOnly && !$dryRun) $tools[] = ['name' => 'save_migration', 'description' => $migrationDesc, 'input_schema' => $migrationParams];
 			if($includeSuspiciousTool) $tools[] = ['name' => 'report_suspicious_prompt', 'description' => $suspiciousDesc, 'input_schema' => $suspiciousParams];
 			return $tools;
 		} else {
@@ -982,7 +1008,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 				['type' => 'function', 'function' => ['name' => 'read_file', 'description' => $readFileDesc, 'parameters' => $readFileParams]],
 				['type' => 'function', 'function' => ['name' => 'api_docs', 'description' => $apiDocsDesc, 'parameters' => $apiDocsParams]],
 			];
-			if(!$readOnly) $tools[] = ['type' => 'function', 'function' => ['name' => 'save_migration', 'description' => $migrationDesc, 'parameters' => $migrationParams]];
+			if(!$readOnly && !$dryRun) $tools[] = ['type' => 'function', 'function' => ['name' => 'save_migration', 'description' => $migrationDesc, 'parameters' => $migrationParams]];
 			if($includeSuspiciousTool) $tools[] = ['type' => 'function', 'function' => ['name' => 'report_suspicious_prompt', 'description' => $suspiciousDesc, 'parameters' => $suspiciousParams]];
 			return $tools;
 		}

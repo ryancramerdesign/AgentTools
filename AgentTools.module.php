@@ -13,6 +13,8 @@
  * @property AgentToolsSitemap $sitemap
  * @property AgentToolsEngineer $engineer
  * @property AgentToolsTasks $tasks
+ * @property AgentToolsJobs $jobs
+ * @method AgentToolsJobs jobs()
  *
  * @property string $engineer_provider
  * @property string $engineer_api_key
@@ -34,7 +36,7 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 			'title' => 'Agent Tools',
 			'summary' => "Enables AI coding agents to access ProcessWire's API and provides a database migration system.",
 			'icon' => 'at',
-			'version' => 15,
+			'version' => 16,
 			'author' => 'Ryan Cramer, Claude (Anthropic), GPT 5.5 Codex',
 			'requires' => 'ProcessWire>=3.0.255, PHP>=8.0.0',
 			'installs' => 'ProcessAgentTools, FieldtypePageEngineer',
@@ -60,6 +62,7 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 		'migrations' => null,
 		'sitemap' => null,
 		'engineer' => null,
+		'jobs' => null,
 		'skills' => null,
 	];
 
@@ -186,6 +189,10 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 			$showHelpOnFailure = false;
 			$code = file_get_contents('php://stdin');
 			if(strlen(trim($code))) $success = $this->cliEval($code, $fuel);
+
+		} else if($atAction === 'cron') {
+			$showHelpOnFailure = false;
+			$success = $this->jobs()->cliExecute('cron');
 
 		} else {
 			$found = false;
@@ -378,6 +385,59 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 	}
 
 	/**
+	 * Convert markdown to AgentTools-friendly HTML
+	 *
+	 * @param string $markdownText
+	 * @param array $options
+	 *  - `safe` (bool): Use markdownSafe() rather than markdown() when available (default=true)
+	 *  - `email` (bool): Add simple email-friendly table attributes and inline styles (default=false)
+	 * @return string
+	 *
+	 */
+	public function markdownToHtml($markdownText, array $options = []) {
+		$defaults = [ 'safe' => true, 'email' => false ];
+		$options = array_merge($defaults, $options);
+		$text = (string) $markdownText;
+
+		/** @var TextformatterMarkdownExtra|null $markdown */
+		$markdown = $this->wire()->modules->get('TextformatterMarkdownExtra');
+		if(!$markdown) return '<p>' . nl2br(htmlspecialchars($text, ENT_QUOTES, 'UTF-8')) . '</p>';
+
+		$html = $markdown->markdown($text);
+
+		if($options['safe']) $html = $this->wire()->sanitizer->purify($html);
+
+		return "<div class='agent-tools-response'>" . $this->formatMarkdownHtml($html, $options) . "</div>";
+	}
+
+	/**
+	 * Apply shared AgentTools HTML tweaks to markdown output
+	 *
+	 * @param string $html
+	 * @param array $options
+	 * @return string
+	 *
+	 */
+	protected function formatMarkdownHtml($html, array $options = []) {
+
+		if(!empty($options['email'])) {
+			$border = 'border: 1px solid #dddddd;';
+			$tableAttr = "border='1' cellspacing='0' cellpadding='10'";
+			$findReplace = [
+				'<table>' => "<table $tableAttr style='border-collapse:collapse;$border'>",
+				'<th>' => "<th style='$border background-color: #f2f2f2; text-align: left;'>",
+				'<td>' => "<td style='$border'>",
+			];
+		} else {
+			$findReplace = [
+				'<table>' => '<table class="uk-table uk-table-divider uk-table-small">',
+			];
+		}
+
+		return str_replace(array_keys($findReplace), array_values($findReplace), $html);
+	}
+
+	/**
 	 * Get main files path for AgentTools assets
 	 *
 	 * @param string $subdir Optional subdirectory to get/create
@@ -550,6 +610,32 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 	 */
 	public function getModuleConfigInputfields(InputfieldWrapper $inputfields) {
 
+		if(!$this->jobs()->isCronHealthy()) {
+			$sanitizer = $this->wire()->sanitizer;
+			$phpBin = dirname(PHP_BINARY) . '/php';
+			if(!is_executable($phpBin)) $phpBin = 'php';
+			$php = escapeshellarg($phpBin);
+			$path = escapeshellarg($this->wire()->config->paths->root);
+			$f = $inputfields->InputfieldMarkup;
+			$f->attr('name', '_cron_job_warning');
+			$f->label = $this->_('No AgentTools cron job detected');
+			$f->description = $this->_('While optional, we recommend adding the following to your crontab:');
+			$f->value =
+				'<pre class="uk-margin-small">' .
+					$sanitizer->entities("* * * * * cd $path && $php index.php --at-cron") .
+				'</pre>' .
+				'<p class="description uk-margin-small">' .
+					$this->_('Optionally append the following to the above to log the cron jobs:') .
+				'</p>' .
+				'<pre class="uk-margin-small">' .
+					$sanitizer->entities(">> site/assets/logs/at-cron.log 2>&1") .
+				'</pre>';
+			$f->notes = $this->_('See the README.md section on "Background jobs with cron" for more details.');
+			$f->themeOffset = 1;
+			$f->icon = 'warning';
+			$inputfields->add($f);
+		}
+
 		foreach($this->getHelpers() as $helper) {
 			$helper->getConfigInputfields($inputfields);
 		}
@@ -561,6 +647,7 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 		$f->showIf = 'uninstall=AgentTools';
 		$f->val(0);
 		$inputfields->add($f);
+
 	}
 
 	/**

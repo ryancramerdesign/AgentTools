@@ -13,33 +13,51 @@ if($languages) {
 }
 $defaultLanguage = count($languageOptions) ? array_key_first($languageOptions) : '';
 
-$sourceOptions = [
-	'site/templates' => 'site/templates',
-	'site/modules' => 'site/modules',
-];
-$siteModulesPath = wire()->config->paths->siteModules;
-if(is_dir($siteModulesPath)) {
-	foreach(new \DirectoryIterator($siteModulesPath) as $dir) {
+$hasSourceFiles = function(string $path): bool {
+	if(!is_dir($path)) return false;
+	$iterator = new \RecursiveIteratorIterator(
+		new \RecursiveDirectoryIterator($path, \FilesystemIterator::SKIP_DOTS)
+	);
+	foreach($iterator as $file) {
+		/** @var \SplFileInfo $file */
+		if(!$file->isFile()) continue;
+		if(!in_array($file->getExtension(), [ 'php', 'module', 'inc' ], true)) continue;
+		return true;
+	}
+	return false;
+};
+
+$addChildSourceOptions = function(array &$sourceOptions, string $sourceRoot, string $pathRoot, int $depth = 1) use($hasSourceFiles, &$addChildSourceOptions): void {
+	if(!is_dir($pathRoot) || $depth < 1) return;
+	foreach(new \DirectoryIterator($pathRoot) as $dir) {
 		if($dir->isDot() || !$dir->isDir()) continue;
 		$name = $dir->getBasename();
 		if(strpos($name, '.') === 0 || strpos($name, '-') === 0) continue;
-		$modulePath = $dir->getPathname();
-		$iterator = new \RecursiveIteratorIterator(
-			new \RecursiveDirectoryIterator($modulePath, \FilesystemIterator::SKIP_DOTS)
-		);
-		foreach($iterator as $file) {
-			/** @var \SplFileInfo $file */
-			if(!$file->isFile()) continue;
-			if(!in_array($file->getExtension(), [ 'php', 'module', 'inc' ], true)) continue;
-			$source = "site/modules/$name";
-			$sourceOptions[$source] = $source;
-			break;
-		}
+		if(in_array($name, [ 'node_modules', 'vendor' ], true)) continue;
+		$source = "$sourceRoot/$name";
+		$path = $dir->getPathname();
+		if($hasSourceFiles($path)) $sourceOptions[$source] = $source;
+		if($depth > 1) $addChildSourceOptions($sourceOptions, $source, $path, $depth - 1);
 	}
-}
+};
+
+$sourceOptions = [
+	'site/templates' => 'site/templates',
+	'site/modules' => 'site/modules',
+	'site/classes' => 'site/classes',
+	'wire/core' => 'wire/core',
+	'wire/modules' => 'wire/modules',
+];
+
+$config = wire()->config;
+$addChildSourceOptions($sourceOptions, 'site/modules', $config->paths->siteModules, 1);
+$addChildSourceOptions($sourceOptions, 'site/templates', $config->paths->templates, 1);
+$addChildSourceOptions($sourceOptions, 'site/classes', $config->paths->site . 'classes/', 1);
+$addChildSourceOptions($sourceOptions, 'wire/core', $config->paths->wire . 'core/', 2);
+$addChildSourceOptions($sourceOptions, 'wire/modules', $config->paths->wire . 'modules/', 2);
+
 $sourceOptions += [
 	'site' => 'site',
-	'wire/modules' => 'wire/modules',
 	'wire' => 'wire',
 ];
 
@@ -102,7 +120,7 @@ return [
 		'translation_guidance' => [
 			'type' => 'textarea',
 			'label' => 'Translation guidance',
-			'description' => 'Optional tone, locale, terminology, or brand guidance for the translation.',
+			'description' => 'Optional tone, locale, terminology, or brand guidance for the translation. Or specify a specific file within the source directory.',
 			'notes' => 'Example: Use formal German. Preserve product names. Prefer concise UI labels.',
 			'rows' => 4,
 			'collapsed' => Inputfield::collapsedBlank,
@@ -139,7 +157,7 @@ $exportInfo = $porter->getLastExportInfo();
 
 If the target language cannot be found, or if LanguageSupport/LanguagePorter is not available, stop and report that requirement clearly. If the exported CSV is too large to handle safely in this single request, stop and recommend a narrower source directory or smaller maximum phrase count rather than continuing to call tools.
 
-The CSV columns are original, translated, description, file, and hash, though the header uses language names. Preserve the CSV structure, row order, file values, hash values, descriptions, line endings, and quoting rules. Translate only human-facing text in the original phrase into the target language. Preserve placeholders, sprintf tokens, named tokens, HTML tags, entities, URLs, email addresses, code fragments, ProcessWire selectors, product names, and variable-looking text exactly unless the guidance explicitly says otherwise. Keep plural/context meaning intact for _n() and _x() style phrases. If a phrase should intentionally remain identical to the default/English phrase, enter "=" as the translated value to tell ProcessWire that no translation is necessary.
+The CSV columns are original, translated, description, file, and hash, though the header uses language names. Preserve the CSV structure, row order, file values, hash values, descriptions, line endings, and quoting rules. Translate only human-facing text in the original phrase into the target language. Preserve placeholders, sprintf tokens, named tokens, HTML tags, entities, URLs, email addresses, code fragments, ProcessWire selectors, product names, and variable-looking text exactly unless the guidance explicitly says otherwise. Keep plural/context meaning intact for _n() and _x() style phrases. If a phrase should intentionally remain identical to the default/English phrase, enter "=" as the translated value to tell ProcessWire that no translation is necessary. Use the preservation rules internally while translating. In review reports, summarize only the user-relevant implications, not the full instruction list.
 
 If action is "review", do not import anything and do not modify files or database content. Export the CSV, use $porter->getLastExportInfo() for exact total/translated/untranslated/exported counts, summarize phrase counts by file when practical, identify ambiguous or risky phrases, note placeholder/markup patterns that need care, and provide concise recommendations for translation.
 

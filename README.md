@@ -49,7 +49,8 @@ admin application (Setup > Agent Tools), currently with the following features:
 - **Tasks**: Run predefined Engineer workflows from the admin, such as security scans,
   log reviews, SEO/content reviews, migration reviews, accessibility checks, and static
   phrase translation for multi-language sites. Custom prompt-based tasks can also be added
-  for common site-specific workflows.
+  for common site-specific workflows. Engineer, Page Engineer, and Task requests can
+  optionally be queued for background processing when cron is configured.
 
 ### Page Engineer (AI assistant in the page editor)
 
@@ -234,12 +235,47 @@ See the resulting post here: [ProcessWire and AI](https://processwire.com/blog/p
 - This migrations system is somewhat experimental and not intended to replace a mature system like RockMigrations.
 - File-based assets are not yet supported by migrations. 
 
+## Background jobs with cron
+
+Long-running Engineer, Page Engineer, and Task requests can be queued from the
+admin by checking **Run in background**. Background jobs are processed by a CLI
+cron command, which avoids browser, Apache/FastCGI, and proxy request timeouts.
+When the job finishes, AgentTools emails the result to the user who queued it
+and also stores the result for review in the AgentTools admin.
+
+To enable background jobs, add a cron entry that runs this command from your
+ProcessWire root directory:
+
+```
+php index.php --at-cron
+```
+
+For example, to process one pending AgentTools job every minute:
+
+```
+* * * * * cd /path/to/your/processwire-site && php index.php --at-cron >> site/assets/logs/agenttools-cron.log 2>&1
+```
+
+If you manage multiple ProcessWire installations, you can put several commands in
+a shell script and have cron run that script once per minute. Each `--at-cron`
+run processes at most one pending job for that installation, so frequent cron
+runs are preferred over large batches.
+
+AgentTools writes a heartbeat file when `--at-cron` runs. If cron has not checked
+in recently, the admin **Run in background** checkbox is disabled and explains
+that cron needs to be configured. Background jobs are stored under
+`site/assets/at/jobs/`; AgentTools also writes a `.htaccess` file in
+`site/assets/at/` to deny web access on Apache.
+
 ## Troubleshooting
 
 ### Engineer timeouts or HTTP 500/504 errors
 
 **If you submit the Engineer form and it occasionally takes 30 seconds followed by a 500 or 504 error, 
 this section is for you.**
+
+*(Be sure to also see the section above on "Background jobs with cron", as this is one way you can bypass Apache timeouts.)*
+
 
 When the browser shows a 500 or 504 error, the AI request is likely still completing on the server in the 
 background. By reloading or revisiting the page, you may find that the requested updates are already completed.
@@ -321,6 +357,7 @@ from the command line without needing to enter an interactive session.
 | `php index.php --at-engineer-api-docs-get NAME` | Print a ProcessWire API.md documentation file without calling an AI provider |
 | `php index.php --at-engineer-api-docs-search TERM` | Search ProcessWire API.md documentation without calling an AI provider |
 | `php index.php --at-engineer-read-file PATH` | Read a local site file without calling an AI provider |
+| `php index.php --at-cron` | Process one pending AgentTools background job; intended for system cron |
 
 **`--at-eval` example** — ask your AI agent how many pages are on your site:
 ```

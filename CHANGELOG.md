@@ -1,5 +1,57 @@
 # Changelog
 
+## Version 16
+
+### Background jobs
+
+- Added file-backed AgentTools background jobs with `php index.php --at-cron` for
+  system cron.
+- Site Engineer, Page Engineer, and built-in Tasks can now queue long-running
+  requests in the background and email the result to the submitting user.
+- Added job heartbeat and lock handling so the admin can detect whether cron has
+  checked in recently and avoid overlapping job runners.
+- Added background job result pages in the AgentTools admin, including pending,
+  running, failed, and completed states, plus fallback access when email delivery fails.
+- Completed queued Engineer and Task jobs store conversation history so users can
+  continue from a completed background response when applicable.
+- AgentTools module configuration now shows a cron setup notice with a copyable
+  `--at-cron` crontab example when no recent cron heartbeat is detected.
+
+### Engineer and Page Engineer
+
+- Added **Preview only** mode for Site Engineer and Page Engineer. Preview mode
+  keeps read-only inspection tools available, omits migration creation, and tells
+  the agent to explain what it would do without making changes.
+- Page Engineer can now run in the background, appending the completed response
+  back into the Page Engineer field conversation.
+- Page Engineer conversation reset now clears prior history and still sends the
+  submitted prompt when both reset and prompt text are present.
+- Page Engineer background jobs run as the user who submitted the request so
+  editability checks remain meaningful.
+- Site Engineer and Page Engineer controls now use a compact inline checkbox row
+  for preview/background options.
+- Engineer/PageEngineer Markdown rendering now goes through `$at->markdownToHtml()`
+  for shared table styling and HTML purification.
+
+### Tasks and translation
+
+- Static phrase translation source choices now include `site/classes`, `wire/core`,
+  `wire/modules`, and discovered child source directories, making targeted
+  translation runs easier on larger installations.
+- Translation prompts now explicitly tell agents to use preservation rules internally
+  and summarize only user-relevant implications in review reports.
+- Built-in Tasks can be queued for background processing and share the background
+  job email/result workflow.
+
+### Documentation
+
+- Added README instructions for configuring background jobs with cron.
+- Added `--at-cron` to `AGENTS.md`, `agent_cli.md`, and README CLI references.
+- AGENTS.md now tells agents how to verify background cron and not to modify a
+  user's crontab without explicit permission.
+
+---
+
 ## Version 15
 
 ### Tasks

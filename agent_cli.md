@@ -44,6 +44,7 @@ All commands are run from the ProcessWire root directory (where `index.php` live
 | `php index.php --at-engineer-api-docs-get NAME` | Print a ProcessWire API.md documentation file without calling an AI provider |
 | `php index.php --at-engineer-api-docs-search TERM` | Search ProcessWire API.md documentation without calling an AI provider |
 | `php index.php --at-engineer-read-file PATH` | Read a local site file without calling an AI provider |
+| `php index.php --at-cron` | Process one pending AgentTools background job; intended for system cron |
 
 ### When to use `--at-eval` vs `--at-stdin`
 
@@ -115,6 +116,10 @@ Several read-only helper commands are available without calling an AI provider:
 Use these local helper commands when an external coding agent needs structured
 site context, ProcessWire API documentation, or a small local file without
 spending provider tokens.
+
+`--at-cron` is for queued background jobs from the admin Engineer, Page Engineer,
+and Tasks screens. It should be run by system cron from the ProcessWire root. Do
+not install or modify cron for the user unless they explicitly ask you to.
 
 ---
 

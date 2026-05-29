@@ -7,3 +7,14 @@
 	/* gets rid of unwanted margin between tabs and tasks tables */
 	margin-top: 0;
 }
+
+.at-engineer-checkboxes {
+	input {
+		margin-right: 0.5em;
+	}
+	label {
+		margin-right: 1em;
+		position: relative;
+		top: 3px;
+	}
+}

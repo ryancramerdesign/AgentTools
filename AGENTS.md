@@ -29,6 +29,7 @@ Run from the ProcessWire root directory (where `index.php` lives):
 | `php index.php --at-engineer-api-docs-get NAME` | Print a ProcessWire API.md documentation file without calling an AI provider |
 | `php index.php --at-engineer-api-docs-search TERM` | Search ProcessWire API.md documentation without calling an AI provider |
 | `php index.php --at-engineer-read-file PATH` | Read a local site file without calling an AI provider |
+| `php index.php --at-cron` | Process one pending AgentTools background job; intended for system cron |
 
 ## Getting oriented on a new site
 
@@ -58,6 +59,18 @@ The applied migrations registry is stored in the database (AgentTools module con
 so it is never overwritten by rsync or file transfers.
 
 Migrations can also be applied from the ProcessWire admin at **Setup > Agent Tools**.
+
+## Background jobs
+
+The admin Engineer, Page Engineer, and Tasks screens can queue long-running
+requests as background jobs when system cron is configured. Cron should run
+`php index.php --at-cron` from the ProcessWire root directory. Each run processes
+one pending job and updates an AgentTools heartbeat file.
+
+Agents may help create or review the cron command, but should not silently install
+or modify a user's crontab without explicit permission. If background mode is
+unavailable in the admin, check whether `php index.php --at-cron` runs
+successfully from the ProcessWire root and report the result.
 
 
 ## Engineer (admin UI and CLI)
