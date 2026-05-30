@@ -1145,7 +1145,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		$path = (string) parse_url($endpoint, PHP_URL_PATH);
 		$isResponses = str_ends_with($path, '/responses');
 		// If endpoint looks like a base URL (no recognized path suffix), append /chat/completions
-		if(!$isResponses && !str_ends_with($path, '/chat/completions')) {
+		if(!$isResponses && !str_ends_with($path, '/chat/completions') && !str_ends_with($path, '/messages')) {
 			$endpoint = rtrim($endpoint, '/') . '/chat/completions';
 		}
 

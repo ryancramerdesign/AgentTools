@@ -59,13 +59,20 @@ class AgentToolsAgent extends WireData {
 		$parts = explode('|', $line); 
 		foreach($parts as $key => $part) $parts[$key] = trim($part);
 		$first = $parts[0] ?? '';
+		$explicitProvider = false;
 		if($first === 'anthropic' || $first === 'openai') {
 			parent::set('provider', array_shift($parts));
+			$explicitProvider = true;
 		}
 		$this->model = array_shift($parts);
 		$this->apiKey = array_shift($parts);
 		if(count($parts)) $this->endpointUrl = array_shift($parts);
 		if(count($parts)) $this->label = array_shift($parts);
+		// Auto-detect Anthropic-compatible endpoints when provider was not explicitly specified
+		if(!$explicitProvider && $this->endpointUrl) {
+			$path = (string) parse_url($this->endpointUrl, PHP_URL_PATH);
+			if(str_ends_with($path, '/messages')) parent::set('provider', 'anthropic');
+		}
 		return true;
 	}
 	
