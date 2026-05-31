@@ -8,7 +8,8 @@
  * @property string $apiKey
  * @property string $endpointUrl
  * @property string $label
- * 
+ * @property string $description
+ *
  * 
  */
 class AgentToolsAgent extends WireData {
@@ -18,7 +19,8 @@ class AgentToolsAgent extends WireData {
 		'model' => '',
 		'label' => '',
 		'apiKey' => '' ,
-		'endpointUrl' => ''
+		'endpointUrl' => '',
+		'description' => '',
 	];
 	
 	/**
@@ -39,7 +41,10 @@ class AgentToolsAgent extends WireData {
 	}
 	
 	public function set($key, $value) {
-		if(isset($this->defaults[$key])) $value = trim("$value");
+		if(isset($this->defaults[$key])) {
+			$value = str_replace('|', ' ',  $value);
+			$value = trim("$value");
+		}
 		if($key === 'apiKey') {
 			parent::set('provider', strpos($value, 'sk-ant') === 0 ? 'anthropic' : 'openai');
 		}
@@ -68,6 +73,7 @@ class AgentToolsAgent extends WireData {
 		$this->apiKey = array_shift($parts);
 		if(count($parts)) $this->endpointUrl = array_shift($parts);
 		if(count($parts)) $this->label = array_shift($parts);
+		if(count($parts)) $this->description = array_shift($parts);
 		// Auto-detect Anthropic-compatible endpoints when provider was not explicitly specified
 		if(!$explicitProvider && $this->endpointUrl) {
 			$path = (string) parse_url($this->endpointUrl, PHP_URL_PATH);
@@ -77,7 +83,7 @@ class AgentToolsAgent extends WireData {
 	}
 	
 	public function getString() {
-		return trim("$this->model | $this->apiKey | $this->endpointUrl | $this->label", '| ');
+		return trim("$this->model | $this->apiKey | $this->endpointUrl | $this->label | $this->description", '| ');
 	}
 	
 	public function __toString() {
@@ -175,6 +181,6 @@ class AgentToolsAgent extends WireData {
 	}
 	
 	public function getHash() {
-		return md5("$this->model|$this->apiKey|$this->endpointUrl");
+		return md5("$this->model|$this->apiKey|$this->endpointUrl|$this->label|$this->description");
 	}
 }

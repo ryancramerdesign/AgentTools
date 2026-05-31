@@ -3,11 +3,10 @@
 /**
  * AgentTools
  *
- * Enables AI coding agents (e.g. Claude Code) to access ProcessWire's API
- * via CLI, and provides a database migration system for transferring changes
- * across environments.
+ * Enables AI coding agents to access ProcessWire's API via CLI, and provides
+ * a database migration system for transferring changes across environments.
  *
- * Copyright 2026 Ryan Cramer, Claude (Anthropic), GPT 5.5 Codex | MIT
+ * Copyright 2026 Ryan Cramer with help from Claude (Anthropic), GPT 5.5 Codex
  *
  * @property AgentToolsMigrations $migrations
  * @property AgentToolsSitemap $sitemap
@@ -21,6 +20,7 @@
  * @property string $engineer_model
  * @property string $engineer_endpoint
  * @property string $engineer_label
+ * @property string $engineer_description
  * @property int|bool $engineer_readonly
  * @property string $engineer_instructions
  * @property int $engineer_mem_qty
@@ -36,7 +36,7 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 			'title' => 'Agent Tools',
 			'summary' => "Enables AI coding agents to access ProcessWire's API and provides a database migration system.",
 			'icon' => 'at',
-			'version' => 16,
+			'version' => 17,
 			'author' => 'Ryan Cramer, Claude (Anthropic), GPT 5.5 Codex',
 			'requires' => 'ProcessWire>=3.0.255, PHP>=8.0.0',
 			'installs' => 'ProcessAgentTools, FieldtypePageEngineer',
@@ -572,7 +572,13 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 			// convert old settings to new setting
 			$models = explode(',', $this->engineer_model);
 			foreach($models as $model) {
-				$a = [$model, $this->engineer_api_key, $this->engineer_endpoint, $this->engineer_label ];
+				$a = [
+					$model,
+					$this->engineer_api_key,
+					$this->engineer_endpoint,
+					$this->engineer_label,
+					$this->engineer_description,
+				];
 				$lines[] = trim(implode(' | ', $a), '| ');
 			}
 			$removeDuplicates = true;

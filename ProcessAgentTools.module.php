@@ -337,6 +337,8 @@ class ProcessAgentTools extends Process {
 	 *
 	 */
 	protected function renderEngineerForm(string $prefill = '', bool $forMigration = false): string {
+		$sanitizer = $this->wire()->sanitizer;
+		
 		if(!$this->at->getPrimaryAgent()) {
 			$agentsUrl = $this->wire()->page->url . 'agents/';
 			$this->error(sprintf(
@@ -376,7 +378,7 @@ class ProcessAgentTools extends Process {
 			$f->detail = $this->description('engineer');
 		}
 
-			$this->addEngineerOptionsRow($f);
+		$this->addEngineerOptionsRow($f);
 		$form->add($f);
 
 		if($savedMemory === 'yes' && !empty($history)) {
@@ -390,7 +392,7 @@ class ProcessAgentTools extends Process {
 			$f->collapsed = Inputfield::collapsedYes;
 			$historyOut = '';
 			foreach(array_chunk($history, 2) as $pair) {
-				if(isset($pair[0])) $historyOut .= '<blockquote><p>' . $this->wire()->sanitizer->entities($pair[0]['content']) . '</p></blockquote>';
+				if(isset($pair[0])) $historyOut .= '<blockquote><p>' . $sanitizer->entities($pair[0]['content']) . '</p></blockquote>';
 				if(isset($pair[1])) $historyOut .= $this->formatEngineerResponse($pair[1]['content']);
 			}
 			$f->val($historyOut);
@@ -398,7 +400,8 @@ class ProcessAgentTools extends Process {
 		}
 
 		$availableModels = $this->at->engineer->getAvailableModels();
-		$modelLabel = isset($availableModels[(int) $savedModelIndex]) ? $availableModels[(int) $savedModelIndex]['label'] : 'Default';
+		if(!isset($availableModels[(int) $savedModelIndex])) $savedModelIndex = 0;
+		$modelLabel = $availableModels[(int) $savedModelIndex]['label'];
 		$memoryLabel = $savedMemory === 'yes' ? 'On' : 'Off';
 
 		$fs = $form->InputfieldFieldset;

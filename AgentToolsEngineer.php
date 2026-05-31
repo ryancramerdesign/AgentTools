@@ -504,6 +504,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	 * Build the system prompt
 	 *
 	 * @param bool $readOnly
+	 * @param bool $dryRun
 	 * @return string
 	 *
 	 */
@@ -881,6 +882,9 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	 * Get tool definitions formatted for the given provider
 	 *
 	 * @param string $provider
+	 * @param string $context
+	 * @param bool $readOnly
+	 * @param bool $dryRun
 	 * @return array
 	 *
 	 */
@@ -1000,7 +1004,6 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			];
 			if(!$readOnly && !$dryRun) $tools[] = ['name' => 'save_migration', 'description' => $migrationDesc, 'input_schema' => $migrationParams];
 			if($includeSuspiciousTool) $tools[] = ['name' => 'report_suspicious_prompt', 'description' => $suspiciousDesc, 'input_schema' => $suspiciousParams];
-			return $tools;
 		} else {
 			$tools = [
 				['type' => 'function', 'function' => ['name' => 'eval_php', 'description' => $evalDesc, 'parameters' => $evalParams]],
@@ -1010,8 +1013,8 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			];
 			if(!$readOnly && !$dryRun) $tools[] = ['type' => 'function', 'function' => ['name' => 'save_migration', 'description' => $migrationDesc, 'parameters' => $migrationParams]];
 			if($includeSuspiciousTool) $tools[] = ['type' => 'function', 'function' => ['name' => 'report_suspicious_prompt', 'description' => $suspiciousDesc, 'parameters' => $suspiciousParams]];
-			return $tools;
 		}
+		return $tools;
 	}
 
 	/**
@@ -1561,7 +1564,6 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	 */
 	public function getConfigInputfields(InputfieldWrapper $inputfields): void {
 		$modules = $this->wire()->modules;
-		$datalists = include(__DIR__ . '/datalists.php');
 
 		if(!$this->at->engineer_model) {
 			// populate to primary agent fields, useful after an import
@@ -1619,29 +1621,17 @@ class AgentToolsEngineer extends AgentToolsHelper {
 
 		$f = $modules->get('InputfieldText');
 		$f->attr('name', 'engineer_model');
-		$f->attr('list', 'model-list');
 		$f->label = $this->_('Model API identifier');
 		$f->val($this->at->get('engineer_model') ?: '');
 		$f->description = 'Example: `claude-sonnet-4-6` ';
-		$o = '';
-		foreach($datalists['model'] as $modelLabel => $modelName) {
-			$o .= "<option value='$modelName' label='$modelLabel'>";
-		}
-		$f->appendMarkup = "<datalist id='model-list'>$o</datalist>";
 		$f->columnWidth = 50;
 		$primaryFs->add($f);
 
 		$f = $modules->get('InputfieldText');
 		$f->attr('name', 'engineer_label');
-		$f->attr('list', 'label-list');
 		$f->label = $this->_('Model API label (optional)');
 		$f->val($this->at->get('engineer_label') ?: '');
 		$f->description = 'Example: `Claude Sonnet 4.6` ';
-		$o = '';
-		foreach($datalists['model'] as $modelLabel => $modelName) {
-			$o .= "<option value='$modelLabel' label='$modelName'>";
-		}
-		$f->appendMarkup = "<datalist id='label-list'>$o</datalist>";
 		$f->columnWidth = 50;
 		$primaryFs->add($f);
 
@@ -1650,12 +1640,14 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		$f->attr('name', 'engineer_endpoint');
 		$f->label = $this->_('API endpoint URL');
 		$f->val($this->at->get('engineer_endpoint') ?: '');
-		$f->attr('list', 'endpoint-list');
-		$o = '';
-		foreach($datalists['endpointUrl'] as $endpointLabel => $endpointUrl) {
-			$o .= "<option value='$endpointUrl' label='$endpointLabel'>";
-		}
-		$f->appendMarkup = "<datalist id='endpoint-list'>$o</datalist>";
+		$f->columnWidth = 50;
+		$primaryFs->add($f);
+		
+		$f = $modules->get('InputfieldText');
+		$f->attr('name', 'engineer_description');
+		$f->label = $this->_('Description (optional)');
+		$f->val($this->at->get('engineer_description') ?: '');
+		$f->columnWidth = 50;
 		$primaryFs->add($f);
 
 		/** @var InputfieldToggle $f */

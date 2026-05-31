@@ -19,6 +19,92 @@ function atEnsureProcessing() {
 	return !!window.AgentToolsProcessing;
 }
 
+function initAgentsForm() {
+	var $form = $('#at-agents-form');
+	var $inputfields = $form.children('.Inputfields').eq(0);
+	if(!$form.length) return;
+	
+	$inputfields.sortable({
+		items: '> .at-agent-item:not(.at-agent-new)',
+		handle: '.fa-arrows',
+		axis: 'y',
+		start: function(e, ui) {
+			ui.item.addClass('InputfieldIsHighlight at-sorting');
+		},
+		stop: function(e, ui) {
+			ui.item.removeClass('InputfieldIsHighlight at-sorting');
+		},
+		update: function(e, ui) {
+			ui.item.closest('form').addClass('InputfieldStateChanged');
+			$inputfields.children().each(function(n) {
+				var $item = $(this);
+				if(!$item.hasClass('at-agent-item')) return;
+				if($item.hasClass('at-agent-new') || $item.hasClass('at-agent-deleting')) return;
+				$item.find('.at-agent-sort').val(n+1);
+			});
+		}
+	});
+	
+	// apply "ui-state-focus" class when an item is being dragged
+	var cls = 'InputfieldIsHighlight';
+	$(".fa-arrows", $form).on('mouseenter', function() {
+		$(this).closest('.Inputfield').addClass(cls);
+	}).on('mouseleave', function() {
+		var $f = $(this).closest('.Inputfield');
+		if(!$f.hasClass('at-sorting')) $f.removeClass(cls);
+	});
+	
+	// Agents configuration: "Add new agent" link
+	$('#at-add-agent-link').on('click', function(e) {
+		var $newAgents = $('.at-agent-new');
+		if($newAgents.length === 0) return;
+		$('.at-agent-new').eq(0).prop('hidden', false).removeClass('at-agent-new');
+		if($newAgents.length === 1) $('#at-add-agent').prop('hidden', true);
+		e.preventDefault();
+	});
+
+	// show/hide API key
+	$('.at-apiKey').on('at-apikey-show', function(e) {
+		$(this).find('input').prop('type', 'text');
+	}).on('at-apikey-hide', function(e) {
+		$(this).find('input').prop('type', 'password');
+	});
+	
+	$('.at-agent-item').on('at-agent-delete', function(e) {
+		var $f = $(this);
+		var $del = $f.find('.at-agent-delete');
+		if($f.hasClass('at-agent-deleting')) {
+			$f.removeClass('at-agent-deleting');
+			$del.val('');
+		} else {
+			$f.addClass('at-agent-deleting');
+			var n = $f.attr('data-agent-n');
+			$del.val('delete' + n);
+			Inputfields.close($f);
+		}
+	});
+	
+	$(document).on('at-agent-clone', function(e, $f) {
+		var $src = $f.closest('.at-agent-item');
+		var $dst = $src.siblings('.at-agent-new').first();
+		if(!$dst.length) {
+			ProcessWire.alert('Max agents reached');
+			return;
+		}
+		$src.find('input[type!="hidden"]').each(function() {
+			var $f = $(this);
+			var $fCopy = $dst.find('input[data-name="' + $f.attr('data-name') + '"]').first();
+			$fCopy.val($f.val());
+		});
+		var $dstLabel = $dst.find('input[data-name="label"]');
+		$dstLabel.val($dstLabel.val() + ' (copy)');
+		$dst.removeClass('at-agent-new').prop('hidden', false);
+		Inputfields.open($dst);
+		$('html, body').animate({ scrollTop: $dst.offset().top }, 1000);
+	});
+	
+}
+
 var AtTools = {
 	escapeHtml: function(text) {
 		if(!atEnsureProcessing()) return $('<div>').text(text).html();
@@ -92,12 +178,6 @@ $(function() {
 		if(hasRequest) setTimeout(AtTools.showProcessingOverlay, 1500);
 	});
 
-	$('.at-apiKey').on('at-apikey-show', function(e) {
-		$(this).find('input').prop('type', 'text');
-	}).on('at-apikey-hide', function(e) {
-		$(this).find('input').prop('type', 'password');
-	});
-
 	// populate task title into task name [-_a-z0-9] or update task name on blur
 	var $title = $('#task_title');
 	if($title.length) {
@@ -122,4 +202,5 @@ $(function() {
 		});
 	}
 
+	initAgentsForm();
 });

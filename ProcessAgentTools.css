@@ -18,3 +18,22 @@
 		top: 3px;
 	}
 }
+
+#wrap_Inputfield_submit_agents {
+	margin-top: 0 !important;
+}
+
+#at-add-agent {
+	margin-bottom: 2em;
+}
+
+#at-agents-form .fa-arrows {
+	cursor: move;
+}
+
+.at-agent-deleting {
+	opacity: 0.5;
+}
+.at-agent-deleting .InputfieldHeader {
+	text-decoration: line-through;
+}
