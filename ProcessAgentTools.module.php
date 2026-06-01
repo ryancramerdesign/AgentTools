@@ -26,8 +26,8 @@ class ProcessAgentTools extends Process {
 			],
 			'useNavJSON' => true,
 			'nav' => [
-				['url' => 'migrations/', 'label' => 'Migrations', 'icon' => 'database'],
 				['url' => 'engineer/', 'label' => 'Engineer', 'icon' => 'commenting'],
+				['url' => 'migrations/', 'label' => 'Migrations', 'icon' => 'database'],
 				['url' => 'tasks/', 'label' => 'Tasks', 'icon' => 'tasks'],
 				['url' => 'agents/', 'label' => 'Agents', 'icon' => 'universal-access'],
 			],
@@ -77,6 +77,9 @@ class ProcessAgentTools extends Process {
 		]);
 		parent::init();
 		$this->loadProcessingAssets();
+		$this->addHookAfter('ProcessAgentTools::execute*', function(HookEvent $e) {
+			$e->return = $this->renderTabs() . $e->return;
+		});
 	}
 
 	/**
@@ -225,6 +228,33 @@ class ProcessAgentTools extends Process {
 		}
 		return 'unknown description name';
 	}
+	
+	/**
+	 * Render top navigation tabs
+	 *
+	 * @return string
+	 *
+	 */
+	protected function renderTabs() {
+		$atUrl = $this->wire()->page->url;
+		$tabName = $this->wire()->input->urlSegment1;
+		if(!$tabName) return '';
+		$info = self::getModuleInfo();
+		$tabs = [];
+		foreach($info['nav'] as $item) {
+			$name = trim($item['url'], '/');
+			$id = "tab-$name";
+			$icon = ''; //wireIconMarkup($item['icon']);
+			$tabs[$id] = "<a id='$id' class='at-tab-link' href='$atUrl$item[url]'>$icon $item[label]</a>";
+		}
+		$out =
+			$this->wire()->modules->get('JqueryWireTabs')->renderTabList($tabs, ['id' => 'at-tabs']) .
+			"<script>" .
+			"$('.uk-active', '#at-tabs').removeClass('uk-active');" .
+			"$('#tab-$tabName').parent().addClass('uk-active');" .
+			"</script>";
+		return $out;
+	}
 
 	/**
 	 * Render a uk-label element
@@ -291,7 +321,7 @@ class ProcessAgentTools extends Process {
 			$btn = $btn->render();
 			$out .= "<h2 class='uk-margin-remove'>$label</h2><p>$description</p><p>$btn</p><hr />";
 		}
-
+		
 		return $out;
 	}
 
@@ -621,7 +651,7 @@ class ProcessAgentTools extends Process {
 	 * @return string
 	 *
 	 */
-	public function executeReplyJob(): string {
+	public function ___executeReplyJob(): string {
 		$input = $this->wire()->input;
 		$session = $this->wire()->session;
 		$id = (string) $input->get('id');
@@ -655,7 +685,7 @@ class ProcessAgentTools extends Process {
 	 * @return string
 	 *
 	 */
-	public function executeViewJob(): string {
+	public function ___executeViewJob(): string {
 		$input = $this->wire()->input;
 		$id = (string) $input->get('id');
 		$job = $this->getViewableJob($id);
@@ -1031,7 +1061,7 @@ class ProcessAgentTools extends Process {
 	 * @return string
 	 *
 	 */
-	public function executeTasks() {
+	public function ___executeTasks() {
 		return $this->getHelper('tasks')->executeTasks();
 	}
 
@@ -1041,7 +1071,7 @@ class ProcessAgentTools extends Process {
 	 * @return string
 	 *
 	 */
-	public function executeRunTask() {
+	public function ___executeRunTask() {
 		return $this->getHelper('tasks')->executeRunTask();
 	}
 
@@ -1051,7 +1081,7 @@ class ProcessAgentTools extends Process {
 	 * @return string
 	 *
 	 */
-	public function executeReplyTask() {
+	public function ___executeReplyTask() {
 		return $this->getHelper('tasks')->executeReplyTask();
 	}
 
@@ -1061,7 +1091,7 @@ class ProcessAgentTools extends Process {
 	 * @return string
 	 *
 	 */
-	public function executeEditTask() {
+	public function ___executeEditTask() {
 		return $this->getHelper('tasks')->executeEditTask();
 	}
 }

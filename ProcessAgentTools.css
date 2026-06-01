@@ -27,6 +27,14 @@
 	margin-bottom: 2em;
 }
 
+.at-agent-item {
+	margin-bottom: 10px;
+}
+
+#at-add-agent {
+	padding-top: 10px;
+}
+
 #at-agents-form .fa-arrows {
 	cursor: move;
 }
@@ -36,4 +44,12 @@
 }
 .at-agent-deleting .InputfieldHeader {
 	text-decoration: line-through;
+}
+
+.InputfieldForm .pw-table-responsive {
+	margin-top: 0;
+}
+
+body.AdminThemeUikitOriginal div.pw-wiretabs {
+	margin-top: 20px;
 }

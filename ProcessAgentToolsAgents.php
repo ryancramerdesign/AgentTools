@@ -72,7 +72,7 @@ class ProcessAgentToolsAgents extends ProcessAgentToolsHelper {
 			$fs->label = $agentLabel ? $agentLabel : "Agent $n";
 			$fs->wrapClass('at-agent-item');
 			$fs->icon = 'arrows';
-			$fs->themeOffset = 1;
+			//$fs->themeOffset = 1;
 			$fs->collapsed = Inputfield::collapsedYes;
 			$fs->wrapAttr('data-agent-n', $n);
 			if($agent) {

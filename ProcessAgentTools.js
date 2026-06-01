@@ -203,4 +203,8 @@ $(function() {
 	}
 
 	initAgentsForm();
+	
+	$('.at-tab-link').on('click', function(e) {
+		window.location.href = $(this).attr('href');
+	})
 });
