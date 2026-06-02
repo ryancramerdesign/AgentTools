@@ -1,5 +1,40 @@
 # Changelog
 
+## Version 18
+
+### Scheduled tasks
+
+- Added scheduled Tasks, letting administrators save recurring Task runs that
+  are queued by `php index.php --at-cron` and delivered through the existing
+  background job email/result workflow.
+- Scheduled Tasks can be active or paused, store notification email recipients,
+  remember the selected agent, and support interval, daily, weekly, and monthly
+  schedules.
+- Added **Run Now** for scheduled Tasks so administrators can test a saved
+  schedule immediately without advancing its normal scheduled run time.
+- Added file-backed scheduled task storage in `site/assets/at/schedules/`.
+- Built-in Tasks can opt into scheduling with the `scheduleable` flag; currently
+  the built-in Recent log review task is scheduleable.
+
+### Agent and job handling
+
+- Added stable agent IDs so saved schedules and queued jobs continue to use the
+  intended configured agent even if agents are reordered or model names change.
+- Background Engineer, Task, and Page Engineer jobs now store the stable agent
+  ID while keeping model-index fallback support for older queued jobs.
+- Page Engineer background jobs now resolve agents by stable ID before falling
+  back to the older model index.
+
+### Admin UI
+
+- Added a Scheduled tab to Tasks and a dedicated scheduled task editor.
+- Scheduled task lists show task status, frequency, last run, and next run,
+  including clearer labels for paused and due-now tasks.
+- Scheduled task Save returns to the saved edit screen so task-specific settings
+  can appear after the selected Task is known.
+
+---
+
 ## Version 16
 
 ### Background jobs

@@ -4,25 +4,27 @@
  * Agent Tools Agent
  *
  * @property string $provider
+ * @property string $id
  * @property string $model
  * @property string $apiKey
  * @property string $endpointUrl
  * @property string $label
  * @property string $description
  *
- * 
+ *
  */
 class AgentToolsAgent extends WireData {
-	
+
 	protected $defaults = [
-		'provider' => 'openai', 
+		'provider' => 'openai',
+		'id' => '',
 		'model' => '',
 		'label' => '',
 		'apiKey' => '' ,
 		'endpointUrl' => '',
 		'description' => '',
 	];
-	
+
 	/**
 	 * Construct
 	 *
@@ -31,7 +33,7 @@ class AgentToolsAgent extends WireData {
 	 */
 	public function __construct($data = null) {
 		parent::__construct();
-		$this->setArray($this->defaults); 
+		$this->setArray($this->defaults);
 		if($data === null) return;
 		if(is_array($data)) {
 			$this->setArray($data);
@@ -39,29 +41,33 @@ class AgentToolsAgent extends WireData {
 			$this->setString($data);
 		}
 	}
-	
+
 	public function set($key, $value) {
 		if(isset($this->defaults[$key])) {
 			$value = str_replace('|', ' ',  $value);
 			$value = trim("$value");
+		}
+		if($key === 'id') {
+			$value = strtolower(preg_replace('/[^-_a-zA-Z0-9]+/', '-', $value));
+			$value = trim($value, '-');
 		}
 		if($key === 'apiKey') {
 			parent::set('provider', strpos($value, 'sk-ant') === 0 ? 'anthropic' : 'openai');
 		}
 		return parent::set($key, $value);
 	}
-	
+
 	/**
 	 * Set string of agent data
 	 *
 	 * @param string $line String in format: "model | api-key | endpoint-url | label" or "provider | model | api-key | endpoint-url | label"
 	 * @return bool
-	 * 
+	 *
 	 */
 	public function setString($line) {
 		if(strpos($line, '|') === false) return false;
 		$line = trim($line);
-		$parts = explode('|', $line); 
+		$parts = explode('|', $line);
 		foreach($parts as $key => $part) $parts[$key] = trim($part);
 		$first = $parts[0] ?? '';
 		$explicitProvider = false;
@@ -74,6 +80,7 @@ class AgentToolsAgent extends WireData {
 		if(count($parts)) $this->endpointUrl = array_shift($parts);
 		if(count($parts)) $this->label = array_shift($parts);
 		if(count($parts)) $this->description = array_shift($parts);
+		if(count($parts)) $this->id = array_shift($parts);
 		// Auto-detect Anthropic-compatible endpoints when provider was not explicitly specified
 		if(!$explicitProvider && $this->endpointUrl) {
 			$path = (string) parse_url($this->endpointUrl, PHP_URL_PATH);
@@ -81,15 +88,15 @@ class AgentToolsAgent extends WireData {
 		}
 		return true;
 	}
-	
+
 	public function getString() {
-		return trim("$this->model | $this->apiKey | $this->endpointUrl | $this->label | $this->description", '| ');
+		return trim("$this->model | $this->apiKey | $this->endpointUrl | $this->label | $this->description | $this->id", '| ');
 	}
-	
+
 	public function __toString() {
 		return $this->getString();
 	}
-	
+
 	/**
 	 * Ask a question and get a text response
 	 *
@@ -179,8 +186,24 @@ class AgentToolsAgent extends WireData {
 		$request->options = $options;
 		return $this->sendProviderRequest($request);
 	}
-	
+
 	public function getHash() {
 		return md5("$this->model|$this->apiKey|$this->endpointUrl|$this->label|$this->description");
+	}
+
+	/**
+	 * Ensure this agent has a stable ID.
+	 *
+	 * @param array $existingIDs
+	 * @return string
+	 *
+	 */
+	public function ensureId(array $existingIDs = []): string {
+		if($this->id && !in_array($this->id, $existingIDs, true)) return $this->id;
+		do {
+			$id = date('YmdHis') . '-' . bin2hex(random_bytes(4));
+		} while(in_array($id, $existingIDs, true));
+		$this->id = $id;
+		return $id;
 	}
 }

@@ -36,7 +36,7 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 			'title' => 'Agent Tools',
 			'summary' => "Enables AI coding agents to access ProcessWire's API and provides a database migration system.",
 			'icon' => 'at',
-			'version' => 17,
+			'version' => 18,
 			'author' => 'Ryan Cramer, Claude (Anthropic), GPT 5.5 Codex',
 			'requires' => 'ProcessWire>=3.0.255, PHP>=8.0.0',
 			'installs' => 'ProcessAgentTools, FieldtypePageEngineer',
@@ -77,6 +77,12 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 	 *
 	 */
 	protected $tasks = null;
+
+	/**
+	 * @var AgentToolsScheduledTasks|null
+	 *
+	 */
+	protected $scheduledTasks = null;
 
 	/**
 	 * Construct
@@ -591,6 +597,11 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 
 		$this->agents = new AgentToolsAgents(array_values($lines));
 		if($removeDuplicates) $this->agents->removeDuplicates();
+		if($this->agents->ensureIds()) {
+			$data = $this->wire()->modules->getConfig('AgentTools');
+			$data['engineer_additional_models'] = $this->agents->getString();
+			$this->wire()->modules->saveConfig($this, $data);
+		}
 
 		return $this->agents;
 	}
@@ -606,6 +617,19 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 		$this->tasks = new AgentToolsTasks($this);
 		$this->wire($this->tasks);
 		return $this->tasks;
+	}
+
+	/**
+	 * Get scheduled tasks service
+	 *
+	 * @return AgentToolsScheduledTasks
+	 *
+	 */
+	public function getScheduledTasks(): AgentToolsScheduledTasks {
+		if($this->scheduledTasks) return $this->scheduledTasks;
+		$this->scheduledTasks = new AgentToolsScheduledTasks($this);
+		$this->wire($this->scheduledTasks);
+		return $this->scheduledTasks;
 	}
 
 	/**
@@ -761,3 +785,5 @@ include_once(__DIR__ . '/AgentToolsAgents.php');
 include_once(__DIR__ . '/AgentToolsRequest.php');
 include_once(__DIR__ . '/AgentToolsTask.php');
 include_once(__DIR__ . '/AgentToolsTasks.php');
+include_once(__DIR__ . '/AgentToolsScheduledTask.php');
+include_once(__DIR__ . '/AgentToolsScheduledTasks.php');

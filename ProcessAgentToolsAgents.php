@@ -64,7 +64,7 @@ class ProcessAgentToolsAgents extends ProcessAgentToolsHelper {
 		];
 
 		for($n = 1; $n <= $maxAgents; $n++) {
-			
+
 			$agent = $agents->eq($n-1);
 			$agentLabel = $agent ? $agent->get('label|model') : '';
 
@@ -104,19 +104,24 @@ class ProcessAgentToolsAgents extends ProcessAgentToolsHelper {
 					$f->addHeaderAction($headerActions[$name]);
 				}
 			}
-			
+
+			$f = $form->InputfieldHidden;
+			$f->attr('name', "id$n");
+			if($agent) $f->val($agent->id);
+			$fs->add($f);
+
 			$f = $form->InputfieldHidden;
 			$f->attr('name', "agent{$n}_sort");
 			$f->addClass('at-agent-sort');
 			$f->val($n);
 			$fs->add($f);
-			
+
 			$f = $form->InputfieldHidden;
 			$f->attr('name', "agent{$n}_delete");
 			$f->addClass('at-agent-delete');
 			$f->attr('val', '');
 			$fs->add($f);
-			
+
 			$fs->addHeaderAction($headerActions['agent']);
 			$fs->addHeaderAction($headerActions['clone']);
 		}
@@ -126,14 +131,14 @@ class ProcessAgentToolsAgents extends ProcessAgentToolsHelper {
 		$submit->value = $this->_('Save');
 		$submit->showInHeader();
 		$form->add($submit);
-		
+
 		if($numAgents < $maxAgents) {
 			$icon = wireIconMarkup('plus-circle');
 			$label = $this->_('Add New');
 			$submit->prependMarkup .=
 				"<p id='at-add-agent'><a href='#' id='at-add-agent-link'>$icon $label</a></p>";
 		}
-		
+
 		$f = $form->InputfieldHidden;
 		$f->attr('id+name', 'agents_sort');
 		$f->val('');
@@ -152,6 +157,7 @@ class ProcessAgentToolsAgents extends ProcessAgentToolsHelper {
 			foreach($labels as $name => $label) {
 				$agent->set($name, $form->getValueByName("$name$n"));
 			}
+			$agent->id = $form->getValueByName("id$n");
 			$delete = $form->getValueByName("agent{$n}_delete");
 			if($delete === "delete$n") {
 				$this->message("Deleted agent $n: $agent->label");
@@ -163,8 +169,9 @@ class ProcessAgentToolsAgents extends ProcessAgentToolsHelper {
 			$sort = (int) $form->getValueByName("agent{$n}_sort");
 			$agent->setQuietly('_sort', $sort);
 		}
-		
+
 		$agents->sort('_sort');
+		$agents->ensureIds();
 
 		$data = $modules->getConfig('AgentTools');
 		$agent = $agents->first(); /** @var AgentToolsAgent $agent */

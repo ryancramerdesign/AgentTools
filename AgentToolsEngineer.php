@@ -241,6 +241,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		foreach($this->at->getAgents() as $agent) {
 			/** @var AgentToolsAgent $agent */
 			$models[] = [
+				'id' => $agent->id,
 				'label' => $agent->label ?: $agent->model,
 				'model' => $agent->model,
 				'provider' => $agent->provider,
@@ -1642,7 +1643,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		$f->val($this->at->get('engineer_endpoint') ?: '');
 		$f->columnWidth = 50;
 		$primaryFs->add($f);
-		
+
 		$f = $modules->get('InputfieldText');
 		$f->attr('name', 'engineer_description');
 		$f->label = $this->_('Description (optional)');

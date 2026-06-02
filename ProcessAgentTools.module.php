@@ -15,7 +15,7 @@ class ProcessAgentTools extends Process {
 		return [
 			'title' => 'Agent Tools',
 			'summary' => 'Admin interface for AgentTools migrations and AI engineer.',
-			'version' => 10,
+			'version' => 11,
 			'author' => 'Claude (Anthropic), GPT 5.5 Codex and Ryan Cramer',
 			'icon' => 'at',
 			'requires' => 'AgentTools',
@@ -122,6 +122,7 @@ class ProcessAgentTools extends Process {
 	 */
 	public function label($name) {
 		switch($name) {
+			case 'add-task': return $this->_('Add Task');
 			case 'agent-tools': return $this->_('Agent Tools');
 			case 'agents': return $this->_('Agents');
 			case 'applied': return $this->ukLabel($this->_('Applied'), 'success');
@@ -133,6 +134,7 @@ class ProcessAgentTools extends Process {
 			case 'background-job-email-missing': return $this->_('Your user account needs an email address before background jobs can notify you.');
 			case 'background-job-cron-stale': return $this->_('Background jobs require cron to run `php index.php --at-cron`. Cron has not checked in recently.');
 			case 'date-time': return $this->_('Date/time');
+			case 'delete': return $this->_('Delete');
 			case 'edit': return $this->_('Edit');
 			case 'email': return $this->_('Email');
 			case 'email-error': return $this->_('Email error');
@@ -143,9 +145,11 @@ class ProcessAgentTools extends Process {
 			case 'export-checked': return $this->_('Export checked');
 			case 'failed': return $this->ukLabel($this->_('Failed'), 'danger');
 			case 'file': return $this->_('File');
+			case 'frequency': return $this->_('Frequency');
 			case 'import': return $this->_('Import');
 			case 'migration': return $this->_('Migration');
 			case 'migrations': return $this->_('Migrations');
+			case 'name': return $this->_('Name');
 			case 'pending': return $this->ukLabel($this->_('Pending'));
 			case 'prompt': return $this->_('Prompt');
 			case 'refresh': return $this->_('Refresh');
@@ -153,10 +157,12 @@ class ProcessAgentTools extends Process {
 			case 'response': return $this->_('Response');
 			case 'review-and-apply-migration': return $this->_('Review and apply migration');
 			case 'run': return $this->_('Run');
+			case 'run-now': return $this->_('Run Now');
 			case 'save': return $this->_('Save');
 			case 'status': return $this->_('Status');
 			case 'task': return $this->_('Task');
 			case 'tasks': return $this->_('Tasks');
+			case 'title': return $this->_('Title');
 			case 'view-queued-result': return $this->_('View queued result');
 		}
 		return $name;
@@ -228,7 +234,7 @@ class ProcessAgentTools extends Process {
 		}
 		return 'unknown description name';
 	}
-	
+
 	/**
 	 * Render top navigation tabs
 	 *
@@ -243,10 +249,12 @@ class ProcessAgentTools extends Process {
 		$tabs = [];
 		foreach($info['nav'] as $item) {
 			$name = trim($item['url'], '/');
+			if(substr($name, -1) === 's') $name = substr($name, 0, -1);
 			$id = "tab-$name";
-			$icon = ''; //wireIconMarkup($item['icon']);
-			$tabs[$id] = "<a id='$id' class='at-tab-link' href='$atUrl$item[url]'>$icon $item[label]</a>";
+			$tabs[$id] = "<a id='$id' class='at-tab-link' href='$atUrl$item[url]'>$item[label]</a>";
+			if(strpos($tabName, $name) !== false) $tabName = $name;
 		}
+		if(strpos($tabName, 'job') !== false) $tabName = 'task';
 		$out =
 			$this->wire()->modules->get('JqueryWireTabs')->renderTabList($tabs, ['id' => 'at-tabs']) .
 			"<script>" .
@@ -321,7 +329,7 @@ class ProcessAgentTools extends Process {
 			$btn = $btn->render();
 			$out .= "<h2 class='uk-margin-remove'>$label</h2><p>$description</p><p>$btn</p><hr />";
 		}
-		
+
 		return $out;
 	}
 
@@ -368,7 +376,7 @@ class ProcessAgentTools extends Process {
 	 */
 	protected function renderEngineerForm(string $prefill = '', bool $forMigration = false): string {
 		$sanitizer = $this->wire()->sanitizer;
-		
+
 		if(!$this->at->getPrimaryAgent()) {
 			$agentsUrl = $this->wire()->page->url . 'agents/';
 			$this->error(sprintf(
@@ -542,6 +550,7 @@ class ProcessAgentTools extends Process {
 				'userId' => (int) $user->id,
 				'userName' => (string) $user->name,
 				'notifyEmail' => (string) $user->email,
+				'agentId' => (string) ($availableModels[$modelIndex]['id'] ?? ''),
 				'modelIndex' => $modelIndex,
 				'url' => $this->wire()->page->httpUrl(),
 				'agentToolsUrl' => $this->wire()->page->httpUrl(),
@@ -698,8 +707,10 @@ class ProcessAgentTools extends Process {
 		$this->breadcrumb($this->wire()->page->url . 'engineer/', $this->label('engineer'));
 
 		$form = $this->wire()->modules->get('InputfieldForm'); /** @var InputfieldForm $form */
-		$out = '';
-		$out .= '<h2>' . htmlspecialchars($job['id'] ?? '', ENT_QUOTES, 'UTF-8') . '</h2>';
+		$out = '<h2 class="uk-margin-top">' . htmlspecialchars($job['id'] ?? '', ENT_QUOTES, 'UTF-8') . '</h2>';
+		// @todo codex: convert all the <li><strong> items to be an array of [ 'label' => 'value' ] and apply the markup in just one loop
+		// @todo codex: rather than htmlspecialchars() can you locally scope $sanitizer and use $sanitizer->entities() or $sanitizer->entities1() when the value might already be entity encoded.
+		// @todo codex: I'd also be okay with using htmlspecialchars() with just the first argument (since ENT_QUOTES and 'UTF-8' are defaults, as far as I know).
 		$out .= '<ul class="uk-list uk-list-divider">';
 		$out .= '<li><strong>' . $this->label('status') . ':</strong> ' . htmlspecialchars($job['status'] ?? '', ENT_QUOTES, 'UTF-8') . '</li>';
 		$out .= '<li><strong>' . $this->_('Type') . ':</strong> ' . htmlspecialchars($job['type'] ?? '', ENT_QUOTES, 'UTF-8') . '</li>';
@@ -1093,5 +1104,15 @@ class ProcessAgentTools extends Process {
 	 */
 	public function ___executeEditTask() {
 		return $this->getHelper('tasks')->executeEditTask();
+	}
+
+	/**
+	 * Add or edit scheduled task
+	 *
+	 * @return string
+	 *
+	 */
+	public function ___executeEditScheduledTask() {
+		return $this->getHelper('tasks')->executeEditScheduledTask();
 	}
 }

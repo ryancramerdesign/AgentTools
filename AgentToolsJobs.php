@@ -63,8 +63,11 @@ class AgentToolsJobs extends AgentToolsHelper {
 
 		$processed = 0;
 		$failed = 0;
+		$scheduled = 0;
 
 		try {
+			$scheduledResult = $this->at->getScheduledTasks()->enqueueDue();
+			$scheduled = (int) ($scheduledResult['queued'] ?? 0);
 			for($n = 0; $n < $maxJobs; $n++) {
 				$file = $this->getNextPendingJobFile();
 				if(!$file) break;
@@ -82,7 +85,8 @@ class AgentToolsJobs extends AgentToolsHelper {
 			'success' => true,
 			'processed' => $processed,
 			'failed' => $failed,
-			'message' => "AgentTools cron processed $processed job(s), $failed failed",
+			'scheduled' => $scheduled,
+			'message' => "AgentTools cron queued $scheduled scheduled job(s), processed $processed job(s), $failed failed",
 		];
 	}
 
@@ -110,6 +114,7 @@ class AgentToolsJobs extends AgentToolsHelper {
 			'userId' => 0,
 			'userName' => '',
 			'notifyEmail' => '',
+			'agentId' => '',
 			'modelIndex' => 0,
 			'url' => '',
 			'agentToolsUrl' => '',
@@ -331,7 +336,10 @@ class AgentToolsJobs extends AgentToolsHelper {
 		$modelIndex = isset($job['modelIndex']) ? (int) $job['modelIndex'] : 0;
 		if($modelIndex < 0) $modelIndex = 0;
 		$agents = $this->at->getAgents();
-		$agent = $agents->eq($modelIndex);
+		$agent = null;
+		$agentId = (string) ($job['agentId'] ?? '');
+		if($agentId !== '') $agent = $agents->getById($agentId);
+		if(!$agent) $agent = $agents->eq($modelIndex);
 		if(!$agent) $agent = $agents->first();
 		if(!$agent || !$agent->apiKey) {
 			throw new WireException('No agent configured. Add API credentials in AgentTools module settings.');

@@ -7,7 +7,7 @@ class FieldtypePageEngineer extends Fieldtype implements Module {
 	public static function getModuleInfo() {
 		return [
 			'title' => 'Page Engineer',
-			'version' => 3,
+			'version' => 4,
 			'summary' => 'Agent Tools Page Engineer is an AI agent Fieldtype to help you with any page editing task.',
 			'requires' => [ 'AgentTools' ],
 		];
@@ -493,11 +493,13 @@ class FieldtypePageEngineer extends Fieldtype implements Module {
 		$at = $this->wire('at');
 		$user = $this->wire()->user;
 		$pageEditUrl = $page->editUrl([ 'http' => true, 'find' => $field->name ]);
+		$availableModels = $at->engineer->getAvailableModels();
 		return $at->jobs()->addJob([
 			'type' => 'page-engineer',
 			'userId' => (int) $user->id,
 			'userName' => (string) $user->name,
 			'notifyEmail' => trim((string) $user->email),
+			'agentId' => (string) ($availableModels[$modelIndex]['id'] ?? ''),
 			'modelIndex' => $modelIndex,
 			'url' => $pageEditUrl,
 			'agentToolsUrl' => $this->getAgentToolsAdminUrl(),
@@ -567,9 +569,11 @@ class FieldtypePageEngineer extends Fieldtype implements Module {
 				$values->add($values->newItem($questionText, (string) ($job['userName'] ?? ''), false));
 			}
 
-			$agents = $this->wire('at')->getAgents()->getArray();
+			$agents = $this->wire('at')->getAgents();
 			$modelIndex = (int) ($job['modelIndex'] ?? 0);
-			$agent = isset($agents[$modelIndex]) ? $agents[$modelIndex] : null;
+			$agent = null;
+			if(!empty($job['agentId'])) $agent = $agents->getById((string) $job['agentId']);
+			if(!$agent) $agent = $agents->eq($modelIndex);
 			$options = [];
 			if(!empty($job['history']) && is_array($job['history'])) $options['history'] = $job['history'];
 			if(isset($job['dryRun'])) $options['dryRun'] = (bool) $job['dryRun'];

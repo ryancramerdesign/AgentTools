@@ -59,35 +59,59 @@ class ProcessAgentToolsTasks extends ProcessAgentToolsHelper {
 		$modules = $this->wire()->modules;
 		$form = new InputfieldWrapper();
 		$form->attr('id', 'tasks-list');
-		$tabs = $modules->get('JqueryWireTabs');
-		$tabsItems = [];
+		$wrapper = new InputfieldWrapper();
 
-		$tasks = [
-			'Built-in' => [],
-			'Custom' => [],
+		$taskTypes = [
+			'builtin' => [],
+			'custom' => [],
+			'scheduled' => iterator_to_array($this->at->getScheduledTasks()),
+		];
+
+		$taskTypeLabels = [
+			'builtin' => $this->_('Built-in'),
+			'custom' => $this->_('Custom'),
+			'scheduled' => $this->_('Scheduled'),
 		];
 
 		foreach($this->at->getTasks() as $task) {
 			/** @var AgentToolsTask $task */
-			$key = $task->builtIn ? 'Built-in' : 'Custom';
-			$tasks[$key][] = $task;
+			$key = $task->builtIn ? 'builtin' : 'custom';
+			$taskTypes[$key][] = $task;
 		}
 
-		foreach($tasks as $name => $items) {
-			$table = $this->buildTasksTable($items);
-			$tabsItems[$name] = $table->render();
-		}
+		foreach($taskTypes as $key => $items) {
+			if($key === 'scheduled') {
+				$table = $this->buildScheduledTasksTable($items);
+			} else {
+				$table = $this->buildTasksTable($items);
+			}
 
-		/** @var InputfieldButton $f */
-		$f = $modules->get('InputfieldButton');
-		$f->href = '../edit-task/';
-		$f->val($this->_('Add Task'));
-		$f->icon = 'plus-circle';
-		$f->showInHeader(true);
+			if($key === 'builtin') {
+				$f = null; // no 'add' button for built-in tasks
+			} else {
+				/** @var InputfieldButton $f */
+				$f = $modules->get('InputfieldButton');
+				$f->href = ($key === 'scheduled' ? '../edit-scheduled-task/' : '../edit-task/') . '?new=1';
+				$f->val($key === 'scheduled' ? $this->_('Schedule task') : $this->label('add-task'));
+				$f->icon = 'plus-circle';
+			}
+
+			$label = $taskTypeLabels[$key];
+			// $tabsItems[$label] = $table->render() . ($f ? $f->render() : '');
+			/** @var InputfieldMarkup $fieldset */
+			$fm = $modules->get('InputfieldMarkup');
+			$fm->wrapClass('at-task-type');
+			$fm->label = $label;
+			$fm->value = $table->render() . ($f ? $f->render() : '');
+			$fm->collapsed = Inputfield::collapsedYes;
+			$wrapper->add($fm);
+		}
 
 		$note = $this->troubleshootingNote();
 
-		return $tabs->render($tabsItems) . $f->render() . $note;
+		return $wrapper->render() . $note;
+
+		return $tabs->render($tabsItems) . $note;
 	}
 
 	/**
@@ -181,7 +205,7 @@ class ProcessAgentToolsTasks extends ProcessAgentToolsHelper {
 		$f->icon = 'play';
 		$f->appendMarkup .= $this->renderThinkingWords();
 		$form->add($f);
-		$form->prependMarkup .= $this->troubleshootingNote();
+		$form->appendMarkup .= $this->troubleshootingNote();
 
 		if($form->isSubmitted()) {
 			$form->processInput($input->post);
@@ -290,6 +314,7 @@ class ProcessAgentToolsTasks extends ProcessAgentToolsHelper {
 				'userId' => (int) $user->id,
 				'userName' => (string) $user->name,
 				'notifyEmail' => (string) $user->email,
+				'agentId' => (string) ($this->at->engineer->getAvailableModels()[$modelIndex]['id'] ?? ''),
 				'modelIndex' => $modelIndex,
 				'url' => $this->wire()->page->httpUrl(),
 				'agentToolsUrl' => $this->wire()->page->httpUrl(),
@@ -691,7 +716,6 @@ class ProcessAgentToolsTasks extends ProcessAgentToolsHelper {
 			$f2 = $form->InputfieldSubmit;
 			$f2->attr('name', 'submit_run_task');
 			$f2->val($this->label('run'));
-			//$f2->showInHeader(true);
 			$f2->addClass('at-show-thinking');
 			$f2->icon = 'send';
 			$f2->appendMarkup .= $this->renderThinkingWords();
@@ -705,7 +729,7 @@ class ProcessAgentToolsTasks extends ProcessAgentToolsHelper {
 		if($allowRun) $f1->setSecondary();
 		$form->add($f1);
 
-		$form->prependMarkup .= $this->troubleshootingNote();
+		$form->appendMarkup .= $this->troubleshootingNote();
 
 		return $form;
 	}
@@ -786,4 +810,380 @@ class ProcessAgentToolsTasks extends ProcessAgentToolsHelper {
 		return '';
 	}
 
+	/**
+	 * Edit scheduled task
+	 *
+	 * @return string
+	 *
+	 */
+	public function executeEditScheduledTask(): string {
+		$session = $this->wire()->session;
+		$input = $this->wire()->input;
+
+		$schedules = $this->at->getScheduledTasks();
+		$editTaskName = $input->urlSegment(2);
+
+		if($editTaskName) {
+			$task = $schedules->getTask($editTaskName);
+			if(!$task) {
+				$session->error($this->_('Scheduled task not found'));
+				$session->location($this->wire()->page->url . 'tasks/');
+			}
+		} else {
+			// add new task
+			$task = $schedules->makeBlankItem();
+		}
+		if(!$task->task && $input->post('task')) $task->task = $input->post->pageName('task');
+
+		$form = $this->buildEditScheduledTaskForm($task);
+		$run = $input->post('submit_run_task');
+		$save = $run || $input->post('submit_save_task');
+
+		if($save) {
+			if(!$this->processScheduledTask($form, $task, !$run)) return $form->render();
+			if($run) {
+				$job = $schedules->enqueueRun($task, [
+					'userId' => (int) $this->wire()->user->id,
+					'userName' => (string) $this->wire()->user->name,
+					'url' => $this->wire()->page->httpUrl(),
+					'agentToolsUrl' => $this->wire()->page->httpUrl(),
+				]);
+				return $this->renderQueuedJobConfirmation(
+					$job,
+					$this->wire()->page->url . 'tasks/',
+					$this->_('Back to Tasks'),
+					'arrow-left'
+				);
+			}
+		}
+
+		if(!$task->name) {
+			$this->headline($this->_('Add new scheduled task'));
+		} else {
+			$this->headline(sprintf($this->_('Edit scheduled task: %s'), $task->title));
+		}
+
+		$this->breadcrumb('../', $this->label('tasks'));
+
+		return $form->render();
+	}
+
+	/**
+	 * Process the scheduled task edit form
+	 *
+	 * @param InputfieldForm $form
+	 * @param AgentToolsScheduledTask $task
+	 * @throws WireException
+	 *
+	 */
+	protected function processScheduledTask(InputfieldForm $form, AgentToolsScheduledTask $task, bool $redirect = true): bool {
+
+		$input = $this->wire()->input;
+		$form->processInput($input->post);
+		$session = $this->wire()->session;
+		$sanitizer = $this->wire()->sanitizer;
+		$isNew = !$task->name;
+		$prevName = $isNew ? '' : $task->name;
+
+		if(count($form->getErrors())) return false;
+
+		if($task->name && $input->post('_delete_task') === $task->name) {
+			$this->at->getScheduledTasks()->deleteTask($task);
+			$session->message($this->_('Scheduled task deleted'));
+			$session->location($this->wire()->page->url . 'tasks/');
+		}
+
+		foreach($form->getAll() as $f) {
+			$name = $f->name;
+			$val = $f->val();
+
+			if($name === 'task') {
+				$val = $sanitizer->pageName($val);
+
+			} else if($name === 'name') {
+				$val = $sanitizer->pageName($val);
+				if($isNew || (!$isNew && $val !== $prevName)) {
+					$nameExists = $this->at->getScheduledTasks()->exists($val);
+					if($nameExists) {
+						$f->error(sprintf($this->_('Scheduled task name "%s" already in use'), $val));
+						continue;
+					}
+				}
+
+			} else if($name === 'notifyEmail') {
+				$a = [];
+				foreach(explode(',', $val) as $email) {
+					$email = trim($email);
+					$v = $sanitizer->email(strtolower($email));
+					if($v !== strtolower($email)) {
+						$f->error(sprintf($this->_('Invalid email address: %s'), $email));
+					} else {
+						if($v) $a[] = $email;
+					}
+				}
+				$val = implode(',', $a);
+			} else if($name === 'time') {
+				$val = trim((string) $val);
+				if($val !== '' && !preg_match('/^\d{1,2}:\d{2}$/', $val)) {
+					$f->error($this->_('Time must be in HH:MM format.'));
+					continue;
+				}
+			} else if(strpos($name, 'submit_') === 0 || $name === '_delete_task') {
+				continue;
+			} else if(!$task->hasProperty($name)) {
+				continue;
+			}
+			$task->set($name, $val);
+		}
+		$runTask = $this->at->getTasks()->getTask($task->task);
+		if($runTask) {
+			$inputs = [];
+			foreach(array_keys($runTask->inputs) as $name) {
+				$inputs[$name] = $form->getValueByName($name);
+			}
+			$task->inputs = $inputs;
+		}
+
+		if(count($form->getErrors())) return false;
+		$this->at->getScheduledTasks()->save($task, $prevName);
+		$session->message(sprintf($this->_('Saved scheduled task: %s'), $task->title));
+		if($redirect) {
+			$url = $this->wire()->page->url . 'edit-scheduled-task/' . rawurlencode($task->name) . '/';
+			$session->location($url);
+		}
+		return true;
+	}
+
+	/**
+	 * Build the task edit form (for custom tasks)
+	 *
+	 * @param AgentToolsScheduledTask $task
+	 * @return InputfieldForm
+	 *
+	 */
+	protected function buildEditScheduledTaskForm(AgentToolsScheduledTask $task): InputfieldForm {
+
+		$modules = $this->wire()->modules;
+		$form = $modules->get('InputfieldForm'); /** @var InputfieldForm $form */
+		$isNew = !$task->name;
+
+		$form->attr('action', './');
+
+		$f = $form->InputfieldText;
+		$f->attr('name', 'title');
+		$f->attr('id', 'task_title');
+		$f->label = $this->_('Scheduled Task title');
+		$f->required = true;
+		$f->columnWidth = 50;
+		$f->val($task->title);
+		$form->add($f);
+
+		$f = $form->InputfieldName;
+		$f->attr('name', 'name');
+		$f->attr('id', 'task_name');
+		$f->label = $this->_('Scheduled task name');
+		$f->notes = $f->description;
+		$f->description = '';
+		$f->icon = 'code';
+		$f->columnWidth = 50;
+		$f->required = true;
+		$f->val($task->name);
+		$form->add($f);
+
+		$f = $form->InputfieldSelect;
+		$f->attr('name', 'task');
+		$f->label = $this->label('task');
+		$f->required = true;
+		$taskOptions = [ 'custom' => [], 'built-in' => [] ];
+		foreach($this->at->getTasks() as $t) {
+			if($t->builtIn && !$t->scheduleable) continue;
+			if($t->builtIn) $taskOptions['built-in'][$t->name] = $t->title;
+				else $taskOptions['custom'][$t->name] = $t->title;
+		}
+		$f->addOptions($taskOptions);
+		$f->val($task->task);
+		$form->add($f);
+
+		$f = $form->InputfieldSelect;
+		$f->attr('name', 'agentId');
+		$f->label = $this->_('Agent/model');
+		$f->required = true;
+		foreach($this->at->getAgents() as $agent) {
+			$label = $agent->get('label|model');
+			$f->addOption($agent->id, $label);
+		}
+		$f->val($task->agentId);
+		$form->add($f);
+
+		$f = $form->InputfieldRadios;
+		$f->attr('name', 'status');
+		$f->label = $this->_('Status');
+		$f->addOption('paused', $this->_('Paused'));
+		$f->addOption('active', $this->_('Active'));
+		$f->optionColumns = 1;
+		$f->icon = $task->status === 'paused' ? 'pause' : 'play';
+		$f->val($task->status);
+		$form->add($f);
+
+		$f = $form->InputfieldText;
+		$f->attr('name', 'notifyEmail');
+		$f->label = $this->_('Notify email(s)');
+		$f->description = $this->_('Enter one or more email addresses separated by commas.');
+		$f->icon = 'envelope';
+		$f->val($task->notifyEmail);
+		$form->add($f);
+
+		$f = $form->InputfieldSelect;
+		$f->attr('name', 'frequency');
+		$f->label = $this->_('Frequency');
+		$f->icon = 'refresh';
+		$f->required = true;
+		$f->addOption('15-minutes', $this->_('Every 15 minutes'));
+		$f->addOption('30-minutes', $this->_('Every 30 minutes'));
+		$f->addOption('hour', $this->_('Hourly'));
+		$f->addOption('2-hours', $this->_('Every 2 hours'));
+		$f->addOption('4-hours', $this->_('Every 4 hours'));
+		$f->addOption('6-hours', $this->_('Every 6 hours'));
+		$f->addOption('12-hours', $this->_('Every 12 hours'));
+		$f->addOption('day', $this->_('Daily'));
+		$f->addOption('week', $this->_('Weekly'));
+		$f->addOption('month', $this->_('Monthly'));
+		$f->val($task->frequency);
+		$form->add($f);
+
+		$f = $form->InputfieldText;
+		$f->attr('name', 'time');
+		$f->label = $this->_('Time');
+		$f->description = $this->_('Use 24-hour HH:MM format, like 06:00 or 23:30.');
+		$f->icon = 'clock-o';
+		$f->showIf = 'frequency=day|week|month';
+		$f->val($task->time);
+		$form->add($f);
+
+		$f = $form->InputfieldSelect;
+		$f->attr('name', 'weekday');
+		$f->label = $this->_('Day of week');
+		$f->showIf = 'frequency=week';
+		$f->addOptions([
+			1 => $this->_('Monday'),
+			2 => $this->_('Tuesday'),
+			3 => $this->_('Wednesday'),
+			4 => $this->_('Thursday'),
+			5 => $this->_('Friday'),
+			6 => $this->_('Saturday'),
+			7 => $this->_('Sunday'),
+		]);
+		$f->val($task->weekday);
+		$form->add($f);
+
+		$f = $form->InputfieldInteger;
+		$f->attr('name', 'monthday');
+		$f->label = $this->_('Day of month');
+		$f->description = $this->_('Use 1-31. Months with fewer days run on the last day of the month.');
+		$f->min = 1;
+		$f->max = 31;
+		$f->showIf = 'frequency=month';
+		$f->val($task->monthday);
+		$form->add($f);
+
+		$runTask = $task->task ? $this->at->getTasks()->getTask($task->task) : null;
+		if($runTask && count($runTask->inputs)) {
+			$fs = $form->InputfieldFieldset;
+			$fs->label = $this->_('Task settings');
+			$fs->icon = 'sliders';
+			$runTask->getConfigInputfields($fs);
+			foreach($task->inputs as $name => $value) {
+				$field = $fs->getChildByName($name);
+				if($field) $field->val($value);
+			}
+			$form->add($fs);
+		}
+
+		if(!$isNew) {
+			$f = $form->InputfieldCheckbox;
+			$f->attr('name', '_delete_task');
+			$f->label = $this->_('Delete task?');
+			$f->description = $this->_('Check the box and click Save to permanently delete this task from the system.');
+			$f->icon = 'trash-o';
+			$f->collapsed = Inputfield::collapsedYes;
+			$f->val($task->name);
+			$form->add($f);
+		}
+
+		$f = $form->InputfieldSubmit;
+		$f->attr('name', 'submit_save_task');
+		$f->val($this->label('save'));
+		$f->showInHeader(true);
+		$form->add($f);
+
+		if(!$isNew && $task->task) {
+			$f = $form->InputfieldSubmit;
+			$f->attr('name', 'submit_run_task');
+			$f->val($this->label('run-now'));
+			$f->addClass('at-show-thinking');
+			$f->icon = 'send';
+			$f->appendMarkup .= $this->renderThinkingWords();
+			$f->setSecondary();
+			$form->add($f);
+		}
+
+		return $form;
+	}
+
+	/**
+	 * Build a tasks table
+	 *
+	 * @param array|AgentToolsScheduledTask[] $tasks
+	 *
+	 */
+	protected function buildScheduledTasksTable($tasks) {
+		$modules = $this->wire()->modules;
+
+		$table = $modules->get('MarkupAdminDataTable'); /** @var MarkupAdminDataTable $table */
+		$table->setEncodeEntities(false);
+		$headerRow = [
+			$this->label('title'),
+			$this->label('task'),
+			$this->label('status'),
+			$this->label('frequency'),
+			$this->_('Last run'),
+			$this->_('Next run'),
+		];
+		$table->headerRow($headerRow);
+
+		$qty = 0;
+
+		foreach($tasks as $task) {
+			$title = htmlspecialchars($task->title);
+			$name = rawurlencode($task->name);
+			$runTask = $this->at->getTasks()->getTask($task->task);
+			$runTask = $runTask ? $runTask->title : $task->task;
+			$runTask = htmlspecialchars($runTask);
+			if($task->status === 'paused') {
+				$nextRun = $this->_('Paused');
+			} else if($task->nextRun && $task->nextRun <= time()) {
+				$nextRun = $this->_('Due now');
+			} else {
+				$nextRun = $task->nextRun ? wireRelativeTimeStr($task->nextRun) : $this->_('Not scheduled');
+			}
+			$url = "../edit-scheduled-task/$name/";
+			$table->row([
+				"<a href='$url'>$title</a>",
+				$runTask,
+				$task->status,
+				$task->frequency,
+				$task->lastRun ? wireRelativeTimeStr($task->lastRun) : $this->_('Never'),
+				$nextRun,
+			]);
+			$qty++;
+		}
+
+		if(!$qty) {
+			$table->row([ 'No scheduled tasks found' ], [ 'colspan' => count($headerRow) ]);
+		}
+
+		return $table;
+	}
 }
+
+require_once(__DIR__ . '/AgentToolsScheduledTask.php');

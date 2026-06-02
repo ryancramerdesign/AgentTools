@@ -19,11 +19,37 @@ function atEnsureProcessing() {
 	return !!window.AgentToolsProcessing;
 }
 
+function initTasksForm() {
+	// populate task title into task name [-_a-z0-9] or update task name on blur
+	var $title = $('#task_title');
+	if(!$title.length) return;
+
+	var $name = $('#task_name');
+	var updateName = $name.val().length === 0;
+	$name.on('blur', function() {
+		var $input = $(this);
+		var val = $input.val();
+		// sanitize to page-name format
+		val = val.toLowerCase();
+		val = val.replace(/[^-_a-z0-9]/g, '-');
+		val = val.replace(/\-\-+/g, '-');
+		if(val.indexOf('-') === 0) val = val.substr(1);
+		if(val.substr(-1) === '-') val = val.substr(0, val.length - 1);
+		$input.val(val);
+		updateName = false;
+	});
+	$title.on('blur', function() {
+		if(!updateName) return;
+		$name.val($title.val());
+		$name.trigger('blur');
+	});
+}
+
 function initAgentsForm() {
 	var $form = $('#at-agents-form');
 	var $inputfields = $form.children('.Inputfields').eq(0);
 	if(!$form.length) return;
-	
+
 	$inputfields.sortable({
 		items: '> .at-agent-item:not(.at-agent-new)',
 		handle: '.fa-arrows',
@@ -44,7 +70,7 @@ function initAgentsForm() {
 			});
 		}
 	});
-	
+
 	// apply "ui-state-focus" class when an item is being dragged
 	var cls = 'InputfieldIsHighlight';
 	$(".fa-arrows", $form).on('mouseenter', function() {
@@ -53,7 +79,7 @@ function initAgentsForm() {
 		var $f = $(this).closest('.Inputfield');
 		if(!$f.hasClass('at-sorting')) $f.removeClass(cls);
 	});
-	
+
 	// Agents configuration: "Add new agent" link
 	$('#at-add-agent-link').on('click', function(e) {
 		var $newAgents = $('.at-agent-new');
@@ -69,7 +95,7 @@ function initAgentsForm() {
 	}).on('at-apikey-hide', function(e) {
 		$(this).find('input').prop('type', 'password');
 	});
-	
+
 	$('.at-agent-item').on('at-agent-delete', function(e) {
 		var $f = $(this);
 		var $del = $f.find('.at-agent-delete');
@@ -83,7 +109,7 @@ function initAgentsForm() {
 			Inputfields.close($f);
 		}
 	});
-	
+
 	$(document).on('at-agent-clone', function(e, $f) {
 		var $src = $f.closest('.at-agent-item');
 		var $dst = $src.siblings('.at-agent-new').first();
@@ -102,7 +128,7 @@ function initAgentsForm() {
 		Inputfields.open($dst);
 		$('html, body').animate({ scrollTop: $dst.offset().top }, 1000);
 	});
-	
+
 }
 
 var AtTools = {
@@ -178,32 +204,9 @@ $(function() {
 		if(hasRequest) setTimeout(AtTools.showProcessingOverlay, 1500);
 	});
 
-	// populate task title into task name [-_a-z0-9] or update task name on blur
-	var $title = $('#task_title');
-	if($title.length) {
-		var $name = $('#task_name');
-		var updateName = $name.val().length === 0;
-		$name.on('blur', function() {
-			var $input = $(this);
-			var val = $input.val();
-			// sanitize to page-name format
-			val = val.toLowerCase();
-			val = val.replace(/[^-_a-z0-9]/g, '-');
-			val = val.replace(/\-\-+/g, '-');
-			if(val.indexOf('-') === 0) val = val.substr(1);
-			if(val.substr(-1) === '-') val = val.substr(0, val.length - 1);
-			$input.val(val);
-			updateName = false;
-		});
-		$title.on('blur', function() {
-			if(!updateName) return;
-			$name.val($title.val());
-			$name.trigger('blur');
-		});
-	}
-
 	initAgentsForm();
-	
+	initTasksForm();
+
 	$('.at-tab-link').on('click', function(e) {
 		window.location.href = $(this).attr('href');
 	})
