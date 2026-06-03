@@ -6,6 +6,7 @@
  * @property string $provider
  * @property string $id
  * @property string $model
+ * @property string $agentName
  * @property string $apiKey
  * @property string $endpointUrl
  * @property string $label
@@ -20,6 +21,7 @@ class AgentToolsAgent extends WireData {
 		'id' => '',
 		'model' => '',
 		'label' => '',
+		'agentName' => '',
 		'apiKey' => '' ,
 		'endpointUrl' => '',
 		'description' => '',
@@ -60,7 +62,9 @@ class AgentToolsAgent extends WireData {
 	/**
 	 * Set string of agent data
 	 *
-	 * @param string $line String in format: "model | api-key | endpoint-url | label" or "provider | model | api-key | endpoint-url | label"
+	 * @param string $line String in format:
+	 *  - "model | api-key | endpoint-url | label" or
+	 *  - "provider | model | api-key | endpoint-url | label | description | id | agentName"
 	 * @return bool
 	 *
 	 */
@@ -81,6 +85,7 @@ class AgentToolsAgent extends WireData {
 		if(count($parts)) $this->label = array_shift($parts);
 		if(count($parts)) $this->description = array_shift($parts);
 		if(count($parts)) $this->id = array_shift($parts);
+		if(count($parts)) $this->agentName = array_shift($parts);
 		// Auto-detect Anthropic-compatible endpoints when provider was not explicitly specified
 		if(!$explicitProvider && $this->endpointUrl) {
 			$path = (string) parse_url($this->endpointUrl, PHP_URL_PATH);
@@ -90,7 +95,11 @@ class AgentToolsAgent extends WireData {
 	}
 
 	public function getString() {
-		return trim("$this->model | $this->apiKey | $this->endpointUrl | $this->label | $this->description | $this->id", '| ');
+		return trim(
+			"$this->model | $this->apiKey | $this->endpointUrl | $this->label | " .
+			"$this->description | $this->id | $this->agentName",
+			'| '
+		);
 	}
 
 	public function __toString() {
@@ -188,7 +197,7 @@ class AgentToolsAgent extends WireData {
 	}
 
 	public function getHash() {
-		return md5("$this->model|$this->apiKey|$this->endpointUrl|$this->label|$this->description");
+		return md5("$this->model|$this->apiKey|$this->endpointUrl|$this->label|$this->description|$this->agentName");
 	}
 
 	/**

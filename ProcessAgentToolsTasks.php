@@ -469,6 +469,8 @@ class ProcessAgentToolsTasks extends ProcessAgentToolsHelper {
 		if(!isset($availableModels[$modelIndex])) return $options;
 		$entry = $availableModels[$modelIndex];
 		$options['model'] = $entry['model'];
+		$options['agentId'] = $entry['id'];
+		$options['agentName'] = $entry['agentName'];
 		$options['provider'] = $entry['provider'];
 		$options['apiKey'] = $entry['key'];
 		$options['endpoint'] = $entry['endpoint'];
@@ -943,6 +945,10 @@ class ProcessAgentToolsTasks extends ProcessAgentToolsHelper {
 			}
 			$task->inputs = $inputs;
 		}
+		if(count($task->agentIds)) {
+			$agentIds = $task->agentIds;
+			$task->agentId = reset($agentIds);
+		}
 
 		if(count($form->getErrors())) return false;
 		$this->at->getScheduledTasks()->save($task, $prevName);
@@ -1004,15 +1010,18 @@ class ProcessAgentToolsTasks extends ProcessAgentToolsHelper {
 		$f->val($task->task);
 		$form->add($f);
 
-		$f = $form->InputfieldSelect;
-		$f->attr('name', 'agentId');
-		$f->label = $this->_('Agent/model');
+		$f = $form->InputfieldAsmSelect;
+		$f->attr('name', 'agentIds');
+		$f->label = $this->_('Agent/model(s)');
+		$f->description = $this->_('Select one agent for every run, or select multiple agents to rotate through them in round-robin order.');
 		$f->required = true;
 		foreach($this->at->getAgents() as $agent) {
 			$label = $agent->get('label|model');
 			$f->addOption($agent->id, $label);
 		}
-		$f->val($task->agentId);
+		$agentIds = $task->agentIds;
+		if(!count($agentIds) && $task->agentId) $agentIds = [ $task->agentId ];
+		$f->val($agentIds);
 		$form->add($f);
 
 		$f = $form->InputfieldRadios;
@@ -1144,6 +1153,7 @@ class ProcessAgentToolsTasks extends ProcessAgentToolsHelper {
 		$headerRow = [
 			$this->label('title'),
 			$this->label('task'),
+			$this->_('Agent'),
 			$this->label('status'),
 			$this->label('frequency'),
 			$this->_('Last run'),
@@ -1159,6 +1169,7 @@ class ProcessAgentToolsTasks extends ProcessAgentToolsHelper {
 			$runTask = $this->at->getTasks()->getTask($task->task);
 			$runTask = $runTask ? $runTask->title : $task->task;
 			$runTask = htmlspecialchars($runTask);
+			$agentLabel = $this->getScheduledTaskAgentLabel($task);
 			if($task->status === 'paused') {
 				$nextRun = $this->_('Paused');
 			} else if($task->nextRun && $task->nextRun <= time()) {
@@ -1170,6 +1181,7 @@ class ProcessAgentToolsTasks extends ProcessAgentToolsHelper {
 			$table->row([
 				"<a href='$url'>$title</a>",
 				$runTask,
+				$agentLabel,
 				$task->status,
 				$task->frequency,
 				$task->lastRun ? wireRelativeTimeStr($task->lastRun) : $this->_('Never'),
@@ -1183,6 +1195,27 @@ class ProcessAgentToolsTasks extends ProcessAgentToolsHelper {
 		}
 
 		return $table;
+	}
+
+	/**
+	 * Get scheduled task agent label for list display.
+	 *
+	 * @param AgentToolsScheduledTask $task
+	 * @return string
+	 *
+	 */
+	protected function getScheduledTaskAgentLabel(AgentToolsScheduledTask $task): string {
+		$ids = $task->agentIds;
+		if(!count($ids) && $task->agentId) $ids = [ $task->agentId ];
+		$labels = [];
+		foreach($ids as $id) {
+			$agent = $this->at->getAgents()->getById($id);
+			if(!$agent) continue;
+			$labels[] = htmlspecialchars($agent->get('label|model'));
+		}
+		if(!count($labels)) return htmlspecialchars($this->_('Primary agent'));
+		if(count($labels) === 1) return $labels[0];
+		return sprintf($this->_('Rotate: %s'), implode(', ', $labels));
 	}
 }
 

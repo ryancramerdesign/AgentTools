@@ -9,6 +9,8 @@
  * @property string $status
  * @property string $notifyEmail
  * @property string $agentId
+ * @property array $agentIds
+ * @property string $lastAgentId
  * @property string $agentName
  * @property array $inputs
  * @property string $frequency
@@ -32,6 +34,8 @@ class AgentToolsScheduledTask extends WireData {
 		'status' => 'paused',
 		'notifyEmail' => '',
 		'agentId' => '',
+		'agentIds' => [],
+		'lastAgentId' => '',
 		'agentName' => '',
 		'inputs' => [],
 		'frequency' => '',
@@ -66,12 +70,22 @@ class AgentToolsScheduledTask extends WireData {
 			} else if(is_string($default)) {
 				$value = (string) $value;
 			} else if(is_array($default)) {
-				$value = is_array($value) ? $value : [];
+				if(!is_array($value)) {
+					$value = $key === 'agentIds' && strlen((string) $value) ? explode(',', (string) $value) : [];
+				}
 			}
 			if($key === 'status' && ($value !== 'paused' && $value !== 'active')) {
 				$value = 'paused';
 			}
-			if($key === 'name' || $key === 'task' || $key === 'agentId') {
+			if($key === 'agentIds') {
+				$ids = [];
+				foreach($value as $id) {
+					$id = $this->wire()->sanitizer->pageName($id);
+					if($id !== '') $ids[] = $id;
+				}
+				$value = array_values(array_unique($ids));
+			}
+			if($key === 'name' || $key === 'task' || $key === 'agentId' || $key === 'lastAgentId') {
 				$value = $this->wire()->sanitizer->pageName($value);
 			}
 		}

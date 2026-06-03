@@ -7,7 +7,7 @@ class FieldtypePageEngineer extends Fieldtype implements Module {
 	public static function getModuleInfo() {
 		return [
 			'title' => 'Page Engineer',
-			'version' => 4,
+			'version' => 5,
 			'summary' => 'Agent Tools Page Engineer is an AI agent Fieldtype to help you with any page editing task.',
 			'requires' => [ 'AgentTools' ],
 		];
@@ -455,9 +455,11 @@ class FieldtypePageEngineer extends Fieldtype implements Module {
 			'tools' => $tools,
 			'history' => $history,
 			'provider' => $agent->provider,
+			'agentId' => $agent->id,
 			'apiKey' => $agent->apiKey,
 			'model' => $agent->model,
 			'endpoint' => $agent->endpointUrl,
+			'traceType' => 'page-engineer',
 			'dryRun' => $dryRun,
 			'backgroundJob' => !empty($options['backgroundJob']),
 		]);
@@ -585,6 +587,7 @@ class FieldtypePageEngineer extends Fieldtype implements Module {
 			$page->setAndSave($field->name, $values);
 
 			$job['response'] = (string) $responseItem->text;
+			$job['trace'] = $this->wire('at')->engineer->lastTrace;
 			$job['pageTitle'] = (string) $page->get('title|name');
 			if(empty($job['pageEditUrl'])) $job['pageEditUrl'] = $page->editUrl([ 'http' => true, 'find' => $field->name ]);
 			$job['history'] = $this->buildHistory($values);

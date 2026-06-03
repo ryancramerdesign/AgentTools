@@ -155,6 +155,7 @@ class AgentToolsTasks extends WireArray {
 			$options['maxIterations'] = (int) $task->maxIterations;
 		}
 		unset($options['dryRun']);
+		if(empty($options['traceType'])) $options['traceType'] = 'task';
 		$result['maxIterations'] = (int) ($options['maxIterations'] ?? 0);
 		if($result['dryRun']) {
 			$result['request'] = $request;

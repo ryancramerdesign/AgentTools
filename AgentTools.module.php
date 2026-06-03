@@ -13,6 +13,7 @@
  * @property AgentToolsEngineer $engineer
  * @property AgentToolsTasks $tasks
  * @property AgentToolsJobs $jobs
+ * @property AgentToolsTraces $traces
  * @method AgentToolsJobs jobs()
  *
  * @property string $engineer_provider
@@ -21,11 +22,16 @@
  * @property string $engineer_endpoint
  * @property string $engineer_label
  * @property string $engineer_description
+ * @property string $engineer_agent_name
  * @property int|bool $engineer_readonly
  * @property string $engineer_instructions
  * @property int $engineer_mem_qty
  * @property int $engineer_max_iterations
  * @property int $engineer_request_timeout
+ * @property int|bool $engineer_debug_mode
+ * @property string $engineer_trace_mode
+ * @property int $engineer_trace_keep_days
+ * @property int|bool $engineer_trace_include_content
  * @property string $engineer_additional_models
  *
  */
@@ -36,7 +42,7 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 			'title' => 'Agent Tools',
 			'summary' => "Enables AI coding agents to access ProcessWire's API and provides a database migration system.",
 			'icon' => 'at',
-			'version' => 18,
+			'version' => 19,
 			'author' => 'Ryan Cramer, Claude (Anthropic), GPT 5.5 Codex',
 			'requires' => 'ProcessWire>=3.0.255, PHP>=8.0.0',
 			'installs' => 'ProcessAgentTools, FieldtypePageEngineer',
@@ -85,6 +91,12 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 	protected $scheduledTasks = null;
 
 	/**
+	 * @var AgentToolsTraces|null
+	 *
+	 */
+	protected $traces = null;
+
+	/**
 	 * Construct
 	 *
 	 */
@@ -94,7 +106,8 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 		$keys = [
 			'provider', 'api_key', 'model', 'endpoint',
 			'label', 'readonly', 'additional_models',
-			'instructions', 'mem_qty', 'max_iterations', 'request_timeout',
+			'agent_name', 'instructions', 'mem_qty', 'max_iterations', 'request_timeout',
+			'debug_mode', 'trace_mode', 'trace_keep_days', 'trace_include_content',
 			'suspicious', 'suspicious_email', 'suspicious_log',
 		];
 		foreach($keys as $key) {
@@ -584,6 +597,8 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 					$this->engineer_endpoint,
 					$this->engineer_label,
 					$this->engineer_description,
+					'',
+					$this->engineer_agent_name,
 				];
 				$lines[] = trim(implode(' | ', $a), '| ');
 			}
@@ -630,6 +645,19 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 		$this->scheduledTasks = new AgentToolsScheduledTasks($this);
 		$this->wire($this->scheduledTasks);
 		return $this->scheduledTasks;
+	}
+
+	/**
+	 * Get traces service
+	 *
+	 * @return AgentToolsTraces
+	 *
+	 */
+	public function getTraces(): AgentToolsTraces {
+		if($this->traces) return $this->traces;
+		$this->traces = new AgentToolsTraces($this);
+		$this->wire($this->traces);
+		return $this->traces;
 	}
 
 	/**
@@ -787,3 +815,5 @@ include_once(__DIR__ . '/AgentToolsTask.php');
 include_once(__DIR__ . '/AgentToolsTasks.php');
 include_once(__DIR__ . '/AgentToolsScheduledTask.php');
 include_once(__DIR__ . '/AgentToolsScheduledTasks.php');
+include_once(__DIR__ . '/AgentToolsTrace.php');
+include_once(__DIR__ . '/AgentToolsTraces.php');

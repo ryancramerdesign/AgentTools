@@ -73,12 +73,28 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	protected $savedMigration = null;
 
 	/**
+	 * Current trace for the active ask() call.
+	 *
+	 * @var AgentToolsTrace|null
+	 *
+	 */
+	protected $currentTrace = null;
+
+	/**
 	 * Context items included in the last buildSystemPrompt() call
 	 *
 	 * @var array
 	 *
 	 */
 	public $lastContext = [];
+
+	/**
+	 * Last completed trace data, when tracing was enabled.
+	 *
+	 * @var array
+	 *
+	 */
+	public $lastTrace = [];
 
 	/**
 	 * Ask the engineer a question or request a site change
@@ -89,6 +105,8 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	 *  - `apiKey` (string): API key (default: module config)
 	 *  - `model` (string): Model identifier (default: module config / provider default)
 	 *  - `endpoint` (string): API endpoint base URL for OpenAI-compatible providers
+	 *  - `agentId` (string): Stable configured agent ID for trace/job metadata
+	 *  - `traceType` (string): Run type for trace metadata: engineer, task, page-engineer
 	 *  - `context` (string): 'all', 'custom', or 'none' (default: 'all')
 	 *  - `contextItems` (array): Items to include when context='custom': sitemap_pages, sitemap_schema
 	 *  - `history` (array): Prior conversation as [ ['role'=>'user','content'=>'...'], ['role'=>'assistant','content'=>'...'], ... ]
@@ -100,6 +118,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	public function ask(string $request, array $options = []): array {
 
 		$this->savedMigration = null;
+		$this->lastTrace = [];
 		$result = ['response' => '', 'migration' => null, 'error' => null, 'history' => []];
 		$this->extendPhpTimeLimit($options);
 
@@ -116,6 +135,8 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			$endpoint = $options['endpoint'] ?? '';
 
 			if(!$apiKey) throw new WireException($this->_('API key is not configured in AgentTools module settings.'));
+			$maxIterations = $this->getMaxIterations($options);
+			$this->currentTrace = $this->startTrace($request, $provider, $model, $endpoint, $maxIterations, $options);
 
 			// Build message history: prior pairs (text only) + current request
 			$history = $options['history'] ?? [];
@@ -130,8 +151,8 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			$readOnly = isset($options['readOnly']) ? (bool) $options['readOnly'] : (bool) $this->at->get('engineer_readonly');
 			$dryRun = !empty($options['dryRun']);
 			$verbose = !empty($options['verbose']);
-			$maxIterations = $this->getMaxIterations($options);
 			$systemPrompt = isset($options['systemPrompt']) ? $options['systemPrompt'] : $this->buildSystemPrompt($readOnly, $dryRun);
+			$systemPrompt = $this->appendAgentIdentity($systemPrompt, $provider, $model, $endpoint, $options);
 			if($dryRun && isset($options['systemPrompt'])) $systemPrompt = $this->appendDryRunInstructions($systemPrompt);
 			$systemPrompt = $this->appendIterationBudget($systemPrompt, $maxIterations);
 			if(array_key_exists('tools', $options)) {
@@ -171,6 +192,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 						$updatedHistory = array_slice($updatedHistory, -$maxEntries);
 					}
 					$result['history'] = $updatedHistory;
+					$this->finishTrace($result, $options);
 					return $result;
 				}
 
@@ -178,7 +200,18 @@ class AgentToolsEngineer extends AgentToolsHelper {
 
 				foreach($toolCalls as $toolCall) {
 					if($verbose) fwrite(STDERR, "// tool: {$toolCall['name']}\n");
-					$output = $this->executeTool($toolCall['name'], $toolCall['input']);
+					$toolStart = microtime(true);
+					try {
+						$output = $this->executeTool($toolCall['name'], $toolCall['input']);
+						if($this->currentTrace) {
+							$this->at->getTraces()->addToolCall($this->currentTrace, $toolCall['name'], $toolCall['input'], $output, $toolStart);
+						}
+					} catch(\Throwable $e) {
+						if($this->currentTrace) {
+							$this->at->getTraces()->addToolCall($this->currentTrace, $toolCall['name'], $toolCall['input'], '', $toolStart, $e);
+						}
+						throw $e;
+					}
 					$this->appendToolResult($provider, $messages, $toolCall, $output);
 				}
 			}
@@ -189,6 +222,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			$result['error'] = $e->getMessage();
 		}
 
+		$this->finishTrace($result, $options);
 		return $result;
 	}
 
@@ -211,6 +245,143 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	}
 
 	/**
+	 * Start a trace when debug or trace logging is enabled.
+	 *
+	 * @param string $request
+	 * @param string $provider
+	 * @param string $model
+	 * @param string $endpoint
+	 * @param int $maxIterations
+	 * @param array $options
+	 * @return AgentToolsTrace|null
+	 *
+	 */
+	protected function startTrace(string $request, string $provider, string $model, string $endpoint, int $maxIterations, array $options): ?AgentToolsTrace {
+		if(!$this->isTraceEnabled($options)) return null;
+		$agent = $this->findTraceAgent($provider, $model, $endpoint, $options);
+		$endpointHost = $endpoint ? (string) parse_url($endpoint, PHP_URL_HOST) : '';
+		$type = (string) ($options['traceType'] ?? 'engineer');
+		$trace = $this->at->getTraces()->newTrace([
+			'type' => $type,
+			'provider' => $provider,
+			'model' => $model,
+			'agentId' => $agent ? $agent->id : (string) ($options['agentId'] ?? ''),
+			'agentLabel' => $agent ? $agent->get('label|model') : $model,
+			'endpointHost' => $endpointHost,
+			'backgroundJob' => !empty($options['backgroundJob']),
+			'maxIterations' => $maxIterations,
+			'requestLength' => strlen($request),
+		]);
+		if($this->includeTraceContent()) $trace->request = $request;
+		return $trace;
+	}
+
+	/**
+	 * Finish and optionally save/display a trace.
+	 *
+	 * @param array $result
+	 * @param array $options
+	 *
+	 */
+	protected function finishTrace(array &$result, array $options): void {
+		if(!$this->currentTrace) return;
+		$trace = $this->at->getTraces()->finish($this->currentTrace, $result);
+		if($this->includeTraceContent()) $trace->response = (string) ($result['response'] ?? '');
+		if($this->shouldSaveTrace($options)) {
+			try {
+				$this->at->getTraces()->save($trace);
+			} catch(\Throwable $e) {
+				if(empty($result['error'])) $result['error'] = $e->getMessage();
+			}
+		}
+		$result['trace'] = $trace->toArray();
+		$this->lastTrace = $result['trace'];
+		if($this->debugModeEnabled() && empty($options['backgroundJob'])) {
+			$this->message($this->at->getTraces()->getNoticeData($trace), Notice::noGroup);
+		}
+		$this->currentTrace = null;
+	}
+
+	/**
+	 * Should a trace object be created for this request?
+	 *
+	 * @param array $options
+	 * @return bool
+	 *
+	 */
+	protected function isTraceEnabled(array $options): bool {
+		return $this->debugModeEnabled() || $this->traceMode() !== '';
+	}
+
+	/**
+	 * Should this trace be saved to disk?
+	 *
+	 * @param array $options
+	 * @return bool
+	 *
+	 */
+	protected function shouldSaveTrace(array $options): bool {
+		return $this->traceMode() !== '';
+	}
+
+	/**
+	 * Is live debug mode enabled?
+	 *
+	 * @return bool
+	 *
+	 */
+	protected function debugModeEnabled(): bool {
+		return (bool) $this->at->get('engineer_debug_mode');
+	}
+
+	/**
+	 * Trace mode value, or blank when off.
+	 *
+	 * @return string
+	 *
+	 */
+	protected function traceMode(): string {
+		$mode = (string) $this->at->get('engineer_trace_mode');
+		return in_array($mode, ['summary', 'detailed'], true) ? $mode : '';
+	}
+
+	/**
+	 * Should prompt/response text be included in saved trace data?
+	 *
+	 * @return bool
+	 *
+	 */
+	protected function includeTraceContent(): bool {
+		return (bool) $this->at->get('engineer_trace_include_content');
+	}
+
+	/**
+	 * Find configured agent for trace metadata.
+	 *
+	 * @param string $provider
+	 * @param string $model
+	 * @param string $endpoint
+	 * @param array $options
+	 * @return AgentToolsAgent|null
+	 *
+	 */
+	protected function findTraceAgent(string $provider, string $model, string $endpoint, array $options): ?AgentToolsAgent {
+		$agents = $this->at->getAgents();
+		if(!empty($options['agentId'])) {
+			$agent = $agents->getById((string) $options['agentId']);
+			if($agent) return $agent;
+		}
+		foreach($agents as $agent) {
+			/** @var AgentToolsAgent $agent */
+			if($agent->provider !== $provider) continue;
+			if($model && $agent->model !== $model) continue;
+			if($endpoint && $agent->endpointUrl !== $endpoint) continue;
+			return $agent;
+		}
+		return null;
+	}
+
+	/**
 	 * Append tool-use budget instructions to the system prompt
 	 *
 	 * @param string $systemPrompt
@@ -224,6 +395,56 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			"Plan accordingly. Gather the most important information early, avoid exploratory loops, " .
 			"and return a useful partial result with follow-up recommendations rather than exhausting the budget trying to be complete.";
 		return rtrim($systemPrompt) . "\n\n" . $budget;
+	}
+
+	/**
+	 * Append configured agent and live user identity to the system prompt when available.
+	 *
+	 * @param string $systemPrompt
+	 * @param string $provider
+	 * @param string $model
+	 * @param string $endpoint
+	 * @param array $options
+	 * @return string
+	 *
+	 */
+	protected function appendAgentIdentity(string $systemPrompt, string $provider, string $model, string $endpoint, array $options): string {
+		$agent = $this->findTraceAgent($provider, $model, $endpoint, $options);
+		$agentName = $agent && $agent->agentName ? preg_replace('/\s+/', ' ', trim($agent->agentName)) : '';
+		$userName = $this->getLiveUserDisplayName($options);
+		if($agentName === '' && $userName === '') return $systemPrompt;
+		$lines = [ '## Conversation identity' ];
+		if($agentName !== '') {
+			$lines[] =
+				"Your configured AgentTools name is $agentName. If the user addresses you by this name, treat it as addressed to you. " .
+				"When it is useful to identify who performed the work, you may refer to yourself as $agentName.";
+		}
+		if($userName !== '') {
+			$lines[] = "The person you are assisting is $userName.";
+		}
+		return rtrim($systemPrompt) . "\n\n" .
+			implode("\n", $lines);
+	}
+
+	/**
+	 * Get friendly live user display name for prompt context.
+	 *
+	 * @param array $options
+	 * @return string
+	 *
+	 */
+	protected function getLiveUserDisplayName(array $options): string {
+		if(!empty($options['backgroundJob'])) return '';
+		$user = $this->wire()->user;
+		if(!$user || !$user->id) return '';
+		$name = trim((string) $user->name);
+		if($name === '') return '';
+		$genericNames = [ 'guest', 'admin' ];
+		if(in_array(strtolower($name), $genericNames, true)) return '';
+		$name = preg_split('/[-_.\s]+/', $name, 2)[0] ?? '';
+		if(in_array(strtolower($name), $genericNames, true)) return '';
+		$name = preg_replace('/[^a-zA-Z0-9]+/', '', $name);
+		return $name === '' ? '' : ucfirst($name);
 	}
 
 	/**
@@ -247,6 +468,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 				'provider' => $agent->provider,
 				'key' => $agent->apiKey,
 				'endpoint' => $agent->endpointUrl,
+				'agentName' => $agent->agentName,
 			];
 		}
 		return $models;
@@ -546,6 +768,9 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			"for important actions so admin/CLI output is useful. Do not suppress unexpected errors; " .
 			"let them throw or explicitly throw a WireException. If unsure about a ProcessWire API method, " .
 			"option, or current best practice, use api_docs or read_file before writing the migration.\n\n" .
+			"After direct writes, verify important final state before reporting it, especially page id, " .
+			"path, template, and published/unpublished status. New ProcessWire pages are published by " .
+			"default unless Page::statusUnpublished is explicitly added.\n\n" .
 			"For common field/template migrations, use a check/create/add pattern: get the field or " .
 			"template by name, create only if missing, check the template fieldgroup before adding a " .
 			"field, insert fields in the requested order when possible, save only changed objects, " .
@@ -1718,6 +1943,63 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		$f->val($this->at->get('engineer_instructions') ?: '');
 		$f->collapsed = Inputfield::collapsedBlank;
 		$outerFs->add($f);
+
+		/** @var InputfieldFieldset $traceFs */
+		$traceFs = $modules->get('InputfieldFieldset');
+		$traceFs->label = $this->_('Debug and traces');
+		$traceFs->icon = 'bug';
+		if(!$this->at->get('engineer_debug_mode') && !$this->at->get('engineer_trace_mode')) {
+			$traceFs->collapsed =  Inputfield::collapsedYes;
+		}
+		$traceFs->themeOffset = 1;
+		$traceFs->notes = sprintf($this->_('Trace files are saved in %s.'), '`site/assets/at/traces/`');
+
+		/** @var InputfieldToggle $f */
+		$f = $modules->get('InputfieldToggle');
+		$f->attr('name', 'engineer_debug_mode');
+		$f->label = $this->_('Debug mode');
+		$f->description = $this->_('When enabled, live Engineer requests show a compact trace summary as an admin notification.');
+		$f->notes = $this->_('Background jobs save traces when trace logging is enabled, but do not show live admin notifications.');
+		$f->val((int) $this->at->get('engineer_debug_mode'));
+		$f->columnWidth = 50;
+		$traceFs->add($f);
+
+		/** @var InputfieldSelect $f */
+		$f = $modules->get('InputfieldSelect');
+		$f->attr('name', 'engineer_trace_mode');
+		$f->label = $this->_('Trace agent runs');
+		$f->description = $this->_('Save compact JSON traces of Engineer, Task, and Page Engineer runs for later review.');
+		$f->addOption('', $this->_('Off'));
+		$f->addOption('summary', $this->_('Summary'));
+		$f->addOption('detailed', $this->_('Detailed'));
+		$f->val($this->at->get('engineer_trace_mode') ?: '');
+		$f->columnWidth = 50;
+		$traceFs->add($f);
+
+		/** @var InputfieldInteger $f */
+		$f = $modules->get('InputfieldInteger');
+		$f->attr('name', 'engineer_trace_keep_days');
+		$f->label = $this->_('Keep traces for days');
+		$f->description = $this->_('Old trace files are pruned when new traces are saved. Use 0 to keep traces indefinitely.');
+		$f->attr('min', 0);
+		$f->attr('max', 3650);
+		$val = (int) $this->at->get('engineer_trace_keep_days');
+		$f->val($val ?: 30);
+		$f->showIf = 'engineer_trace_mode!=""';
+		$f->columnWidth = 50;
+		$traceFs->add($f);
+
+		/** @var InputfieldToggle $f */
+		$f = $modules->get('InputfieldToggle');
+		$f->attr('name', 'engineer_trace_include_content');
+		$f->label = $this->_('Include prompts and responses');
+		$f->description = $this->_('When enabled, saved trace JSON includes the user prompt and final AI response. Leave disabled when traces may contain private content.');
+		$f->val((int) $this->at->get('engineer_trace_include_content'));
+		$f->showIf = 'engineer_trace_mode!=""';
+		$f->columnWidth = 50;
+		$traceFs->add($f);
+
+		$outerFs->add($traceFs);
 
 		/** @var InputfieldFieldset $secFs */
 		$secFs = $modules->get('InputfieldFieldset');

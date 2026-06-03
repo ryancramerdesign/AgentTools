@@ -115,6 +115,10 @@ class AgentToolsJobs extends AgentToolsHelper {
 			'userName' => '',
 			'notifyEmail' => '',
 			'agentId' => '',
+			'agentLabel' => '',
+			'agentModel' => '',
+			'agentName' => '',
+			'agentProvider' => '',
 			'modelIndex' => 0,
 			'url' => '',
 			'agentToolsUrl' => '',
@@ -248,11 +252,13 @@ class AgentToolsJobs extends AgentToolsHelper {
 		if(isset($job['readOnly'])) $options['readOnly'] = (bool) $job['readOnly'];
 		if(isset($job['dryRun'])) $options['dryRun'] = (bool) $job['dryRun'];
 		if(!empty($job['history']) && is_array($job['history'])) $options['history'] = $job['history'];
+		$job = $this->applyAgentMetadata($job, $options);
 		$result = $this->at->engineer->ask($prompt, $options);
 		if(!empty($result['error'])) throw new WireException($result['error']);
 		$job['response'] = (string) ($result['response'] ?? '');
 		$job['migration'] = (string) ($result['migration'] ?? '');
 		$job['history'] = is_array($result['history'] ?? null) ? $result['history'] : [];
+		$job['trace'] = is_array($result['trace'] ?? null) ? $result['trace'] : [];
 		return $job;
 	}
 
@@ -274,6 +280,7 @@ class AgentToolsJobs extends AgentToolsHelper {
 		if(isset($job['readOnly'])) $options['readOnly'] = (bool) $job['readOnly'];
 		if(isset($job['dryRun'])) $options['dryRun'] = (bool) $job['dryRun'];
 		if(isset($job['maxIterations'])) $options['maxIterations'] = (int) $job['maxIterations'];
+		$job = $this->applyAgentMetadata($job, $options);
 		$result = $this->at->getTasks()->run($taskName, $input, $options);
 		if(!empty($result['error'])) throw new WireException($result['error']);
 		$job['response'] = (string) ($result['response'] ?? '');
@@ -281,6 +288,7 @@ class AgentToolsJobs extends AgentToolsHelper {
 		$job['request'] = (string) ($result['request'] ?? '');
 		$job['readOnly'] = (bool) ($result['readOnly'] ?? false);
 		$job['history'] = is_array($result['history'] ?? null) ? $result['history'] : [];
+		$job['trace'] = is_array($result['trace'] ?? null) ? $result['trace'] : [];
 		return $job;
 	}
 
@@ -346,6 +354,9 @@ class AgentToolsJobs extends AgentToolsHelper {
 		}
 		$options = [
 			'provider' => $agent->provider,
+			'agentId' => $agent->id,
+			'agentLabel' => $agent->get('label|model'),
+			'agentName' => $agent->agentName,
 			'apiKey' => $agent->apiKey,
 			'model' => $agent->model,
 			'endpoint' => $agent->endpointUrl,
@@ -354,6 +365,54 @@ class AgentToolsJobs extends AgentToolsHelper {
 		];
 		if(isset($job['maxIterations'])) $options['maxIterations'] = (int) $job['maxIterations'];
 		return $options;
+	}
+
+	/**
+	 * Apply resolved agent metadata to a job.
+	 *
+	 * @param array $job
+	 * @param array $options
+	 * @return array
+	 *
+	 */
+	protected function applyAgentMetadata(array $job, array $options): array {
+		$job['agentId'] = (string) ($options['agentId'] ?? ($job['agentId'] ?? ''));
+		$job['agentLabel'] = (string) ($options['agentLabel'] ?? ($job['agentLabel'] ?? ''));
+		$job['agentName'] = (string) ($options['agentName'] ?? ($job['agentName'] ?? ''));
+		$job['agentModel'] = (string) ($options['model'] ?? ($job['agentModel'] ?? ''));
+		$job['agentProvider'] = (string) ($options['provider'] ?? ($job['agentProvider'] ?? ''));
+		return $job;
+	}
+
+	/**
+	 * Get readable agent label for a job.
+	 *
+	 * @param array $job
+	 * @return string
+	 *
+	 */
+	public function getJobAgentLabel(array $job): string {
+		$label = trim((string) ($job['agentLabel'] ?? ''));
+		$model = trim((string) ($job['agentModel'] ?? ''));
+		$provider = trim((string) ($job['agentProvider'] ?? ''));
+		if($label === '' && !empty($job['trace']) && is_array($job['trace'])) {
+			$label = trim((string) ($job['trace']['agentLabel'] ?? ''));
+			$model = $model ?: trim((string) ($job['trace']['model'] ?? ''));
+			$provider = $provider ?: trim((string) ($job['trace']['provider'] ?? ''));
+		}
+		if($label === '' && !empty($job['agentId'])) {
+			$agent = $this->at->getAgents()->getById((string) $job['agentId']);
+			if($agent) {
+				$label = (string) $agent->get('label|model');
+				$model = $model ?: (string) $agent->model;
+				$provider = $provider ?: (string) $agent->provider;
+			}
+		}
+		if($label === '' && $model !== '') $label = $model;
+		if($label === '') return '';
+		if($model !== '' && $model !== $label) $label .= " ($model)";
+		if($provider !== '') $label .= " [$provider]";
+		return $label;
 	}
 
 	/**
@@ -401,6 +460,8 @@ class AgentToolsJobs extends AgentToolsHelper {
 		$lines[] = '- **Job:** ' . ($job['id'] ?? '');
 		$lines[] = '- **Type:** ' . ($job['type'] ?? '');
 		$lines[] = '- **Status:** ' . (!empty($job['error']) ? self::statusFailed : self::statusDone);
+		$agentLabel = $this->getJobAgentLabel($job);
+		if($agentLabel !== '') $lines[] = '- **Agent:** ' . $agentLabel;
 		if(!empty($job['dryRun'])) $lines[] = '- **Mode:** Preview only';
 		if(!empty($job['url'])) $lines[] = '- **Submitted from:** ' . $job['url'];
 		if(!empty($job['taskName'])) $lines[] = '- **Task:** ' . $job['taskName'];

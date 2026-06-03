@@ -1,5 +1,31 @@
 # Changelog
 
+## Version 19
+
+### Debug and traces
+
+- Added optional Engineer debug and trace logging for Site Engineer, Page Engineer,
+  and Task runs, with compact live admin notices and saved JSON traces in
+  `site/assets/at/traces/`.
+- Trace summaries record the selected agent, provider, duration, tool calls,
+  API docs usage, migrations, and trace file path when tracing is enabled.
+
+### Agents and background jobs
+
+- Scheduled Tasks can now select multiple agents and rotate through them in
+  round-robin order, while preserving compatibility with existing single-agent
+  schedules.
+- Background job results and emails now show the agent/model that completed the
+  job, and completed jobs preserve resolved agent metadata.
+- Added configured agent names to Engineer system prompts, so agents can respond
+  naturally to names like "Kimi" or "Max".
+- Live Engineer requests now tell the agent the submitting user's friendly name
+  when available, skipping generic names like `guest` and `admin`.
+- Fixed duplicate legacy/modern agent entries when an agent name is configured
+  for the primary agent.
+
+---
+
 ## Version 18
 
 ### Scheduled tasks

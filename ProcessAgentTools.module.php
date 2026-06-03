@@ -15,7 +15,7 @@ class ProcessAgentTools extends Process {
 		return [
 			'title' => 'Agent Tools',
 			'summary' => 'Admin interface for AgentTools migrations and AI engineer.',
-			'version' => 11,
+			'version' => 12,
 			'author' => 'Claude (Anthropic), GPT 5.5 Codex and Ryan Cramer',
 			'icon' => 'at',
 			'requires' => 'AgentTools',
@@ -512,6 +512,8 @@ class ProcessAgentTools extends Process {
 		if(isset($availableModels[$modelIndex])) {
 			$entry = $availableModels[$modelIndex];
 			$options['model'] = $entry['model'];
+			$options['agentId'] = $entry['id'];
+			$options['agentName'] = $entry['agentName'];
 			$options['provider'] = $entry['provider'];
 			$options['apiKey'] = $entry['key'];
 			$options['endpoint'] = $entry['endpoint'];
@@ -714,6 +716,10 @@ class ProcessAgentTools extends Process {
 		$out .= '<ul class="uk-list uk-list-divider">';
 		$out .= '<li><strong>' . $this->label('status') . ':</strong> ' . htmlspecialchars($job['status'] ?? '', ENT_QUOTES, 'UTF-8') . '</li>';
 		$out .= '<li><strong>' . $this->_('Type') . ':</strong> ' . htmlspecialchars($job['type'] ?? '', ENT_QUOTES, 'UTF-8') . '</li>';
+		$agentLabel = $this->at->jobs()->getJobAgentLabel($job);
+		if($agentLabel !== '') {
+			$out .= '<li><strong>' . $this->_('Agent') . ':</strong> ' . htmlspecialchars($agentLabel, ENT_QUOTES, 'UTF-8') . '</li>';
+		}
 		if(!empty($job['dryRun'])) {
 			$out .= '<li><strong>' . $this->_('Mode') . ':</strong> ' . htmlspecialchars($this->_('Preview only'), ENT_QUOTES, 'UTF-8') . '</li>';
 		}

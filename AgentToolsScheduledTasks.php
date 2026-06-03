@@ -104,18 +104,23 @@ class AgentToolsScheduledTasks extends WireArray {
 	 * Save a scheduled task
 	 *
 	 * @param AgentToolsScheduledTask $task
+	 * @param string $previousName
+	 * @param array $options
 	 * @return int|false
 	 * @throws WireException
 	 *
 	 */
-	public function save(AgentToolsScheduledTask $task, string $previousName = '') {
+	public function save(AgentToolsScheduledTask $task, string $previousName = '', array $options = []) {
+		$options = array_merge([
+			'updateNextRun' => true,
+		], $options);
 		if(!$task->title) throw new WireException('Scheduled task title is required');
 		if(!$task->name) $task->name = $task->title;
 		$now = time();
 		if(!$task->created) $task->created = $now;
 		if(!$task->createdUserId) $task->createdUserId = (int) $this->wire()->user->id;
 		$task->modified = $now;
-		$task->nextRun = $this->calculateNextRun($task, $now);
+		if($options['updateNextRun']) $task->nextRun = $this->calculateNextRun($task, $now);
 
 		$file = $this->getTaskFile($task);
 		$previousName = $this->wire()->sanitizer->pageName($previousName);
@@ -191,13 +196,15 @@ class AgentToolsScheduledTasks extends WireArray {
 		if(!$task) throw new WireException("Task not found: $schedule->task");
 		$agent = $this->resolveAgent($schedule);
 		if(!$agent) throw new WireException('Configured agent no longer exists.');
+		$schedule->lastAgentId = $agent->id;
+		if(!$schedule->agentId) $schedule->agentId = $agent->id;
 		$userId = (int) ($options['userId'] ?? $schedule->createdUserId);
 		$userName = (string) ($options['userName'] ?? '');
 		if(!$userName && $userId) {
 			$user = $this->wire()->users->get($userId);
 			if($user && $user->id) $userName = $user->name;
 		}
-		return $this->at->jobs()->addJob([
+		$job = $this->at->jobs()->addJob([
 			'type' => 'task',
 			'userId' => $userId,
 			'userName' => $userName,
@@ -210,6 +217,8 @@ class AgentToolsScheduledTasks extends WireArray {
 			'maxIterations' => (int) $task->maxIterations,
 			'scheduledTask' => $schedule->name,
 		]);
+		$this->save($schedule, '', [ 'updateNextRun' => false ]);
+		return $job;
 	}
 
 	/**
@@ -221,9 +230,24 @@ class AgentToolsScheduledTasks extends WireArray {
 	 */
 	public function resolveAgent(AgentToolsScheduledTask $schedule): ?AgentToolsAgent {
 		$agents = $this->at->getAgents();
-		if($schedule->agentId) {
-			$agent = $agents->getById($schedule->agentId);
-			if($agent) return $agent;
+		$ids = $schedule->agentIds;
+		if(!count($ids) && $schedule->agentId) $ids = [$schedule->agentId];
+		$available = [];
+		foreach($ids as $id) {
+			$agent = $agents->getById($id);
+			if($agent) $available[] = $agent;
+		}
+		if(count($available) === 1) return $available[0];
+		if(count($available) > 1) {
+			$next = 0;
+			foreach($available as $index => $agent) {
+				/** @var AgentToolsAgent $agent */
+				if($agent->id === $schedule->lastAgentId) {
+					$next = ($index + 1) % count($available);
+					break;
+				}
+			}
+			return $available[$next];
 		}
 		if($schedule->agentName) {
 			foreach($agents as $agent) {

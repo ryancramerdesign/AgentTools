@@ -28,6 +28,7 @@ class ProcessAgentToolsAgents extends ProcessAgentToolsHelper {
 			'label' => 'Label',
 			'apiKey' => 'API key',
 			'endpointUrl' => 'Endpoint URL',
+			'agentName' => 'Agent’s name',
 			'description' => 'Description',
 		];
 
@@ -37,6 +38,7 @@ class ProcessAgentToolsAgents extends ProcessAgentToolsHelper {
 			'engineer_api_key' => 'apiKey',
 			'engineer_endpoint' => 'endpointUrl',
 			'engineer_description' => 'description',
+			'engineer_agent_name' => 'agentName',
 		];
 
 		$headerActions = [
@@ -92,11 +94,7 @@ class ProcessAgentToolsAgents extends ProcessAgentToolsHelper {
 				$f->columnWidth = 25;
 				if($agent) $f->val($agent->get($name));
 				if($name === 'apiKey') $f->attr('type', 'password');
-				if($name === 'description') {
-					$f->columnWidth = 100;
-					$f->skipLabel = Inputfield::skipLabelHeader;
-					$f->attr('placeholder', 'Description');
-				}
+				if($name === 'description') $f->columnWidth = 75;
 				$fs->add($f);
 
 				if(isset($headerActions[$name])) {
