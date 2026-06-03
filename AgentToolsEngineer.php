@@ -529,6 +529,8 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			"For requests that make changes to the site (creating or modifying fields, templates, pages, " .
 			"content, etc.), always use the save_migration tool rather than applying changes directly via " .
 			"eval_php. This allows the user to review changes before they are applied. " .
+			"Do not say that you saved, created, modified, applied, or deleted something unless you " .
+			"actually used the appropriate tool and received a successful result. " .
 			"Migrations can contain any PHP including file operations — use save_migration to create or " .
 			"modify template files, config files, or other site assets that would otherwise require manual creation. " .
 			"When writing files in a migration, prefer \$files->filePutContents(\$path, \$content) over " .
@@ -544,13 +546,20 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			"for important actions so admin/CLI output is useful. Do not suppress unexpected errors; " .
 			"let them throw or explicitly throw a WireException. If unsure about a ProcessWire API method, " .
 			"option, or current best practice, use api_docs or read_file before writing the migration.\n\n" .
+			"For common field/template migrations, use a check/create/add pattern: get the field or " .
+			"template by name, create only if missing, check the template fieldgroup before adding a " .
+			"field, insert fields in the requested order when possible, save only changed objects, " .
+			"and echo concise created/skipped messages.\n\n" .
 
 			"ProcessWire API variables available to eval_php: $apiVars.\n\n" .
 
 			"Use the site_info tool to retrieve information about this site. " .
 			"Call with type='pages' for a map of the site's page tree, type='schema' for the site's " .
-			"fields and templates structure, or type='modules' for a list of all installed modules " .
-			"(useful for knowing whether modules like FormBuilder, ProCache, or specific Fieldtypes are available). " .
+			"fields and templates structure, or type='modules' for a list of all installed modules. " .
+			"Schema output is JSON with fields, fieldgroups, and templates; fieldgroups include " .
+			"ordered fields arrays and per-field context overrides, which are useful when adding " .
+			"fields before or after existing fields. Modules output is useful for knowing whether " .
+			"modules like FormBuilder, ProCache, or specific Fieldtypes are available. " .
 			"Fetch only what the request requires.\n\n" .
 
 			"Use the read_file tool to read the contents of any file within this ProcessWire installation, " .
@@ -925,8 +934,9 @@ class AgentToolsEngineer extends AgentToolsHelper {
 
 		$siteInfoDesc =
 			"Retrieve information about this ProcessWire site. Use type='pages' for the page tree, " .
-			"type='schema' for fields and templates structure, or type='modules' for a list of all " .
-			"installed modules.";
+			"type='schema' for JSON containing fields, fieldgroups, and templates, or type='modules' " .
+			"for a list of all installed modules. Schema fieldgroups include ordered fields arrays " .
+			"and per-field context overrides.";
 
 		$siteInfoParams = [
 			'type' => 'object',
@@ -934,7 +944,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 				'type' => [
 					'type' => 'string',
 					'enum' => ['pages', 'schema', 'modules'],
-					'description' => "Use 'pages' for the site page tree, 'schema' for fields and templates, 'modules' for installed modules",
+					'description' => "Use 'pages' for the site page tree, 'schema' for fields/fieldgroups/templates with ordered fieldgroups, 'modules' for installed modules",
 				],
 				'refresh' => [
 					'type' => 'boolean',

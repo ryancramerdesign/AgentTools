@@ -570,7 +570,7 @@ class ProcessAgentTools extends Process {
 			$session->set('at_engineer_history', $result['history']);
 		}
 
-		$out = "<blockquote><p>" . $sanitizer->entities($request) . "</p></blockquote>";
+		$out = "<blockquote class='uk-margin-top'><p>" . $sanitizer->entities($request) . "</p></blockquote>";
 
 		if($result['error']) {
 			$this->error($result['error']);
