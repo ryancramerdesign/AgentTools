@@ -160,4 +160,14 @@ abstract class ProcessAgentToolsHelper extends Wire {
 	protected function renderQueuedJobConfirmation(array $job, string $returnUrl = '', string $returnLabel = '', string $returnIcon = ''): string {
 		return $this->pat->renderQueuedJobConfirmation($job, $returnUrl, $returnLabel, $returnIcon);
 	}
+
+	/**
+	 * Get current site base URL for background jobs.
+	 *
+	 * @return string
+	 *
+	 */
+	protected function getSiteUrl(): string {
+		return $this->pat->getSiteUrl();
+	}
 }

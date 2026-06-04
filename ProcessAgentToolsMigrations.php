@@ -122,6 +122,16 @@ class ProcessAgentToolsMigrations extends ProcessAgentToolsHelper {
 		$btn->setSecondary();
 		$form->add($btn);
 
+		$job = $this->at->jobs()->findJobForMigration($name);
+		if(!empty($job['history']) && !empty($job['id'])) {
+			$btn = $form->InputfieldButton;
+			$btn->href = '../reply-job/?id=' . rawurlencode($job['id']);
+			$btn->icon = 'reply';
+			$btn->val($this->label('reply'));
+			$btn->showInHeader(true);
+			$form->add($btn);
+		}
+
 		$f = $form->InputfieldSubmit;
 		$f->attr('name', 'submit_apply');
 		$f->showInHeader(true);

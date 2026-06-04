@@ -10,7 +10,8 @@
  *
  * Supports Anthropic (Claude) and OpenAI-compatible providers.
  *
- * Copyright 2026 Ryan Cramer and Claude (Anthropic) | MIT
+ * Copyright 2026 Ryan Cramer
+ * with lots of help from Claude (Anthropic) and Codex GPT 5.5 (OpenAI)
  *
  * @method array sendProviderRequest(AgentToolsRequest $request)
  *
@@ -42,6 +43,18 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	const defaultRequestTimeout = 300;
 
 	/**
+	 * Default max conversation history pairs
+	 *
+	 */
+	const defaultHistoryPairs = 10;
+
+	/**
+	 * Default max characters retained in a memory store
+	 *
+	 */
+	const defaultMemoryMaxLength = 30000;
+
+	/**
 	 * Max characters of eval_php output returned to the AI
 	 *
 	 */
@@ -62,7 +75,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	 * @var int
 	 *
 	 */
-	protected $maxHistoryPairs = 10;
+	protected $maxHistoryPairs = self::defaultHistoryPairs;
 
 	/**
 	 * Migration file saved during the current ask() call, if any
@@ -71,6 +84,14 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	 *
 	 */
 	protected $savedMigration = null;
+
+	/**
+	 * User before Engineer was logged-in
+	 *
+	 * @var null|User
+	 *
+	 */
+	protected $savedUser = null;
 
 	/**
 	 * Current trace for the active ask() call.
@@ -151,7 +172,8 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			$readOnly = isset($options['readOnly']) ? (bool) $options['readOnly'] : (bool) $this->at->get('engineer_readonly');
 			$dryRun = !empty($options['dryRun']);
 			$verbose = !empty($options['verbose']);
-			$systemPrompt = isset($options['systemPrompt']) ? $options['systemPrompt'] : $this->buildSystemPrompt($readOnly, $dryRun);
+			$systemPrompt = isset($options['systemPrompt']) ? $options['systemPrompt'] : $this->buildSystemPrompt($readOnly, $dryRun, $options);
+			$systemPrompt = $this->appendMemoryPrompt($systemPrompt, $options, $readOnly, $dryRun);
 			$systemPrompt = $this->appendAgentIdentity($systemPrompt, $provider, $model, $endpoint, $options);
 			if($dryRun && isset($options['systemPrompt'])) $systemPrompt = $this->appendDryRunInstructions($systemPrompt);
 			$systemPrompt = $this->appendIterationBudget($systemPrompt, $maxIterations);
@@ -202,7 +224,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 					if($verbose) fwrite(STDERR, "// tool: {$toolCall['name']}\n");
 					$toolStart = microtime(true);
 					try {
-						$output = $this->executeTool($toolCall['name'], $toolCall['input']);
+						$output = $this->executeTool($toolCall['name'], $toolCall['input'], $options);
 						if($this->currentTrace) {
 							$this->at->getTraces()->addToolCall($this->currentTrace, $toolCall['name'], $toolCall['input'], $output, $toolStart);
 						}
@@ -424,6 +446,60 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		}
 		return rtrim($systemPrompt) . "\n\n" .
 			implode("\n", $lines);
+	}
+
+	/**
+	 * Append durable memory and memory instructions to the system prompt.
+	 *
+	 * @param string $systemPrompt
+	 * @param array $options
+	 * @param bool $readOnly
+	 * @param bool $dryRun
+	 * @return string
+	 *
+	 */
+	protected function appendMemoryPrompt(string $systemPrompt, array $options, bool $readOnly, bool $dryRun): string {
+		$memory = trim($this->getMemoryText($options));
+		$lines = [ '## Memory' ];
+		if($memory !== '') {
+			$lines[] = "The following durable memory applies to this context. Treat it as site/workflow preference, not as a replacement for the user's current request.";
+			$lines[] = $memory;
+		} else {
+			$lines[] = "No durable memory has been saved for this context yet.";
+		}
+		if(!$readOnly && !$dryRun) {
+			$lines[] =
+				"If the user explicitly asks you to remember a durable preference, convention, or recurring instruction, " .
+				"use save_memory with a concise standalone memory text. Save memory only for durable preferences or workflow rules. " .
+				"Do not save temporary facts, one-off task details, private secrets, API keys, credentials, or anything the user did not ask you to retain unless it is clearly a durable site/workflow preference. " .
+				"If you are correcting or replacing an existing memory, include its id as replaceId instead of appending a duplicate memory.";
+		}
+		return rtrim($systemPrompt) . "\n\n" . implode("\n\n", $lines);
+	}
+
+	/**
+	 * Get memory text for the active context.
+	 *
+	 * @param array $options
+	 * @return string
+	 *
+	 */
+	protected function getMemoryText(array $options): string {
+		$field = $this->getMemoryField($options);
+		if($field) return (string) $field->get('memory');
+		return (string) $this->at->get('engineer_memory');
+	}
+
+	/**
+	 * Get PageEngineer field for field-scoped memory, when available.
+	 *
+	 * @param array $options
+	 * @return Field|null
+	 *
+	 */
+	protected function getMemoryField(array $options): ?Field {
+		$field = $options['pageEngineerField'] ?? null;
+		return $field instanceof Field ? $field : null;
 	}
 
 	/**
@@ -720,7 +796,53 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		if($this->wire('forms')) {
 			$vars[] = $withNotes ? '$forms (FormBuilder)' : '$forms';
 		}
+
+		/**
+		 * @CODEX do we also want to make these available?
+		 *
+		 * $cache (WireCache)
+		 * $classLoader (WireClassLoader)
+		 * $fieldgroups (Fieldgroups)
+		 * $fieldtypes (Fieldtypes)
+		 * $hooks (WireHooks)
+		 * $input (WireInput)
+		 * $log (WireLog)
+		 * $mail (WireMailTools)
+		 * $notices (Notices)
+		 * $page (Page)
+		 * $process (Process)
+		 * $session (Session)
+		 * $user (User)
+		 * $wire (ProcessWire)
+		 *
+		 * or you can do:
+		 * foreach($this->wire()->fuel as $name => $var) {
+		 *   $apiVars[] = '$' . $name;
+		 * }
+		 *
+		 */
+
 		return implode(', ', $vars);
+	}
+
+	/**
+	 * Get site base URL for the Engineer prompt.
+	 *
+	 * @param array $options
+	 * @return string
+	 *
+	 */
+	protected function getSiteUrl(array $options = []): string {
+		$siteUrl = trim((string) ($options['siteUrl'] ?? ''));
+		if($siteUrl !== '') {
+			$parts = parse_url($siteUrl);
+			$scheme = (string) ($parts['scheme'] ?? '');
+			$host = (string) ($parts['host'] ?? '');
+			if(($scheme === 'http' || $scheme === 'https') && $host !== '') {
+				return rtrim($siteUrl, '/');
+			}
+		}
+		return rtrim($this->wire()->config->urls->httpRoot, '/');
 	}
 
 	/**
@@ -728,13 +850,14 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	 *
 	 * @param bool $readOnly
 	 * @param bool $dryRun
+	 * @param array $options
 	 * @return string
 	 *
 	 */
-	protected function buildSystemPrompt(bool $readOnly = false, bool $dryRun = false): string {
+	protected function buildSystemPrompt(bool $readOnly = false, bool $dryRun = false, array $options = []): string {
 
 		$config = $this->wire()->config;
-		$siteUrl = rtrim($config->urls->httpRoot, '/');
+		$siteUrl = $this->getSiteUrl($options);
 		$pwVersion = $config->version;
 		$timezone = $config->timezone;
 		$apiVars = $this->getEvalPhpVars();
@@ -770,7 +893,9 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			"option, or current best practice, use api_docs or read_file before writing the migration.\n\n" .
 			"After direct writes, verify important final state before reporting it, especially page id, " .
 			"path, template, and published/unpublished status. New ProcessWire pages are published by " .
-			"default unless Page::statusUnpublished is explicitly added.\n\n" .
+			"default unless Page::statusUnpublished is explicitly added. When writing content that " .
+			"contains literal PHP examples like \$pages->get(), use nowdoc/heredoc, single-quoted strings, " .
+			"or escaped dollar signs so variables are not interpolated inside double-quoted strings.\n\n" .
 			"For common field/template migrations, use a check/create/add pattern: get the field or " .
 			"template by name, create only if missing, check the template fieldgroup before adding a " .
 			"field, insert fields in the requested order when possible, save only changed objects, " .
@@ -1228,8 +1353,31 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			'required' => ['prompt'],
 		];
 
+		$memoryDesc =
+			"Save a concise durable memory for this AgentTools context. Use only when the user explicitly " .
+			"asks you to remember a preference, convention, or recurring workflow instruction, or when a " .
+			"durable site/workflow preference is clearly being established. Do not save one-off task details, " .
+			"temporary facts, private secrets, API keys, credentials, or sensitive data. If correcting or " .
+			"replacing an existing memory, provide its id in replaceId so the old memory is replaced instead of duplicated.";
+
+		$memoryParams = [
+			'type' => 'object',
+			'properties' => [
+				'text' => [
+					'type' => 'string',
+					'description' => 'Concise standalone memory text to retain for future requests in this context.',
+				],
+				'replaceId' => [
+					'type' => 'string',
+					'description' => 'Optional id of an existing memory entry to replace, e.g. mem_20260604111546_a7f3.',
+				],
+			],
+			'required' => ['text'],
+		];
+
 		$suspicious = (string) $this->at->get('engineer_suspicious');
 		$includeSuspiciousTool = $suspicious === 'all' || ($context === 'page' && $suspicious === 'page');
+		$includeMemoryTool = !$readOnly && !$dryRun;
 
 		if($provider === self::providerAnthropic) {
 			$tools = [
@@ -1239,6 +1387,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 				['name' => 'api_docs', 'description' => $apiDocsDesc, 'input_schema' => $apiDocsParams],
 			];
 			if(!$readOnly && !$dryRun) $tools[] = ['name' => 'save_migration', 'description' => $migrationDesc, 'input_schema' => $migrationParams];
+			if($includeMemoryTool) $tools[] = ['name' => 'save_memory', 'description' => $memoryDesc, 'input_schema' => $memoryParams];
 			if($includeSuspiciousTool) $tools[] = ['name' => 'report_suspicious_prompt', 'description' => $suspiciousDesc, 'input_schema' => $suspiciousParams];
 		} else {
 			$tools = [
@@ -1248,6 +1397,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 				['type' => 'function', 'function' => ['name' => 'api_docs', 'description' => $apiDocsDesc, 'parameters' => $apiDocsParams]],
 			];
 			if(!$readOnly && !$dryRun) $tools[] = ['type' => 'function', 'function' => ['name' => 'save_migration', 'description' => $migrationDesc, 'parameters' => $migrationParams]];
+			if($includeMemoryTool) $tools[] = ['type' => 'function', 'function' => ['name' => 'save_memory', 'description' => $memoryDesc, 'parameters' => $memoryParams]];
 			if($includeSuspiciousTool) $tools[] = ['type' => 'function', 'function' => ['name' => 'report_suspicious_prompt', 'description' => $suspiciousDesc, 'parameters' => $suspiciousParams]];
 		}
 		return $tools;
@@ -1464,70 +1614,317 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	 *
 	 * @param string $name Tool name
 	 * @param array $input Tool input arguments
+	 * @param array $options Ask options/context
 	 * @return string
 	 *
 	 */
-	protected function executeTool(string $name, array $input): string {
-		if($name === 'eval_php') {
-			return $this->executeEvalPhp((string) ($input['code'] ?? ''));
-		} else if($name === 'save_migration') {
-			return $this->executeSaveMigration(
-				(string) ($input['code'] ?? ''),
-				(string) ($input['description'] ?? 'migration'),
-				(string) ($input['summary'] ?? '')
-			);
-		} else if($name === 'read_file') {
-			$path = (string) ($input['path'] ?? '');
-			$root = $this->wire()->config->paths->root;
-			$rootReal = realpath($root);
-			if($rootReal === false) return "Access denied: unable to resolve ProcessWire root.";
+	protected function executeTool(string $name, array $input, array $options = []): string {
+		$this->loginEngineer();
+		try {
+			if($name === 'eval_php') {
+				return $this->executeEvalPhp((string) ($input['code'] ?? ''));
+			} else if($name === 'save_migration') {
+				return $this->executeSaveMigration(
+					(string) ($input['code'] ?? ''),
+					(string) ($input['description'] ?? 'migration'),
+					(string) ($input['summary'] ?? '')
+				);
+			} else if($name === 'read_file') {
+				$path = (string) ($input['path'] ?? '');
+				$root = $this->wire()->config->paths->root;
+				$rootReal = realpath($root);
+				if($rootReal === false) return "Access denied: unable to resolve ProcessWire root.";
 
-			if(strpos($path, '/') !== 0) $path = $root . $path;
-			$realPath = realpath($path);
-			if($realPath === false || !is_file($realPath)) return "File not found: $path";
-			if(strpos($realPath . '/', rtrim($rootReal, '/') . '/') !== 0) {
-				return "Access denied: file is outside the ProcessWire root.";
-			}
+				if(strpos($path, '/') !== 0) $path = $root . $path;
+				$realPath = realpath($path);
+				if($realPath === false || !is_file($realPath)) return "File not found: $path";
+				if(strpos($realPath . '/', rtrim($rootReal, '/') . '/') !== 0) {
+					return "Access denied: file is outside the ProcessWire root.";
+				}
 
-			$size = filesize($realPath);
-			if($size > 102400) return "File too large ($size bytes). Use eval_php to read specific portions.";
-			return (string) file_get_contents($realPath);
-		} else if($name === 'site_info') {
-			$type = (string) ($input['type'] ?? '');
-			$refresh = !empty($input['refresh']);
-			$filesPath = $this->at->getFilesPath();
-			if($refresh && ($type === 'pages' || $type === 'schema')) $this->regenerateSitemap();
-			if($type === 'modules') {
-				$stmt = $this->wire()->database->query("SELECT class FROM modules ORDER BY class");
-				$names = $stmt->fetchAll(\PDO::FETCH_COLUMN);
-				return (string) json_encode($names ?: [], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-			} else if($type === 'pages') {
-				$file = $filesPath . 'site-map.json';
-				return is_file($file) ? (string) file_get_contents($file) : 'Site map not found. Run --at-sitemap-generate to generate it.';
-			} else if($type === 'schema') {
-				$file = $filesPath . 'site-map-schema.json';
-				return is_file($file) ? (string) file_get_contents($file) : 'Schema not found. Run --at-sitemap-generate-schema to generate it.';
+				$size = filesize($realPath);
+				if($size > 102400) return "File too large ($size bytes). Use eval_php to read specific portions.";
+				return (string) file_get_contents($realPath);
+			} else if($name === 'site_info') {
+				$type = (string) ($input['type'] ?? '');
+				$refresh = !empty($input['refresh']);
+				$filesPath = $this->at->getFilesPath();
+				if($refresh && ($type === 'pages' || $type === 'schema')) $this->regenerateSitemap();
+				if($type === 'modules') {
+					$stmt = $this->wire()->database->query("SELECT class FROM modules ORDER BY class");
+					$names = $stmt->fetchAll(\PDO::FETCH_COLUMN);
+					return (string) json_encode($names ?: [], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+				} else if($type === 'pages') {
+					$file = $filesPath . 'site-map.json';
+					return is_file($file) ? (string) file_get_contents($file) : 'Site map not found. Run --at-sitemap-generate to generate it.';
+				} else if($type === 'schema') {
+					$file = $filesPath . 'site-map-schema.json';
+					return is_file($file) ? (string) file_get_contents($file) : 'Schema not found. Run --at-sitemap-generate-schema to generate it.';
+				}
+				return "Invalid type '$type'. Use 'pages', 'schema', or 'modules'.";
+			} else if($name === 'api_docs') {
+				$action = (string) ($input['action'] ?? 'list');
+				if($action === 'get') {
+					return $this->getApiDocs((string) ($input['name'] ?? ''));
+				}
+				$docs = $this->listApiDocs();
+				if(!$docs) return 'No API documentation files found.';
+				$lines = [];
+				foreach($docs as $docName => $file) {
+					$desc = $this->getApiDocDescription($file);
+					$lines[] = $desc ? "$docName: $desc" : $docName;
+				}
+				return implode("\n", $lines);
+			} else if($name === 'report_suspicious_prompt') {
+				$prompt = (string) ($input['prompt'] ?? '');
+				$this->at->reportQuestionablePrompt($prompt);
+				return 'Reported.';
+			} else if($name === 'save_memory') {
+				return $this->executeSaveMemory(
+					(string) ($input['text'] ?? ''),
+					$options,
+					(string) ($input['replaceId'] ?? '')
+				);
 			}
-			return "Invalid type '$type'. Use 'pages', 'schema', or 'modules'.";
-		} else if($name === 'api_docs') {
-			$action = (string) ($input['action'] ?? 'list');
-			if($action === 'get') {
-				return $this->getApiDocs((string) ($input['name'] ?? ''));
-			}
-			$docs = $this->listApiDocs();
-			if(!$docs) return 'No API documentation files found.';
-			$lines = [];
-			foreach($docs as $docName => $file) {
-				$desc = $this->getApiDocDescription($file);
-				$lines[] = $desc ? "$docName: $desc" : $docName;
-			}
-			return implode("\n", $lines);
-		} else if($name === 'report_suspicious_prompt') {
-			$prompt = (string) ($input['prompt'] ?? '');
-			$this->at->reportQuestionablePrompt($prompt);
-			return 'Reported.';
+			return "Unknown tool: $name";
+		} finally {
+			$this->logoutEngineer();
 		}
-		return "Unknown tool: $name";
+	}
+
+	/**
+	 * Save a durable memory entry for the active context.
+	 *
+	 * @param string $text
+	 * @param array $options
+	 * @param string $replaceId Optional memory id to replace
+	 * @return string
+	 *
+	 */
+	protected function executeSaveMemory(string $text, array $options = [], string $replaceId = ''): string {
+		$text = $this->normalizeMemoryText($text);
+		if($text === '') return 'No memory saved: text was blank.';
+
+		$replaceId = $this->sanitizeMemoryId($replaceId);
+		$field = $this->getMemoryField($options);
+		$memory = $field ? trim((string) $field->get('memory')) : trim((string) $this->at->get('engineer_memory'));
+		$id = ($replaceId !== '' && $this->hasMemoryEntryId($memory, $replaceId)) ? $replaceId : $this->createMemoryId();
+		$entry = $this->formatMemoryEntry($text, $options, $id);
+
+		if($field) {
+			$replaced = false;
+			$memory = $this->saveMemoryEntry($memory, $entry, $replaceId, $replaced);
+			$field->set('memory', $memory);
+			$this->wire()->fields->save($field);
+			return $replaced ? 'Memory replaced for this Page Engineer field.' : 'Memory saved for this Page Engineer field.';
+		}
+
+		$replaced = false;
+		$memory = $this->saveMemoryEntry($memory, $entry, $replaceId, $replaced);
+		$this->at->set('engineer_memory', $memory);
+		$this->wire()->modules->saveConfig($this->at, 'engineer_memory', $memory);
+		return $replaced ? 'Memory replaced for Site Engineer.' : 'Memory saved for Site Engineer.';
+	}
+
+	/**
+	 * Normalize agent-provided memory text.
+	 *
+	 * @param string $text
+	 * @return string
+	 *
+	 */
+	protected function normalizeMemoryText(string $text): string {
+		$text = trim(str_replace(["\r\n", "\r"], "\n", $text));
+		$text = preg_replace('/[[:cntrl:]&&[^\n\t]]/', '', $text);
+		return trim($text);
+	}
+
+	/**
+	 * Format a memory entry as admin-editable Markdown.
+	 *
+	 * @param string $text
+	 * @param array $options
+	 * @param string $id
+	 * @return string
+	 *
+	 */
+	protected function formatMemoryEntry(string $text, array $options = [], string $id = ''): string {
+		$agent = $this->findTraceAgent(
+			(string) ($options['provider'] ?? ''),
+			(string) ($options['model'] ?? ''),
+			(string) ($options['endpoint'] ?? ''),
+			$options
+		);
+		$agentName = $agent ? trim((string) ($agent->agentName ?: $agent->label ?: $agent->model)) : '';
+		if($agentName === '') $agentName = trim((string) ($options['agentName'] ?? $options['model'] ?? 'AgentTools'));
+		if($agentName === '') $agentName = 'AgentTools';
+
+		$user = $this->wire()->user;
+		$userName = $user && $user->id ? (string) $user->name : '';
+		if($userName === '') $userName = 'unknown';
+
+		$quoted = [];
+		foreach(explode("\n", $text) as $line) {
+			$quoted[] = '> ' . rtrim($line);
+		}
+
+		return
+			implode("\n", $quoted) . "\n\n" .
+			"- id: " . $this->sanitizeMemoryId($id) . "\n" .
+			"- createdByAgent: " . $this->sanitizeMemoryMeta($agentName) . "\n" .
+			"- createdByUser: " . $this->sanitizeMemoryMeta($userName) . "\n" .
+			"- created: " . date('Y-m-d H:i:s') . "\n\n" .
+			"---";
+	}
+
+	/**
+	 * Sanitize memory metadata for a single Markdown line.
+	 *
+	 * @param string $value
+	 * @return string
+	 *
+	 */
+	protected function sanitizeMemoryMeta(string $value): string {
+		$value = trim(preg_replace('/\s+/', ' ', $value));
+		return str_replace(["\n", "\r"], ' ', $value);
+	}
+
+	/**
+	 * Create a stable memory id.
+	 *
+	 * @return string
+	 *
+	 */
+	protected function createMemoryId(): string {
+		try {
+			$suffix = bin2hex(random_bytes(2));
+		} catch(\Throwable $e) {
+			$suffix = substr(md5((string) microtime(true)), 0, 4);
+		}
+		return 'mem_' . date('YmdHis') . '_' . $suffix;
+	}
+
+	/**
+	 * Sanitize a memory id.
+	 *
+	 * @param string $id
+	 * @return string
+	 *
+	 */
+	protected function sanitizeMemoryId(string $id): string {
+		$id = trim($id);
+		$id = preg_replace('/[^a-zA-Z0-9_-]/', '', $id);
+		return $id ?: '';
+	}
+
+	/**
+	 * Save a memory entry, replacing an existing id when requested.
+	 *
+	 * @param string $memory
+	 * @param string $entry
+	 * @param string $replaceId
+	 * @param bool $replaced
+	 * @return string
+	 *
+	 */
+	protected function saveMemoryEntry(string $memory, string $entry, string $replaceId = '', bool &$replaced = false): string {
+		$memory = trim($memory);
+		$replaceId = $this->sanitizeMemoryId($replaceId);
+		$replaced = false;
+		if($replaceId !== '' && $memory !== '') {
+			$entries = $this->splitMemoryEntries($memory);
+			foreach($entries as $n => $oldEntry) {
+				if($this->getMemoryEntryId($oldEntry) !== $replaceId) continue;
+				$entries[$n] = $entry;
+				$replaced = true;
+				$memory = implode("\n\n", $entries);
+				break;
+			}
+		}
+		if(!$replaced) $memory = $this->appendMemoryEntry($memory, $entry);
+		return $this->pruneMemoryText($memory);
+	}
+
+	/**
+	 * Split memory text into Markdown entries.
+	 *
+	 * @param string $memory
+	 * @return array
+	 *
+	 */
+	protected function splitMemoryEntries(string $memory): array {
+		$entries = preg_split('/\n---\s*(?:\n|$)/', trim($memory));
+		if(!is_array($entries)) return [];
+		$out = [];
+		foreach($entries as $entry) {
+			$entry = trim($entry);
+			if($entry === '') continue;
+			$out[] = $entry . "\n\n---";
+		}
+		return $out;
+	}
+
+	/**
+	 * Get the id from a memory entry.
+	 *
+	 * @param string $entry
+	 * @return string
+	 *
+	 */
+	protected function getMemoryEntryId(string $entry): string {
+		if(!preg_match('/^- id:\s*([a-zA-Z0-9_-]+)/m', $entry, $matches)) return '';
+		return $this->sanitizeMemoryId($matches[1]);
+	}
+
+	/**
+	 * Does memory text contain the given memory id?
+	 *
+	 * @param string $memory
+	 * @param string $id
+	 * @return bool
+	 *
+	 */
+	protected function hasMemoryEntryId(string $memory, string $id): bool {
+		$id = $this->sanitizeMemoryId($id);
+		if($id === '') return false;
+		foreach($this->splitMemoryEntries($memory) as $entry) {
+			if($this->getMemoryEntryId($entry) === $id) return true;
+		}
+		return false;
+	}
+
+	/**
+	 * Append and prune memory entries to the configured max length.
+	 *
+	 * @param string $memory
+	 * @param string $entry
+	 * @return string
+	 *
+	 */
+	protected function appendMemoryEntry(string $memory, string $entry): string {
+		$memory = trim($memory);
+		$memory = $memory === '' ? $entry : "$memory\n\n$entry";
+		return $this->pruneMemoryText($memory);
+	}
+
+	/**
+	 * Prune memory text to the configured max length.
+	 *
+	 * @param string $memory
+	 * @return string
+	 *
+	 */
+	protected function pruneMemoryText(string $memory): string {
+		$maxLength = self::defaultMemoryMaxLength;
+		while(strlen($memory) > $maxLength && strpos($memory, "\n---") !== false) {
+			$parts = preg_split('/\n---\s*(?:\n|$)/', $memory, 2);
+			if(!is_array($parts) || count($parts) < 2) break;
+			$memory = trim($parts[1]);
+		}
+		if(strlen($memory) > $maxLength) {
+			$memory = substr($memory, -$maxLength);
+		}
+		return trim($memory);
 	}
 
 	/**
@@ -1793,265 +2190,46 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	}
 
 	/**
+	 * Login as Engineer user
+	 *
+	 * @return bool
+	 * @throws WireException
+	 *
+	 */
+	public function loginEngineer(): bool {
+		$nameOrId = $this->at->engineer_user;
+		if(empty($nameOrId)) return false; // engineer user not in use
+		$users = $this->wire()->users;
+		$user = $this->wire()->user;
+		if((string) $user->name === (string) $nameOrId || (int) $user->id === (int) $nameOrId) return false; // already logged in
+		$engineerUser = $users->get($nameOrId);
+		if(!$engineerUser || !$engineerUser->id) {
+			throw new WireException("Engineer user not found: $nameOrId");
+		}
+		if(!$this->savedUser) $this->savedUser = $user;
+		$users->setCurrentUser($engineerUser);
+		return true;
+	}
+
+	/**
+	 * Logout engineer user, restoring previous user
+	 *
+	 */
+	public function logoutEngineer(): void {
+		if(!$this->savedUser) return; // engineer not logged in
+		$this->wire()->users->setCurrentUser($this->savedUser);
+		$this->savedUser = null;
+	}
+
+	/**
 	 * Module config inputfields for API credentials and provider settings
 	 *
 	 * @param InputfieldWrapper $inputfields
 	 *
 	 */
 	public function getConfigInputfields(InputfieldWrapper $inputfields): void {
-		$modules = $this->wire()->modules;
-
-		if(!$this->at->engineer_model) {
-			// populate to primary agent fields, useful after an import
-			/** @var AgentToolsAgent $agent */
-			$agent = $this->at->getAgents()->first();
-			if($agent) {
-				$keys = [
-					'api_key' => 'apiKey',
-					'model' => 'model',
-					'label' => 'label',
-					'endpoint' => 'endpointUrl',
-				];
-				foreach($keys as $moduleKey => $agentKey) {
-					$moduleKey = 'engineer_' . $moduleKey;
-					$moduleValue = $this->at->get($moduleKey);
-					if(empty($moduleValue)) $this->at->set($moduleKey, $agent->get($agentKey));
-				}
-			}
-		}
-
-		/** @var InputfieldFieldset $outerFs */
-		$outerFs = $modules->get('InputfieldFieldset');
-		$outerFs->label = $this->_('Engineer');
-		$outerFs->icon = 'commenting';
-
-		$primaryFs = $modules->get('InputfieldFieldset');
-		$primaryFs->label = $this->_('Primary Agent');
-		$primaryFs->themeOffset = 1;
-		$outerFs->add($primaryFs);
-
-		$primaryFs->description =
-			$this->_('Configure the primary AI agent here.') . ' ' .
-			$this->_('You can also edit and add more AI agents at [Setup > AgentTools > Agents](../setup/agent-tools/agents/).') . ' ' .
-			$this->_('If you do not need AI tools in your admin then it is not necessary to add an agent here.') . ' ' .
-			$this->_('You can still use AgentTools in dev environments with local CLI agents or equivalent.');
-
-		/** @var InputfieldSelect $f */
-		$f = $modules->get('InputfieldSelect');
-		$f->attr('name', 'engineer_provider');
-		$f->label = $this->_('AI Provider');
-		$f->addOption(self::providerAnthropic, 'Anthropic (Claude)');
-		$f->addOption(self::providerOpenAI, $this->_('OpenAI-compatible'));
-		$f->val($this->at->get('engineer_provider') ?: self::providerAnthropic);
-		$f->columnWidth = 50;
-		$primaryFs->add($f);
-
-		/** @var InputfieldText $f */
-		$f = $modules->get('InputfieldText');
-		$f->attr('name', 'engineer_api_key');
-		$f->attr('type', 'password');
-		$f->label = $this->_('API Key');
-		$f->val($this->at->get('engineer_api_key') ?: '');
-		$f->columnWidth = 50;
-		$primaryFs->add($f);
-
-		$f = $modules->get('InputfieldText');
-		$f->attr('name', 'engineer_model');
-		$f->label = $this->_('Model API identifier');
-		$f->val($this->at->get('engineer_model') ?: '');
-		$f->description = 'Example: `claude-sonnet-4-6` ';
-		$f->columnWidth = 50;
-		$primaryFs->add($f);
-
-		$f = $modules->get('InputfieldText');
-		$f->attr('name', 'engineer_label');
-		$f->label = $this->_('Model API label (optional)');
-		$f->val($this->at->get('engineer_label') ?: '');
-		$f->description = 'Example: `Claude Sonnet 4.6` ';
-		$f->columnWidth = 50;
-		$primaryFs->add($f);
-
-		/** @var InputfieldURL $f */
-		$f = $modules->get('InputfieldURL');
-		$f->attr('name', 'engineer_endpoint');
-		$f->label = $this->_('API endpoint URL');
-		$f->val($this->at->get('engineer_endpoint') ?: '');
-		$f->columnWidth = 50;
-		$primaryFs->add($f);
-
-		$f = $modules->get('InputfieldText');
-		$f->attr('name', 'engineer_description');
-		$f->label = $this->_('Description (optional)');
-		$f->val($this->at->get('engineer_description') ?: '');
-		$f->columnWidth = 50;
-		$primaryFs->add($f);
-
-		/** @var InputfieldToggle $f */
-		$f = $modules->get('InputfieldToggle');
-		$f->attr('name', 'engineer_readonly');
-		$f->label = $this->_('Read-only mode');
-		$f->description = $this->_('When enabled, the Site Engineer can query live site data and suggest changes, but cannot create migration files or intentionally change site behavior.');
-		$f->notes = $this->_('This setting does not apply to Page Engineer fields, if you are using any.');
-		$f->val((int) $this->at->get('engineer_readonly'));
-		$f->columnWidth = 50;
-		$outerFs->add($f);
-
-		/** @var InputfieldInteger $f */
-		$f = $modules->get('InputfieldInteger');
-		$f->attr('name', 'engineer_mem_qty');
-		$f->label = $this->_('Conversation memory (message pairs)');
-		$f->description = $this->_('Number of past request/response pairs to retain in the AI context window. Older pairs are dropped first. Applies to both the Site Engineer and Page Engineer.');
-		$f->attr('min', 1);
-		$f->attr('max', 100);
-		$val = (int) $this->at->get('engineer_mem_qty');
-		$f->val($val ?: $this->maxHistoryPairs);
-		$f->columnWidth = 50;
-		$outerFs->add($f);
-
-		/** @var InputfieldInteger $f */
-		$f = $modules->get('InputfieldInteger');
-		$f->attr('name', 'engineer_max_iterations');
-		$f->label = $this->_('Maximum tool-use rounds');
-		$f->description = $this->_('Maximum number of AI/tool response rounds allowed before AgentTools stops a request. Increase this for longer tasks that need more tool use, but higher values may run into web server or PHP timeouts.');
-		$f->notes = $this->_('The Engineer is told about this budget in its system prompt so it can plan its work.');
-		$f->attr('min', 1);
-		$f->attr('max', 100);
-		$val = (int) $this->at->get('engineer_max_iterations');
-		$f->val($val ?: self::defaultMaxIterations);
-		$f->columnWidth = 50;
-		$outerFs->add($f);
-
-		/** @var InputfieldInteger $f */
-		$f = $modules->get('InputfieldInteger');
-		$f->attr('name', 'engineer_request_timeout');
-		$f->label = $this->_('AI request timeout (seconds)');
-		$f->description = $this->_('Maximum time to wait for each AI provider API request. Longer translation or analysis tasks may need this to match your PHP/web server timeout settings.');
-		$f->notes = $this->_('Default is 300 seconds. Use 600 seconds only when your PHP and web server timeouts are also configured to allow long requests.');
-		$f->attr('min', 30);
-		$f->attr('max', 1200);
-		$val = (int) $this->at->get('engineer_request_timeout');
-		$f->val($val ?: self::defaultRequestTimeout);
-		$f->columnWidth = 50;
-		$outerFs->add($f);
-
-		/** @var InputfieldTextarea $f */
-		$f = $modules->get('InputfieldTextarea');
-		$f->attr('name', 'engineer_instructions');
-		$f->label = $this->_('Custom instructions');
-		$f->description = $this->_('Additional instructions appended to the Engineer system prompt. Use this to provide site-specific context, point the Engineer to custom API.md files, or restrict its behavior for this installation.');
-		$f->attr('rows', 5);
-		$f->val($this->at->get('engineer_instructions') ?: '');
-		$f->collapsed = Inputfield::collapsedBlank;
-		$outerFs->add($f);
-
-		/** @var InputfieldFieldset $traceFs */
-		$traceFs = $modules->get('InputfieldFieldset');
-		$traceFs->label = $this->_('Debug and traces');
-		$traceFs->icon = 'bug';
-		if(!$this->at->get('engineer_debug_mode') && !$this->at->get('engineer_trace_mode')) {
-			$traceFs->collapsed =  Inputfield::collapsedYes;
-		}
-		$traceFs->themeOffset = 1;
-		$traceFs->notes = sprintf($this->_('Trace files are saved in %s.'), '`site/assets/at/traces/`');
-
-		/** @var InputfieldToggle $f */
-		$f = $modules->get('InputfieldToggle');
-		$f->attr('name', 'engineer_debug_mode');
-		$f->label = $this->_('Debug mode');
-		$f->description = $this->_('When enabled, live Engineer requests show a compact trace summary as an admin notification.');
-		$f->notes = $this->_('Background jobs save traces when trace logging is enabled, but do not show live admin notifications.');
-		$f->val((int) $this->at->get('engineer_debug_mode'));
-		$f->columnWidth = 50;
-		$traceFs->add($f);
-
-		/** @var InputfieldSelect $f */
-		$f = $modules->get('InputfieldSelect');
-		$f->attr('name', 'engineer_trace_mode');
-		$f->label = $this->_('Trace agent runs');
-		$f->description = $this->_('Save compact JSON traces of Engineer, Task, and Page Engineer runs for later review.');
-		$f->addOption('', $this->_('Off'));
-		$f->addOption('summary', $this->_('Summary'));
-		$f->addOption('detailed', $this->_('Detailed'));
-		$f->val($this->at->get('engineer_trace_mode') ?: '');
-		$f->columnWidth = 50;
-		$traceFs->add($f);
-
-		/** @var InputfieldInteger $f */
-		$f = $modules->get('InputfieldInteger');
-		$f->attr('name', 'engineer_trace_keep_days');
-		$f->label = $this->_('Keep traces for days');
-		$f->description = $this->_('Old trace files are pruned when new traces are saved. Use 0 to keep traces indefinitely.');
-		$f->attr('min', 0);
-		$f->attr('max', 3650);
-		$val = (int) $this->at->get('engineer_trace_keep_days');
-		$f->val($val ?: 30);
-		$f->showIf = 'engineer_trace_mode!=""';
-		$f->columnWidth = 50;
-		$traceFs->add($f);
-
-		/** @var InputfieldToggle $f */
-		$f = $modules->get('InputfieldToggle');
-		$f->attr('name', 'engineer_trace_include_content');
-		$f->label = $this->_('Include prompts and responses');
-		$f->description = $this->_('When enabled, saved trace JSON includes the user prompt and final AI response. Leave disabled when traces may contain private content.');
-		$f->val((int) $this->at->get('engineer_trace_include_content'));
-		$f->showIf = 'engineer_trace_mode!=""';
-		$f->columnWidth = 50;
-		$traceFs->add($f);
-
-		$outerFs->add($traceFs);
-
-		/** @var InputfieldFieldset $secFs */
-		$secFs = $modules->get('InputfieldFieldset');
-		$secFs->label = $this->_('Suspicious prompt reporting');
-		$secFs->icon = 'shield';
-		$secFs->collapsed = Inputfield::collapsedBlank;
-
-		/** @var InputfieldSelect $f */
-		$f = $modules->get('InputfieldSelect');
-		$f->attr('name', 'engineer_suspicious');
-		$f->label = $this->_('Enable reporting');
-		$f->addOption('', $this->_('Disabled'));
-		$f->addOption('page', $this->_('Page Engineer only'));
-		$f->addOption('all', $this->_('All engineers (Page Engineer + Site Engineer)'));
-		$f->description = $this->_('When enabled, the AI refuses requests for sensitive configuration data and reports them. Flagged users are blocked from Engineer requests for 1 hour.');
-		$f->val($this->at->get('engineer_suspicious') ?: '');
-		$secFs->add($f);
-
-		/** @var InputfieldEmail $f */
-		$f = $modules->get('InputfieldEmail');
-		$f->attr('name', 'engineer_suspicious_email');
-		$f->label = $this->_('Notification email address');
-		$f->description = $this->_('When a suspicious prompt is detected, a notification is sent here.');
-		$f->val($this->at->get('engineer_suspicious_email') ?: '');
-		$f->showIf = 'engineer_suspicious!=""';
-		$secFs->add($f);
-
-		/** @var InputfieldTextarea $f */
-		$f = $modules->get('InputfieldTextarea');
-		$f->attr('name', 'engineer_suspicious_log');
-		$f->label = $this->_('Suspicious prompt log');
-		$f->description = $this->_('One entry per line: username | timestamp | prompt. Delete a line to unblock that user. Entries older than 1 hour are ignored for blocking but kept for your review.');
-		$f->notes = $this->_('This is populated automatically by the AI agent, you do not need to enter anything in here.');
-		$f->attr('rows', 5);
-		$f->val($this->at->get('engineer_suspicious_log') ?: '');
-		$f->showIf = 'engineer_suspicious!=""';
-		$f->collapsed = Inputfield::collapsedBlank;
-		$secFs->add($f);
-
-		$outerFs->add($secFs);
-
-		/** @var InputfieldTextarea $f */
-		$f = $modules->get('InputfieldTextarea');
-		$f->attr('name', 'engineer_additional_models');
-		$f->label = $this->_('Agents (export/import)');
-		$f->collapsed = Inputfield::collapsedYes;
-		$f->description =
-			$this->_('This field contains your agents configuration in pipe-separated format (one agent per line).') . ' ' .
-			$this->_('You can copy this value to transfer your agent configuration to another installation, or paste a configuration from another installation here.');
-		$f->attr('rows', 6);
-		$f->val($this->at->getAgents()->getString());
-		$outerFs->add($f);
-		$inputfields->add($outerFs);
+		require_once(__DIR__ . '/AgentToolsEngineerConfig.php');
+		$atConfig = new AgentToolsEngineerConfig($this->at);
+		$atConfig->getConfigInputfields($inputfields);
 	}
 }

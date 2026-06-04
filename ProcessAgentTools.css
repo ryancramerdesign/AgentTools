@@ -47,6 +47,8 @@
 	text-decoration: line-through;
 }
 
+.WireTabs + .pw-table-responsive,
+.WireTabs + script + .pw-table-responsive,
 .InputfieldForm .pw-table-responsive {
 	margin-top: 0;
 }

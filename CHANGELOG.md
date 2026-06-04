@@ -1,5 +1,39 @@
 # Changelog
 
+## Version 20
+
+### Persistent memory
+
+- Added persistent memory for Site Engineer, Tasks, and Page Engineer fields.
+- Agents can use the new `save_memory` tool to remember durable site/workflow
+  preferences when explicitly asked by the user.
+- Persistent memory entries are stored as admin-editable Markdown with stable
+  memory IDs, creation metadata, and replacement support so agents can correct
+  an existing memory without appending duplicates.
+- Page Engineer fields now have their own persistent memory setting, scoped to
+  that field's workflow.
+
+### Background jobs
+
+- Added a Jobs tab for reviewing recent pending, running, failed, and completed
+  background jobs from the AgentTools admin.
+- Added background job result fallback access from the admin, plus reply links
+  from completed jobs and migrations created by background jobs.
+- Added optional background job email sender configuration and agent-aware email
+  sender names.
+- Improved background job JSON writes and reads to reduce partial-file races on
+  slower shared/network filesystems.
+- Background jobs now preserve site URL context for subdirectory installs.
+
+### Engineer
+
+- Added an optional setting for the user account that Engineer tools should run
+  as when inspecting or modifying ProcessWire data.
+- Moved Engineer module configuration field building into
+  `AgentToolsEngineerConfig` to keep the runtime Engineer class focused.
+
+---
+
 ## Version 19
 
 ### Debug and traces

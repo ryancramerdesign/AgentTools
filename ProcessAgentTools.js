@@ -185,9 +185,11 @@ $(function() {
 	});
 
 	// Engineer/task forms: disable submit button and show spinner while waiting for response
-	$('form').has('.at-show-thinking').on('submit', function() {
+	$('form').has('.at-show-thinking').on('submit', function(e) {
 		var $form = $(this);
-		var $btn = $form.find('.at-show-thinking').first();
+		var submitter = e.originalEvent && e.originalEvent.submitter ? e.originalEvent.submitter : null;
+		var $btn = submitter ? $(submitter) : $form.find('.at-show-thinking').filter(':focus').first();
+		if(!$btn.length || !$btn.hasClass('at-show-thinking')) return;
 		var $request = $form.find('.at-engineer-request');
 		var hasRequest = $request.length ? !!$request.val().trim() : true;
 		// Disabled fields are excluded from POST, so preserve the value via hidden input

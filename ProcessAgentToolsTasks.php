@@ -309,7 +309,7 @@ class ProcessAgentToolsTasks extends ProcessAgentToolsHelper {
 			}
 			$user = $this->wire()->user;
 			$this->saveTaskModelIndex($modelIndex);
-			$job = $this->at->jobs()->addJob([
+			$jobData = [
 				'type' => 'task',
 				'userId' => (int) $user->id,
 				'userName' => (string) $user->name,
@@ -318,10 +318,12 @@ class ProcessAgentToolsTasks extends ProcessAgentToolsHelper {
 				'modelIndex' => $modelIndex,
 				'url' => $this->wire()->page->httpUrl(),
 				'agentToolsUrl' => $this->wire()->page->httpUrl(),
+				'siteUrl' => $this->getSiteUrl(),
 				'taskName' => $task->name,
 				'taskInput' => $values,
-				'maxIterations' => (int) $task->maxIterations,
-			]);
+			];
+			if((int) $task->maxIterations > 0) $jobData['maxIterations'] = (int) $task->maxIterations;
+			$job = $this->at->jobs()->addJob($jobData);
 			return $this->renderQueuedJobConfirmation(
 				$job,
 				$tasksUrl,
@@ -849,6 +851,7 @@ class ProcessAgentToolsTasks extends ProcessAgentToolsHelper {
 					'userName' => (string) $this->wire()->user->name,
 					'url' => $this->wire()->page->httpUrl(),
 					'agentToolsUrl' => $this->wire()->page->httpUrl(),
+					'siteUrl' => $this->getSiteUrl(),
 				]);
 				return $this->renderQueuedJobConfirmation(
 					$job,
@@ -949,6 +952,7 @@ class ProcessAgentToolsTasks extends ProcessAgentToolsHelper {
 			$agentIds = $task->agentIds;
 			$task->agentId = reset($agentIds);
 		}
+		$task->siteUrl = $this->getSiteUrl();
 
 		if(count($form->getErrors())) return false;
 		$this->at->getScheduledTasks()->save($task, $prevName);

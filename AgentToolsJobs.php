@@ -102,6 +102,7 @@ class AgentToolsJobs extends AgentToolsHelper {
 		$now = time();
 		$id = empty($job['id']) ? $this->newJobId() : $this->sanitizeJobId($job['id']);
 		if($id === '') throw new WireException('Invalid AgentTools job ID');
+		$this->initJobDirs();
 
 		$defaults = [
 			'id' => $id,
@@ -122,6 +123,7 @@ class AgentToolsJobs extends AgentToolsHelper {
 			'modelIndex' => 0,
 			'url' => '',
 			'agentToolsUrl' => '',
+			'siteUrl' => '',
 			'taskName' => '',
 			'taskInput' => [],
 			'prompt' => '',
@@ -171,6 +173,18 @@ class AgentToolsJobs extends AgentToolsHelper {
 	}
 
 	/**
+	 * Initialize job queue directories.
+	 *
+	 * @return void
+	 *
+	 */
+	public function initJobDirs(): void {
+		foreach([ self::statusPending, self::statusRunning, self::statusDone, self::statusFailed ] as $status) {
+			$this->getStatusPath($status, true);
+		}
+	}
+
+	/**
 	 * Touch cron heartbeat file
 	 *
 	 */
@@ -195,6 +209,51 @@ class AgentToolsJobs extends AgentToolsHelper {
 			if($job) $jobs[] = $job;
 		}
 		return $jobs;
+	}
+
+	/**
+	 * Get recent jobs across all status directories.
+	 *
+	 * @param int $limit
+	 * @return array
+	 *
+	 */
+	public function getRecentJobs(int $limit = 100): array {
+		$jobs = [];
+		foreach([ self::statusPending, self::statusRunning, self::statusFailed, self::statusDone ] as $status) {
+			foreach($this->getJobs($status) as $job) {
+				$job['_sortTime'] = max(
+					(int) ($job['created'] ?? 0),
+					(int) ($job['started'] ?? 0),
+					(int) ($job['finished'] ?? 0)
+				);
+				$jobs[] = $job;
+			}
+		}
+		usort($jobs, function($a, $b) {
+			return ((int) ($b['_sortTime'] ?? 0)) <=> ((int) ($a['_sortTime'] ?? 0));
+		});
+		if($limit > 0 && count($jobs) > $limit) $jobs = array_slice($jobs, 0, $limit);
+		foreach($jobs as $key => $job) unset($jobs[$key]['_sortTime']);
+		return $jobs;
+	}
+
+	/**
+	 * Find a completed job that created the given migration.
+	 *
+	 * @param string $migration Migration filename or full path
+	 * @return array
+	 *
+	 */
+	public function findJobForMigration(string $migration): array {
+		$name = basename($migration);
+		if($name === '') return [];
+		foreach($this->getRecentJobs(500) as $job) {
+			$jobMigration = (string) ($job['migration'] ?? '');
+			if($jobMigration === '') continue;
+			if(basename($jobMigration) === $name) return $job;
+		}
+		return [];
 	}
 
 	/**
@@ -252,6 +311,7 @@ class AgentToolsJobs extends AgentToolsHelper {
 		if(isset($job['readOnly'])) $options['readOnly'] = (bool) $job['readOnly'];
 		if(isset($job['dryRun'])) $options['dryRun'] = (bool) $job['dryRun'];
 		if(!empty($job['history']) && is_array($job['history'])) $options['history'] = $job['history'];
+		if(!empty($job['siteUrl'])) $options['siteUrl'] = (string) $job['siteUrl'];
 		$job = $this->applyAgentMetadata($job, $options);
 		$result = $this->at->engineer->ask($prompt, $options);
 		if(!empty($result['error'])) throw new WireException($result['error']);
@@ -279,7 +339,8 @@ class AgentToolsJobs extends AgentToolsHelper {
 		$options['backgroundJob'] = true;
 		if(isset($job['readOnly'])) $options['readOnly'] = (bool) $job['readOnly'];
 		if(isset($job['dryRun'])) $options['dryRun'] = (bool) $job['dryRun'];
-		if(isset($job['maxIterations'])) $options['maxIterations'] = (int) $job['maxIterations'];
+		if((int) ($job['maxIterations'] ?? 0) > 0) $options['maxIterations'] = (int) $job['maxIterations'];
+		if(!empty($job['siteUrl'])) $options['siteUrl'] = (string) $job['siteUrl'];
 		$job = $this->applyAgentMetadata($job, $options);
 		$result = $this->at->getTasks()->run($taskName, $input, $options);
 		if(!empty($result['error'])) throw new WireException($result['error']);
@@ -363,7 +424,7 @@ class AgentToolsJobs extends AgentToolsHelper {
 			'readOnly' => (bool) $this->at->get('engineer_readonly'),
 			'verbose' => false,
 		];
-		if(isset($job['maxIterations'])) $options['maxIterations'] = (int) $job['maxIterations'];
+		if((int) ($job['maxIterations'] ?? 0) > 0) $options['maxIterations'] = (int) $job['maxIterations'];
 		return $options;
 	}
 
@@ -433,6 +494,8 @@ class AgentToolsJobs extends AgentToolsHelper {
 			if($config->httpHost) $subject .= " on {$config->httpHost}";
 			$mail = wireMail();
 			$mail->to($email);
+			$from = $this->getJobEmailFrom();
+			if($from !== '') $mail->from($from, $this->getJobEmailFromName($job));
 			$mail->subject($subject);
 			$mail->body($this->renderJobEmailBody($job));
 			$mail->bodyHTML($this->renderJobEmailBody($job, true));
@@ -443,6 +506,33 @@ class AgentToolsJobs extends AgentToolsHelper {
 			$job['emailError'] = $e->getMessage();
 		}
 		return $job;
+	}
+
+	/**
+	 * Get configured background job email sender address.
+	 *
+	 * @return string
+	 *
+	 */
+	protected function getJobEmailFrom(): string {
+		$email = trim((string) $this->at->get('engineer_email_from'));
+		return $email === '' ? '' : (string) $this->wire()->sanitizer->email($email);
+	}
+
+	/**
+	 * Get background job email sender name.
+	 *
+	 * @param array $job
+	 * @return string
+	 *
+	 */
+	protected function getJobEmailFromName(array $job): string {
+		$name = trim((string) ($job['agentName'] ?? ''));
+		if($name === '' && !empty($job['agentId'])) {
+			$agent = $this->at->getAgents()->getById((string) $job['agentId']);
+			if($agent) $name = trim((string) $agent->agentName);
+		}
+		return $name !== '' ? $name : 'AgentTools';
 	}
 
 	/**
@@ -593,7 +683,9 @@ class AgentToolsJobs extends AgentToolsHelper {
 	 *
 	 */
 	protected function getNextPendingJobFile(): string {
-		$files = $this->getJobFiles($this->getStatusPath(self::statusPending, true));
+		$dir = $this->getStatusPath(self::statusPending, false);
+		if(!is_dir($dir)) return '';
+		$files = $this->getJobFiles($dir);
 		return empty($files) ? '' : reset($files);
 	}
 
@@ -620,9 +712,13 @@ class AgentToolsJobs extends AgentToolsHelper {
 	 */
 	protected function readJobFile(string $file): array {
 		if(!is_file($file) || !is_readable($file)) return [];
-		$json = file_get_contents($file);
-		$job = json_decode((string) $json, true);
-		return is_array($job) ? $job : [];
+		for($n = 0; $n < 3; $n++) {
+			$json = file_get_contents($file);
+			$job = json_decode((string) $json, true);
+			if(is_array($job)) return $job;
+			if($n < 2) usleep(50000);
+		}
+		return [];
 	}
 
 	/**
@@ -636,7 +732,12 @@ class AgentToolsJobs extends AgentToolsHelper {
 	protected function writeJobFile(string $file, array $job): void {
 		$json = json_encode($job, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
 		if($json === false) throw new WireException('Unable to encode AgentTools job JSON');
-		$this->wire()->files->filePutContents($file, $json . "\n", LOCK_EX);
+		$tmp = $file . '.tmp.' . getmypid() . '.' . mt_rand(1000, 9999);
+		$this->wire()->files->filePutContents($tmp, $json . "\n", LOCK_EX);
+		if(!@rename($tmp, $file)) {
+			@unlink($tmp);
+			throw new WireException("Unable to write AgentTools job file: $file");
+		}
 	}
 
 	/**

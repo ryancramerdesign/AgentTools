@@ -204,7 +204,7 @@ class AgentToolsScheduledTasks extends WireArray {
 			$user = $this->wire()->users->get($userId);
 			if($user && $user->id) $userName = $user->name;
 		}
-		$job = $this->at->jobs()->addJob([
+		$jobData = [
 			'type' => 'task',
 			'userId' => $userId,
 			'userName' => $userName,
@@ -212,11 +212,13 @@ class AgentToolsScheduledTasks extends WireArray {
 			'agentId' => $agent->id,
 			'url' => (string) ($options['url'] ?? ''),
 			'agentToolsUrl' => (string) ($options['agentToolsUrl'] ?? ''),
+			'siteUrl' => (string) ($options['siteUrl'] ?? $schedule->siteUrl),
 			'taskName' => $task->name,
 			'taskInput' => $schedule->inputs,
-			'maxIterations' => (int) $task->maxIterations,
 			'scheduledTask' => $schedule->name,
-		]);
+		];
+		if((int) $task->maxIterations > 0) $jobData['maxIterations'] = (int) $task->maxIterations;
+		$job = $this->at->jobs()->addJob($jobData);
 		$this->save($schedule, '', [ 'updateNextRun' => false ]);
 		return $job;
 	}

@@ -7,7 +7,7 @@ class FieldtypePageEngineer extends Fieldtype implements Module {
 	public static function getModuleInfo() {
 		return [
 			'title' => 'Page Engineer',
-			'version' => 5,
+			'version' => 6,
 			'summary' => 'Agent Tools Page Engineer is an AI agent Fieldtype to help you with any page editing task.',
 			'requires' => [ 'AgentTools' ],
 		];
@@ -444,6 +444,7 @@ class FieldtypePageEngineer extends Fieldtype implements Module {
 		// Exclude save_migration and site_info — page context is already in the system prompt
 		$allTools = $at->engineer->getToolDefinitions($agent->provider, 'page', false, $dryRun);
 		$allowedTools = ['eval_php', 'api_docs'];
+		if(!$dryRun) $allowedTools[] = 'save_memory';
 		if($suspicious) $allowedTools[] = 'report_suspicious_prompt';
 		$tools = array_values(array_filter($allTools, function($tool) use($allowedTools) {
 			$name = isset($tool['name']) ? $tool['name'] : (isset($tool['function']['name']) ? $tool['function']['name'] : '');
@@ -462,6 +463,7 @@ class FieldtypePageEngineer extends Fieldtype implements Module {
 			'traceType' => 'page-engineer',
 			'dryRun' => $dryRun,
 			'backgroundJob' => !empty($options['backgroundJob']),
+			'pageEngineerField' => $field,
 		]);
 
 		$responseText = $result['response'] ?: ($result['error'] ? $this->_('Error: ') . $result['error'] : $this->_('No response received.'));
@@ -505,6 +507,7 @@ class FieldtypePageEngineer extends Fieldtype implements Module {
 			'modelIndex' => $modelIndex,
 			'url' => $pageEditUrl,
 			'agentToolsUrl' => $this->getAgentToolsAdminUrl(),
+			'siteUrl' => rtrim($this->wire()->pages->get(1)->httpUrl(), '/'),
 			'pageId' => (int) $page->id,
 			'pageTitle' => (string) $page->get('title|name'),
 			'pageEditUrl' => $pageEditUrl,
@@ -579,6 +582,7 @@ class FieldtypePageEngineer extends Fieldtype implements Module {
 			$options = [];
 			if(!empty($job['history']) && is_array($job['history'])) $options['history'] = $job['history'];
 			if(isset($job['dryRun'])) $options['dryRun'] = (bool) $job['dryRun'];
+			if(!empty($job['siteUrl'])) $options['siteUrl'] = (string) $job['siteUrl'];
 			$options['backgroundJob'] = true;
 			$responseItem = $this->sendAgentRequest($page, $field, $questionText, $values, $agent, $options);
 			if(!$responseItem) throw new WireException('Page Engineer job produced no response.');
@@ -858,6 +862,18 @@ class FieldtypePageEngineer extends Fieldtype implements Module {
 		$f->attr('name', 'instructions');
 		$f->label = 'Instructions for AI agent that should accompany every request';
 		$f->val($field->instructions);
+		$inputfields->add($f);
+
+		$f = $inputfields->InputfieldTextarea;
+		$f->attr('name', 'memory');
+		$f->label = 'Persistent memory for this Page Engineer field';
+		$f->description = 'Durable workflow preferences automatically included with every request for this Page Engineer field.';
+		$f->notes =
+			'Page Engineer agents may add or modify entries when explicitly asked to remember durable preferences. ' .
+			'You can modify or remove existing entries here. To add entries, please ask the Page Engineer directly.';
+		$f->attr('rows', 8);
+		$f->val($field->memory);
+		$f->collapsed = Inputfield::collapsedYes;
 		$inputfields->add($f);
 
 		$f = $inputfields->InputfieldToggle;

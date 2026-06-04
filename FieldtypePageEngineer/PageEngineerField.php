@@ -7,6 +7,7 @@ require_once(__DIR__ . '/PageEngineerItems.php');
  * @property string $instructions
  * @property int|bool $backup Backup to version before making change?
  * @property array $onlyFields Limit scope of changes to only these fields
+ * @property string $memory Durable memory for this Page Engineer field
  *
  */
 class PageEngineerField extends Field {
@@ -21,6 +22,7 @@ class PageEngineerField extends Field {
 		$this->set('instructions', 'Help the user make requested edits to the page being edited.');
 		$this->set('backup', true);
 		$this->set('onlyFields', []);
+		$this->set('memory', '');
 	}
 
 }

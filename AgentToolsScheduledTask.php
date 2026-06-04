@@ -12,6 +12,7 @@
  * @property array $agentIds
  * @property string $lastAgentId
  * @property string $agentName
+ * @property string $siteUrl
  * @property array $inputs
  * @property string $frequency
  * @property string $schedule
@@ -37,6 +38,7 @@ class AgentToolsScheduledTask extends WireData {
 		'agentIds' => [],
 		'lastAgentId' => '',
 		'agentName' => '',
+		'siteUrl' => '',
 		'inputs' => [],
 		'frequency' => '',
 		'schedule' => '', // @todo do we want 'frequency', 'schedule' or both?

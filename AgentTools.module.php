@@ -25,14 +25,17 @@
  * @property string $engineer_agent_name
  * @property int|bool $engineer_readonly
  * @property string $engineer_instructions
+ * @property string $engineer_memory
  * @property int $engineer_mem_qty
  * @property int $engineer_max_iterations
  * @property int $engineer_request_timeout
+ * @property string $engineer_email_from
  * @property int|bool $engineer_debug_mode
  * @property string $engineer_trace_mode
  * @property int $engineer_trace_keep_days
  * @property int|bool $engineer_trace_include_content
  * @property string $engineer_additional_models
+ * @property string|int $engineer_user
  *
  */
 class AgentTools extends WireData implements Module, ConfigurableModule {
@@ -42,7 +45,7 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 			'title' => 'Agent Tools',
 			'summary' => "Enables AI coding agents to access ProcessWire's API and provides a database migration system.",
 			'icon' => 'at',
-			'version' => 19,
+			'version' => 20,
 			'author' => 'Ryan Cramer, Claude (Anthropic), GPT 5.5 Codex',
 			'requires' => 'ProcessWire>=3.0.255, PHP>=8.0.0',
 			'installs' => 'ProcessAgentTools, FieldtypePageEngineer',
@@ -106,9 +109,9 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 		$keys = [
 			'provider', 'api_key', 'model', 'endpoint',
 			'label', 'readonly', 'additional_models',
-			'agent_name', 'instructions', 'mem_qty', 'max_iterations', 'request_timeout',
-			'debug_mode', 'trace_mode', 'trace_keep_days', 'trace_include_content',
-			'suspicious', 'suspicious_email', 'suspicious_log',
+			'agent_name', 'instructions', 'memory', 'mem_qty', 'max_iterations', 'request_timeout',
+			'email_from', 'debug_mode', 'trace_mode', 'trace_keep_days', 'trace_include_content',
+			'suspicious', 'suspicious_email', 'suspicious_log', 'user',
 		];
 		foreach($keys as $key) {
 			$this->set("engineer_$key", "");
@@ -403,6 +406,14 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 		return parent::___callUnknown($method, $arguments);
 	}
 
+	public function set($key, $value) {
+		if($key === 'engineer_user') {
+			$value = $this->wire()->sanitizer->pageName($value);
+			if(ctype_digit($value)) $value = (int) $value;
+		}
+		return parent::set($key, $value);
+	}
+
 	/**
 	 * Convert markdown to AgentTools-friendly HTML
 	 *
@@ -667,6 +678,8 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 	 *
 	 */
 	public function getModuleConfigInputfields(InputfieldWrapper $inputfields) {
+
+		$this->jobs()->initJobDirs();
 
 		if(!$this->jobs()->isCronHealthy()) {
 			$sanitizer = $this->wire()->sanitizer;
