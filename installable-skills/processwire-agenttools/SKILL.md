@@ -85,8 +85,9 @@ bash .agents/skills/processwire-agenttools/scripts/pw-at.sh migrations-apply
 
 The Engineer is available in the ProcessWire admin at
 **Setup > Agent Tools > Engineer** and from the command line. It can use
-`eval_php`, `save_migration`, `site_info`, `read_file`, and `api_docs`, and it supports
-multi-turn conversation memory within a session.
+`eval_php`, `save_migration`, `site_info`, `read_file`, `api_docs`, and `save_memory`.
+It supports multi-turn conversation history within a session and optional persistent memory
+when the user explicitly asks it to remember durable site/workflow preferences.
 
 ```bash
 php index.php --at-engineer "How many published pages does this site have?"

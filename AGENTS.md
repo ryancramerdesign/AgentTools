@@ -77,9 +77,10 @@ successfully from the ProcessWire root and report the result.
 
 The ProcessAgentTools module provides a browser-based Engineer at **Setup > Agent Tools > Engineer**.
 It connects to an AI provider (Anthropic, OpenAI, or any OpenAI-compatible endpoint) and gives it
-five tools: `eval_php`, `save_migration`, `site_info` (fetches page tree or schema on demand),
-`read_file` (reads local site files), and `api_docs` (discovers and retrieves ProcessWire API.md documentation on demand). The Engineer
-supports multi-turn conversation memory within a session.
+six tools: `eval_php`, `save_migration`, `site_info` (fetches page tree or schema on demand),
+`read_file` (reads local site files), `api_docs` (discovers and retrieves ProcessWire API.md documentation on demand),
+and `save_memory` (saves durable site/workflow preferences when the user explicitly asks it to remember something).
+The Engineer supports multi-turn conversation history within a session and optional persistent memory.
 
 The Engineer is also available from the command line, which allows AI agents to spawn a
 ProcessWire-specialist sub-agent without needing to understand ProcessWire themselves:

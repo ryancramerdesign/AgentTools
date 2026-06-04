@@ -30,11 +30,13 @@ Also packaged with the AgentTools module is the ProcessAgentTools module. This p
 admin application (Setup > Agent Tools), currently with the following features:
 
 - **Engineer**: A natural language AI interface to your site. Ask questions, request changes,
-  or have it create migrations — all from your browser. The Engineer has five tools available
+  or have it create migrations — all from your browser. The Engineer has six tools available
   to it: `eval_php` (query live site data), `save_migration` (create a migration for review),
   `site_info` (fetch the site's page tree or fields/templates schema on demand), `read_file`
-  (read local site files), and `api_docs` (discover and retrieve ProcessWire API documentation on demand). The Engineer
-  supports conversation memory so it can refer back to earlier exchanges in the same session.
+  (read local site files), `api_docs` (discover and retrieve ProcessWire API documentation on demand),
+  and `save_memory` (save durable site/workflow preferences when explicitly asked). The Engineer
+  supports conversation history so it can refer back to earlier exchanges in the same session,
+  plus optional persistent memory that is included in future Engineer and Task requests.
   Multiple AI providers and models can be configured and switched between from a Control room
   in the Engineer form.
 
@@ -63,6 +65,8 @@ Editors submit requests like *"Rewrite the intro paragraph in a friendlier tone"
 *"Translate the title and body to French"* and the agent updates the appropriate page
 fields directly. Each exchange is recorded in a conversation history shown in the field,
 and editors can undo the most recent AI edit or reset the full conversation at any time.
+Each Page Engineer field can also maintain persistent memory for durable workflow
+preferences that should apply to future requests for that field.
 If the PagesVersions module is installed, the Page Engineer automatically creates a backup
 of the page before applying any changes.
 
@@ -266,6 +270,9 @@ in recently, the admin **Run in background** checkbox is disabled and explains
 that cron needs to be configured. Background jobs are stored under
 `site/assets/at/jobs/`; AgentTools also writes a `.htaccess` file in
 `site/assets/at/` to deny web access on Apache.
+
+Completed and failed background jobs can be reviewed from **Setup > Agent Tools >
+Jobs**, which provides a fallback if an email notification is not delivered.
 
 ## Troubleshooting
 
