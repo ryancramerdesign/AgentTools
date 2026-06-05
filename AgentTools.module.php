@@ -45,7 +45,7 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 			'title' => 'Agent Tools',
 			'summary' => "Enables AI coding agents to access ProcessWire's API and provides a database migration system.",
 			'icon' => 'at',
-			'version' => 20,
+			'version' => 21,
 			'author' => 'Ryan Cramer, Claude (Anthropic), GPT 5.5 Codex',
 			'requires' => 'ProcessWire>=3.0.255, PHP>=8.0.0',
 			'installs' => 'ProcessAgentTools, FieldtypePageEngineer',
@@ -275,6 +275,11 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 			$code = 'namespace ProcessWire; ' . $code;
 		}
 		$code = $declare . $code;
+		$validationError = $this->engineer->validateEvalPhp($code);
+		if($validationError !== '') {
+			echo "ERROR: $validationError\n";
+			return false;
+		}
 		try {
 			eval($code);
 			return true;

@@ -1253,7 +1253,8 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		$apiVars = $this->getEvalPhpVars(false);
 		$evalDesc =
 			"Evaluate PHP code with full ProcessWire API access. Use echo to output results. " .
-			"Available variables: $apiVars. Do not include an opening <?php tag.";
+			"Available variables: $apiVars. Do not include an opening <?php tag. " .
+			"Shell/process execution functions and PHP backtick shell execution are not allowed.";
 		if($dryRun) {
 			$evalDesc .= " Preview-only mode is enabled: use this tool only for read-only inspection. " .
 				"Do not call save, delete, clone, move, publish, unpublish, file write, module config, " .
@@ -1937,6 +1938,8 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	protected function executeEvalPhp(string $code): string {
 		$at = $this->at;
 		extract($this->wire()->fuel->getArray());
+		$validationError = $this->validateEvalPhp($code);
+		if($validationError !== '') return "ERROR: $validationError";
 		$errors = [];
 		set_error_handler(function($severity, $message, $file, $line) use(&$errors) {
 			$label = match($severity) {
@@ -1979,6 +1982,164 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			$output = substr($output, 0, self::maxOutputLength) . "\n[output truncated]";
 		}
 		return $output;
+	}
+
+	/**
+	 * Validate eval_php code before executing it.
+	 *
+	 * @param string $code PHP code without opening <?php tag
+	 * @return string Error message, or blank string when allowed
+	 *
+	 */
+	public function validateEvalPhp(string $code): string {
+		$blockedFunctions = [
+			'exec',
+			'shell_exec',
+			'system',
+			'passthru',
+			'proc_open',
+			'popen',
+			'pcntl_exec',
+			'assert',
+			'eval',
+		];
+		$tokens = token_get_all('<?php namespace ProcessWire; ' . $code);
+		foreach($tokens as $n => $token) {
+			if($token === '`') {
+				return 'PHP backtick shell execution is not allowed in eval_php.';
+			}
+			if(!is_array($token)) continue;
+			$name = $this->getEvalPhpTokenName($token);
+			if($name === '') continue;
+			if(in_array($name, $blockedFunctions, true) && $this->isEvalPhpFunctionCall($tokens, $n)) {
+				return "Function $name() is not allowed in eval_php.";
+			}
+			if(($name === 'call_user_func' || $name === 'call_user_func_array') && $this->isEvalPhpFunctionCall($tokens, $n)) {
+				$called = $this->getEvalPhpFirstCallArgumentString($tokens, $n);
+				$called = strtolower(ltrim($called, '\\'));
+				$called = basename(str_replace('\\', '/', $called));
+				if(in_array($called, $blockedFunctions, true)) {
+					return "Function $name() may not call $called() in eval_php.";
+				}
+			}
+		}
+		return '';
+	}
+
+	/**
+	 * Get normalized token name for eval_php validation.
+	 *
+	 * @param array $token
+	 * @return string
+	 *
+	 */
+	protected function getEvalPhpTokenName(array $token): string {
+		$id = (int) $token[0];
+		if(!in_array($id, [ T_STRING, T_NAME_FULLY_QUALIFIED, T_NAME_QUALIFIED, T_EVAL ], true)) {
+			return '';
+		}
+		$name = strtolower(ltrim((string) $token[1], '\\'));
+		return basename(str_replace('\\', '/', $name));
+	}
+
+	/**
+	 * Is the token at index n being called as a function/language construct?
+	 *
+	 * @param array $tokens
+	 * @param int $n
+	 * @return bool
+	 *
+	 */
+	protected function isEvalPhpFunctionCall(array $tokens, int $n): bool {
+		$next = $this->nextEvalPhpSignificantToken($tokens, $n + 1);
+		if($next !== '(') return false;
+		$prev = $this->prevEvalPhpSignificantToken($tokens, $n - 1);
+		if($prev === '->' || $prev === '::') return false;
+		if(is_array($prev) && in_array($prev[0], [ T_FUNCTION, T_NEW ], true)) return false;
+		return true;
+	}
+
+	/**
+	 * Get first string argument to a call_user_func style call.
+	 *
+	 * @param array $tokens
+	 * @param int $n Function token index
+	 * @return string
+	 *
+	 */
+	protected function getEvalPhpFirstCallArgumentString(array $tokens, int $n): string {
+		$open = $this->nextEvalPhpSignificantTokenIndex($tokens, $n + 1);
+		if($open < 0 || ($tokens[$open] ?? null) !== '(') return '';
+		$arg = $this->nextEvalPhpSignificantTokenIndex($tokens, $open + 1);
+		if($arg < 0 || !isset($tokens[$arg]) || !is_array($tokens[$arg])) return '';
+		if($tokens[$arg][0] !== T_CONSTANT_ENCAPSED_STRING) return '';
+		$value = trim((string) $tokens[$arg][1]);
+		if(strlen($value) < 2) return '';
+		$quote = $value[0];
+		if(($quote !== "'" && $quote !== '"') || substr($value, -1) !== $quote) return '';
+		return stripcslashes(substr($value, 1, -1));
+	}
+
+	/**
+	 * Get next significant token value.
+	 *
+	 * @param array $tokens
+	 * @param int $start
+	 * @return mixed
+	 *
+	 */
+	protected function nextEvalPhpSignificantToken(array $tokens, int $start) {
+		$n = $this->nextEvalPhpSignificantTokenIndex($tokens, $start);
+		return $n < 0 ? null : $tokens[$n];
+	}
+
+	/**
+	 * Get next significant token index.
+	 *
+	 * @param array $tokens
+	 * @param int $start
+	 * @return int
+	 *
+	 */
+	protected function nextEvalPhpSignificantTokenIndex(array $tokens, int $start): int {
+		for($n = $start; $n < count($tokens); $n++) {
+			if($this->isEvalPhpIgnorableToken($tokens[$n])) continue;
+			return $n;
+		}
+		return -1;
+	}
+
+	/**
+	 * Get previous significant token value.
+	 *
+	 * @param array $tokens
+	 * @param int $start
+	 * @return mixed
+	 *
+	 */
+	protected function prevEvalPhpSignificantToken(array $tokens, int $start) {
+		for($n = $start; $n >= 0; $n--) {
+			if($this->isEvalPhpIgnorableToken($tokens[$n])) continue;
+			$token = $tokens[$n];
+			if(is_array($token)) {
+				if($token[0] === T_OBJECT_OPERATOR) return '->';
+				if($token[0] === T_DOUBLE_COLON) return '::';
+			}
+			return $token;
+		}
+		return null;
+	}
+
+	/**
+	 * Is token ignorable whitespace/comment for eval_php validation?
+	 *
+	 * @param mixed $token
+	 * @return bool
+	 *
+	 */
+	protected function isEvalPhpIgnorableToken($token): bool {
+		if(!is_array($token)) return false;
+		return in_array($token[0], [ T_WHITESPACE, T_COMMENT, T_DOC_COMMENT ], true);
 	}
 
 	/**

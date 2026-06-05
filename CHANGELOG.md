@@ -1,5 +1,17 @@
 # Changelog
 
+## Version 21
+
+### Engineer
+
+- Added eval safety guards that block shell/process execution functions and PHP
+  backtick shell execution in Engineer `eval_php`, `--at-eval`, and `--at-stdin`.
+- Updated the Engineer tool description to tell agents that shell/process
+  execution is not available, keeping tool use focused on ProcessWire APIs and
+  known project paths.
+
+---
+
 ## Version 20
 
 ### Persistent memory
