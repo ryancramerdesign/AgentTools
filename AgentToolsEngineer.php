@@ -1254,7 +1254,8 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		$evalDesc =
 			"Evaluate PHP code with full ProcessWire API access. Use echo to output results. " .
 			"Available variables: $apiVars. Do not include an opening <?php tag. " .
-			"Shell/process execution functions and PHP backtick shell execution are not allowed.";
+			"Shell/process execution functions, PHP backtick shell execution, include/require, " .
+			"and function/class/interface/trait/enum declarations are not allowed.";
 		if($dryRun) {
 			$evalDesc .= " Preview-only mode is enabled: use this tool only for read-only inspection. " .
 				"Do not call save, delete, clone, move, publish, unpublish, file write, module config, " .
@@ -2009,6 +2010,15 @@ class AgentToolsEngineer extends AgentToolsHelper {
 				return 'PHP backtick shell execution is not allowed in eval_php.';
 			}
 			if(!is_array($token)) continue;
+			if($this->isEvalPhpBlockedConstruct($token)) {
+				return 'include/require are not allowed in eval_php. Use read_file or ProcessWire APIs instead.';
+			}
+			if($token[0] === T_FUNCTION && $this->isEvalPhpNamedFunctionDeclaration($tokens, $n)) {
+				return 'Function declarations are not allowed in eval_php. Use inline code instead.';
+			}
+			if($this->isEvalPhpTypeDeclaration($tokens, $n)) {
+				return 'Class, interface, trait, and enum declarations are not allowed in eval_php.';
+			}
 			$name = $this->getEvalPhpTokenName($token);
 			if($name === '') continue;
 			if(in_array($name, $blockedFunctions, true) && $this->isEvalPhpFunctionCall($tokens, $n)) {
@@ -2024,6 +2034,55 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			}
 		}
 		return '';
+	}
+
+	/**
+	 * Is token an include/require construct blocked from eval_php?
+	 *
+	 * @param array $token
+	 * @return bool
+	 *
+	 */
+	protected function isEvalPhpBlockedConstruct(array $token): bool {
+		return in_array($token[0], [ T_INCLUDE, T_INCLUDE_ONCE, T_REQUIRE, T_REQUIRE_ONCE ], true);
+	}
+
+	/**
+	 * Is token a named function declaration?
+	 *
+	 * @param array $tokens
+	 * @param int $n
+	 * @return bool
+	 *
+	 */
+	protected function isEvalPhpNamedFunctionDeclaration(array $tokens, int $n): bool {
+		$next = $this->nextEvalPhpSignificantTokenIndex($tokens, $n + 1);
+		if($next < 0) return false;
+		if(($tokens[$next] ?? null) === '&') {
+			$next = $this->nextEvalPhpSignificantTokenIndex($tokens, $next + 1);
+			if($next < 0) return false;
+		}
+		return isset($tokens[$next]) && is_array($tokens[$next]) && $tokens[$next][0] === T_STRING;
+	}
+
+	/**
+	 * Is token a class/interface/trait/enum declaration?
+	 *
+	 * @param array $tokens
+	 * @param int $n
+	 * @return bool
+	 *
+	 */
+	protected function isEvalPhpTypeDeclaration(array $tokens, int $n): bool {
+		$token = $tokens[$n] ?? null;
+		if(!is_array($token)) return false;
+		$typeTokens = [ T_CLASS, T_INTERFACE, T_TRAIT ];
+		if(defined('T_ENUM')) $typeTokens[] = T_ENUM;
+		if(!in_array($token[0], $typeTokens, true)) return false;
+		$prev = $this->prevEvalPhpSignificantToken($tokens, $n - 1);
+		if($prev === '::') return false;
+		$next = $this->nextEvalPhpSignificantToken($tokens, $n + 1);
+		return is_array($next) && $next[0] === T_STRING;
 	}
 
 	/**

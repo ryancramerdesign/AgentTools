@@ -92,7 +92,7 @@ class ProcessAgentToolsTasks extends ProcessAgentToolsHelper {
 				/** @var InputfieldButton $f */
 				$f = $modules->get('InputfieldButton');
 				$f->href = ($key === 'scheduled' ? '../edit-scheduled-task/' : '../edit-task/') . '?new=1';
-				$f->val($key === 'scheduled' ? $this->_('Schedule task') : $this->label('add-task'));
+				$f->val($key === 'scheduled' ? $this->_('Schedule Task') : $this->label('add-task'));
 				$f->icon = 'plus-circle';
 			}
 
@@ -147,7 +147,10 @@ class ProcessAgentToolsTasks extends ProcessAgentToolsHelper {
 		}
 
 		if(!$qty) {
-			$table->row([ 'No tasks found' ], [ 'colspan' => 3 ]);
+			$table->row([
+				$this->_("Waiting for you to add one…"),
+				sprintf($this->_('%s please?'), ucfirst($this->wire()->user->name))
+			]);
 		}
 
 		return $table;
@@ -1195,7 +1198,12 @@ class ProcessAgentToolsTasks extends ProcessAgentToolsHelper {
 		}
 
 		if(!$qty) {
-			$table->row([ 'No scheduled tasks found' ], [ 'colspan' => count($headerRow) ]);
+			$table->row([
+				$this->_("When you've got custom tasks, you can schedule them here"),
+				true, true, true, true,
+				$this->_('Someday?'),
+				$this->_('Soon?')
+			]);
 		}
 
 		return $table;

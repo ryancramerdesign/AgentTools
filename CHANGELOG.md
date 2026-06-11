@@ -1,5 +1,28 @@
 # Changelog
 
+## Version 22
+
+### Page Engineer
+
+- Added field settings that control whether Page Engineer replies appear as
+  admin message notifications, in the Page Engineer field, or both.
+- Added an option to show the user's latest request above the agent response in
+  the Page Engineer field.
+- Page Engineer automatic backups now require PagesVersionsPro, so backups have
+  a page-editor UI for review and cleanup instead of silently accumulating.
+
+### Engineer
+
+- Expanded eval safety guards to reject include/require, named function
+  declarations, and class/interface/trait/enum declarations before eval runs.
+
+### Admin UI and Docs
+
+- Refined empty-state wording in AgentTools admin tables.
+- Added MAMP Pro FastCGI timeout guidance to the README troubleshooting notes.
+
+---
+
 ## Version 21
 
 ### Engineer

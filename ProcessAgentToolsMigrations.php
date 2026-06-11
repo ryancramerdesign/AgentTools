@@ -168,16 +168,6 @@ class ProcessAgentToolsMigrations extends ProcessAgentToolsHelper {
 
 		$this->headline($this->label('migrations'));
 
-		if(empty($migrationFiles)) {
-			$this->warning($this->_('No migration files found in:') . " `$migrationsDir`", Notice::allowMarkdown);
-			/** @var InputfieldButton $button */
-			$button = $modules->get('InputfieldButton');
-			$button->href = '../engineer/?migration=1';
-			$button->value = $this->label('ask-create-migration');
-			$button->icon = 'commenting';
-			return $button->render();
-		}
-
 		$pendingCount = 0;
 		foreach($migrationFiles as $file) {
 			if(!$this->at->migrations->isApplied($file)) $pendingCount++;
@@ -206,6 +196,25 @@ class ProcessAgentToolsMigrations extends ProcessAgentToolsHelper {
 				$this->at->migrations->getDatetime($file),
 				$status,
 			]);
+		}
+
+		if(empty($migrationFiles)) {
+			$this->warning($this->_('No migration files found in:') . " `$migrationsDir`", Notice::allowMarkdown);
+			/** @var InputfieldButton $button */
+			$button = $modules->get('InputfieldButton');
+			$button->href = '../engineer/?migration=1';
+			$button->value = $this->label('ask-create-migration');
+			$button->icon = 'commenting';
+			$table->row([
+				$this->_('Anxiously waiting for migrations'),
+				$this->_('Yes please'),
+				$this->_('Soon?'),
+				$this->_('Being patient')
+			]);
+			return
+				$table->render() .
+				$button->render() .
+				"<span class='detail'>" . $this->_('How about now?') . "</span>";
 		}
 
 		$appliedCount = count($migrationFiles) - $pendingCount;

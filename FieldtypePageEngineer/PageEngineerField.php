@@ -8,6 +8,8 @@ require_once(__DIR__ . '/PageEngineerItems.php');
  * @property int|bool $backup Backup to version before making change?
  * @property array $onlyFields Limit scope of changes to only these fields
  * @property string $memory Durable memory for this Page Engineer field
+ * @property string $responseDisplay Where to display the latest agent response
+ * @property int|bool $showRequest Show the user's request above the latest agent response?
  *
  */
 class PageEngineerField extends Field {
@@ -15,6 +17,9 @@ class PageEngineerField extends Field {
 	const scopePage = 1;
 	const scopePageAndChildren = 2;
 	const scopeChildren = 3;
+	const responseDisplayBoth = 'both';
+	const responseDisplayNotice = 'notice';
+	const responseDisplayField = 'field';
 
 	public function __construct() {
 		parent::__construct();
@@ -23,6 +28,8 @@ class PageEngineerField extends Field {
 		$this->set('backup', true);
 		$this->set('onlyFields', []);
 		$this->set('memory', '');
+		$this->set('responseDisplay', self::responseDisplayBoth);
+		$this->set('showRequest', false);
 	}
 
 }

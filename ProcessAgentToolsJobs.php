@@ -45,7 +45,13 @@ class ProcessAgentToolsJobs extends ProcessAgentToolsHelper {
 			$qty++;
 		}
 
-		if(!$qty) $table->row([ $this->_('No background jobs found.') ], [ 'colspan' => 7 ]);
+		if(!$qty) {
+			$table->row([
+				$this->_("Currently unemployed.") .
+				"<br><span class='detail'>" . $this->_("Would love it if you'd create or schedule a background task, then you'll see it here.") . "</span>",
+				true, true, true, true, true, true
+			]);
+		}
 
 		return $table->render();
 	}

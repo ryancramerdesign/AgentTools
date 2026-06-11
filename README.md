@@ -300,14 +300,21 @@ be raised for long requests.
 #### Correcting the issue in Apache + FastCGI
 To correct the error in Apache + FastCGI, you need to edit the web server settings (http.conf). On the line that configures FastCGI
 you need to add or update the `-idle-timeout` setting to a value higher than 30 seconds. We use `-idle-timeout 300`.
+
 Here is what the setting looks like in my MAMP `/Applications/MAMP/conf/apache/httpd.conf` file below, but the 
 solution is likely similar in whatever LAMP software you are using. 
 ```
 FastCgiServer /Applications/MAMP/fcgi-bin/php.fcgi -socket httpdFastCGI.sock -idle-timeout 300
 ```
+A MAMP Pro user (eelkenet) reported that they had to "edit the Apache template" (File → Open Template → Apache → httpd.conf)
+and change the placeholder `MAMP_FastCgiServer_MAMP` to add the `-idle-timeout` like this:
+```
+MAMP_FastCgiServer_MAMP -idle-timeout 300
+```
+
 *Note that this is separate from the Apache (or equivalent) `TimeOut` directive, which defaults to 60 seconds in newer
-versions of Apache (2.4+) and 300 seconds in older versions. It is typically not the issue. However, you may
-still want to increase the ` TimeOut` setting to match what you specified for FastCGI.*
+versions of Apache (2.4+) and 300 seconds in older versions. If 60 seconds, I recommend increasing to 300 seconds or more.
+So increase the `TimeOut` setting to match what you specified for FastCGI, 300 seconds is what I use.*
 
 #### Correcting the issue in nginx + PHP-FPM or mod_fcgid
 

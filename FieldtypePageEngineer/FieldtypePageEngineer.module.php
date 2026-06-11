@@ -7,7 +7,7 @@ class FieldtypePageEngineer extends Fieldtype implements Module {
 	public static function getModuleInfo() {
 		return [
 			'title' => 'Page Engineer',
-			'version' => 6,
+			'version' => 7,
 			'summary' => 'Agent Tools Page Engineer is an AI agent Fieldtype to help you with any page editing task.',
 			'requires' => [ 'AgentTools' ],
 		];
@@ -216,10 +216,8 @@ class FieldtypePageEngineer extends Fieldtype implements Module {
 		[ $page, $field ] = [ $f->hasPage, $f->hasField ];
 		$values = $page->get($field->name);
 		// clear value, ready for new questions
-		if(count($values)) {
-			// show last message
-			$item = $values->last(); /** @var PageEngineerItem $item */
-			$f->prependMarkup .= $item->markupValue();
+		if(count($values) && $this->pageEngineerResponseInField($field)) {
+			$f->prependMarkup .= $this->renderLatestResponse($values, (bool) $field->showRequest);
 		}
 		$f->val(''); // ready for next prompt
 
@@ -473,10 +471,74 @@ class FieldtypePageEngineer extends Fieldtype implements Module {
 			$item->set('backupVersions', $backupVersions);
 		}
 
-		// Also surface the reply as a page-editor notice so it's visible regardless of field position
-		$at->message($item->markupValue(), Notice::noGroup | Notice::allowMarkup);
+		if($this->pageEngineerResponseInNotice($field)) {
+			$at->message($item->markupValue(), Notice::noGroup | Notice::allowMarkup);
+		}
 
 		return $item;
+	}
+
+	/**
+	 * Should Page Engineer response appear in the field?
+	 *
+	 * @param Field $field
+	 * @return bool
+	 *
+	 */
+	protected function pageEngineerResponseInField(Field $field): bool {
+		$value = (string) $field->get('responseDisplay');
+		if($value === '') $value = PageEngineerField::responseDisplayBoth;
+		return $value === PageEngineerField::responseDisplayBoth || $value === PageEngineerField::responseDisplayField;
+	}
+
+	/**
+	 * Should Page Engineer response appear as an admin notice?
+	 *
+	 * @param Field $field
+	 * @return bool
+	 *
+	 */
+	protected function pageEngineerResponseInNotice(Field $field): bool {
+		$value = (string) $field->get('responseDisplay');
+		if($value === '') $value = PageEngineerField::responseDisplayBoth;
+		return $value === PageEngineerField::responseDisplayBoth || $value === PageEngineerField::responseDisplayNotice;
+	}
+
+	/**
+	 * Render latest Page Engineer response for the field display.
+	 *
+	 * @param PageEngineerItems $values
+	 * @param bool $showRequest
+	 * @return string
+	 *
+	 */
+	protected function renderLatestResponse(PageEngineerItems $values, bool $showRequest): string {
+		$item = $values->last(); /** @var PageEngineerItem|null $item */
+		if(!$item) return '';
+		$out = '';
+		if($showRequest && $item->isAgent && count($values) > 1) {
+			$items = $values->getArray();
+			$previous = $items[count($items) - 2] ?? null;
+			if($previous instanceof PageEngineerItem && !$previous->isAgent && strlen($previous->text)) {
+				$out .=
+					'<p class="detail at-page-engineer-request">' .
+						$this->_('Request: ') .
+						nl2br(htmlspecialchars($previous->text, ENT_QUOTES, 'UTF-8')) .
+					'</p>';
+			}
+		}
+		return $out . $item->markupValue();
+	}
+
+	/**
+	 * Are Page Engineer backups available?
+	 *
+	 * @return bool
+	 *
+	 */
+	protected function pageEngineerBackupsAvailable(): bool {
+		$modules = $this->wire()->modules;
+		return $modules->isInstalled('PagesVersions') && $modules->isInstalled('PagesVersionsPro');
 	}
 
 	/**
@@ -761,7 +823,7 @@ class FieldtypePageEngineer extends Fieldtype implements Module {
 	 */
 	protected function backupPages(Page $page, Field $field): array {
 		$modules = $this->wire()->modules;
-		if(!$modules->isInstalled('PagesVersions')) return [];
+		if(!$this->pageEngineerBackupsAvailable()) return [];
 		/** @var PagesVersions $pagesVersions */
 		$pagesVersions = $modules->get('PagesVersions');
 
@@ -876,10 +938,40 @@ class FieldtypePageEngineer extends Fieldtype implements Module {
 		$f->collapsed = Inputfield::collapsedYes;
 		$inputfields->add($f);
 
+		$f = $inputfields->InputfieldRadios;
+		$f->attr('name', 'responseDisplay');
+		$f->label = 'Where should the agent response appear?';
+		$f->addOption(PageEngineerField::responseDisplayBoth, 'Message notification and Page Engineer field');
+		$f->addOption(PageEngineerField::responseDisplayNotice, 'Message notification only');
+		$f->addOption(PageEngineerField::responseDisplayField, 'Page Engineer field only');
+		$f->val((string) $field->get('responseDisplay') ?: PageEngineerField::responseDisplayBoth);
+		$inputfields->add($f);
+
 		$f = $inputfields->InputfieldToggle;
-		$f->attr('name', 'backup');
-		$f->label = 'Backup changed fields to new version before applying changes?';
-		$f->val((int) $field->backup);
+		$f->attr('name', 'showRequest');
+		$f->label = 'Show user request above agent response?';
+		$f->description = 'When enabled, the latest request appears as detail text above the latest agent reply in the Page Engineer field.';
+		$f->val((int) $field->get('showRequest'));
+		$f->columnWidth = 50;
+		$inputfields->add($f);
+
+		if($this->pageEngineerBackupsAvailable()) {
+			$f = $inputfields->InputfieldToggle;
+			$f->attr('name', 'backup');
+			$f->label = 'Backup changed fields to new PagesVersions version before applying changes?';
+			$f->description = $this->_('Requires PagesVersionsPro so backups can be reviewed and managed from the page editor Versions tab.');
+			$f->notes = $this->_('When enabled, the Page Engineer creates a backup before applying changes, and the next agent response can be undone from this field.');
+			$f->val((int) $field->backup);
+			$f->columnWidth = 50;
+		} else {
+			$f = $inputfields->InputfieldMarkup;
+			$f->attr('name', '_backup_unavailable');
+			$f->label = 'Page Engineer backups unavailable';
+			$f->description = $this->_('Install PagesVersionsPro to enable automatic Page Engineer backups and the Undo last edit option.');
+			$f->value = '<p class="detail">' . $this->_('Backups are disabled because PagesVersionsPro is not installed.') . '</p>';
+			$f->icon = 'history';
+			$f->columnWidth = 50;
+		}
 		$inputfields->add($f);
 
 		$f = $inputfields->InputfieldAsmSelect;

@@ -45,7 +45,7 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 			'title' => 'Agent Tools',
 			'summary' => "Enables AI coding agents to access ProcessWire's API and provides a database migration system.",
 			'icon' => 'at',
-			'version' => 21,
+			'version' => 22,
 			'author' => 'Ryan Cramer, Claude (Anthropic), GPT 5.5 Codex',
 			'requires' => 'ProcessWire>=3.0.255, PHP>=8.0.0',
 			'installs' => 'ProcessAgentTools, FieldtypePageEngineer',
