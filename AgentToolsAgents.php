@@ -139,4 +139,22 @@ class AgentToolsAgents extends WireArray {
 		}
 		return null;
 	}
+
+	/**
+	 * Get first agent from given value that matches any one of agent's properties
+	 *
+	 * @param AgentToolsAgent|int|string $value
+	 * @return AgentToolsAgent|null
+	 *
+	 */
+	public function getByValue($value) {
+		if($value instanceof AgentToolsAgent) return $value;
+		if(empty($value)) return null;
+		$value = (string) $value;
+		foreach($this as $agent) {
+			$data = $agent->getArray();
+			if(in_array($value, array_map('strval', $data), true)) return $agent;
+		}
+		return null;
+	}
 }

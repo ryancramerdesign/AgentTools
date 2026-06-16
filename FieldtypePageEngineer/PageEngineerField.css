@@ -18,3 +18,11 @@
 	select {
 	}
 }
+
+.at-comment-agent {
+	border-left: 1px solid rgba(0, 0, 0, 0.15);
+}
+
+.at-engineer-history {
+	margin-top: 2em;
+}

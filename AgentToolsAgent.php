@@ -44,6 +44,18 @@ class AgentToolsAgent extends WireData {
 		}
 	}
 
+	/**
+	 * Get the agent's name
+	 *
+	 * agentName > label > model
+	 *
+	 * @return string
+	 *
+	 */
+	public function getAgentName() {
+		return $this->agentName ?: $this->label ?: $this->model;
+	}
+
 	public function set($key, $value) {
 		if(isset($this->defaults[$key])) {
 			$value = str_replace('|', ' ',  $value);

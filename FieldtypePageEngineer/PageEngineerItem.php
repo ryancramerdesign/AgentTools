@@ -8,6 +8,8 @@
  * @property string $text Text from user or agent
  * @property int $isAgent Is text from an AI agent?
  *
+ * @method string render()
+ *
  */
 class PageEngineerItem extends WireData {
 	public function __construct() {
@@ -39,5 +41,39 @@ class PageEngineerItem extends WireData {
 			return $this->wire('at')->markdownToHtml($this->text, [ 'safe' => true ]);
 		}
 		return '<p>' . nl2br(htmlspecialchars($this->text)) . '</p>';
+	}
+
+	/**
+	 * Render this item as a comment
+	 *
+	 * @return string
+	 *
+	 */
+	public function ___render() {
+		$sanitizer = $this->wire()->sanitizer;
+		$at = $this->wire('at'); /** @var AgentTools $at */
+		$body = $this->markupValue();
+
+		if($this->isAgent) {
+			$agent = $at->getAgents()->getByValue($this->from);
+			$from = $agent ? $agent->getAgentName() : $this->from;
+			$class = 'at-comment-agent uk-comment-primary';
+			$icon = wireIconMarkup('at', 'uk-text-muted');
+		} else {
+			$from = $this->from;
+			$class = 'at-comment-user';
+			$icon = wireIconMarkup('user-circle', 'uk-text-muted');
+		}
+
+		$from = $sanitizer->entities(ucfirst($from));
+		$when = $sanitizer->entities(wireDate('Y/m/d h:ia', $this->when));
+
+		return "
+			<div class='uk-comment $class uk-margin'>
+				<h3 class='uk-margin-small'>$icon&nbsp; $from <span class='uk-text-meta'>$when</span></h3>
+				$body
+			</div>
+		";
+
 	}
 }

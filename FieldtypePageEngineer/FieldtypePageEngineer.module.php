@@ -7,7 +7,7 @@ class FieldtypePageEngineer extends Fieldtype implements Module {
 	public static function getModuleInfo() {
 		return [
 			'title' => 'Page Engineer',
-			'version' => 7,
+			'version' => 8,
 			'summary' => 'Agent Tools Page Engineer is an AI agent Fieldtype to help you with any page editing task.',
 			'requires' => [ 'AgentTools' ],
 		];
@@ -287,13 +287,20 @@ class FieldtypePageEngineer extends Fieldtype implements Module {
 
 		// Show reset checkbox when there is any conversation history
 		$numMessages = count($values);
+		$historyId = 'at-engineer-history-' . htmlspecialchars((string) $field->name, ENT_QUOTES, 'UTF-8');
 		if($numMessages) {
 			/** @var InputfieldCheckbox $c */
 			$c = $modules->get('InputfieldCheckbox');
 			$c->attr('name', '_at_reset');
 			$c->label = $this->_('Clear') . ' ' .
-				'[span.detail] ' . sprintf($this->_('(%d messages)'), $numMessages) . ' [/span]';
-			$inputs[] = $c->render();
+				"[span.detail] ([" .
+				sprintf($this->_('%d messages'), $numMessages) . "](#$historyId)) " .
+				"[/span]";
+			$out = str_replace("<a ",
+				"<a class='at-engineer-history-link' uk-toggle='target: #$historyId' ",
+				$c->render()
+			);
+			$inputs[] = $out;
 		}
 		if(count($inputs)) {
 			$f->addClass('InputfieldCheckbox', 'wrapClass');
@@ -307,6 +314,14 @@ class FieldtypePageEngineer extends Fieldtype implements Module {
 
 		// Identifying class for JS selector (added regardless of inputs)
 		$f->addClass('PageEngineerInput', 'wrapClass');
+
+		if($numMessages) {
+			$f->appendMarkup .=
+				"<div class='at-engineer-history' id='$historyId' hidden>" .
+					"<hr>" .
+					$values->render() .
+				"</div>";
+		}
 
 		// Load assets once per page (guarded by static flag in case of multiple fields)
 		static $assetsLoaded = false;

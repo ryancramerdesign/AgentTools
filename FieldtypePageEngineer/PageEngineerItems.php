@@ -5,6 +5,8 @@ require_once(__DIR__ . '/PageEngineerItem.php');
 /**
  * Page Engineer: conversation history (collection of PageEngineerItem objects)
  *
+ * @method string render()
+ *
  */
 class PageEngineerItems extends WireArray {
 
@@ -79,4 +81,15 @@ class PageEngineerItems extends WireArray {
 		return $item;
 	}
 
+	/**
+	 * Render all items as comment-style list
+	 *
+	 * @return string
+	 *
+	 */
+	public function ___render() {
+		$out = '';
+		foreach($this as $item) $out .= $item->render();
+		return $out;
+	}
 }

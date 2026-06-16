@@ -1251,10 +1251,14 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	public function getToolDefinitions(string $provider, string $context = 'site', bool $readOnly = false, bool $dryRun = false): array {
 
 		$apiVars = $this->getEvalPhpVars(false);
+		$includeDesc = $this->allowEvalPhpIncludeRequire() ?
+			"include/require are allowed by module configuration. " :
+			"include/require are not allowed. ";
 		$evalDesc =
 			"Evaluate PHP code with full ProcessWire API access. Use echo to output results. " .
 			"Available variables: $apiVars. Do not include an opening <?php tag. " .
-			"Shell/process execution functions, PHP backtick shell execution, include/require, " .
+			$includeDesc .
+			"Shell/process execution functions, PHP backtick shell execution, " .
 			"and function/class/interface/trait/enum declarations are not allowed.";
 		if($dryRun) {
 			$evalDesc .= " Preview-only mode is enabled: use this tool only for read-only inspection. " .
@@ -1624,7 +1628,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		$this->loginEngineer();
 		try {
 			if($name === 'eval_php') {
-				return $this->executeEvalPhp((string) ($input['code'] ?? ''));
+				return $this->executeEvalPhp((string) ($input['code'] ?? ''), !empty($options['dryRun']));
 			} else if($name === 'save_migration') {
 				return $this->executeSaveMigration(
 					(string) ($input['code'] ?? ''),
@@ -1936,10 +1940,10 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	 * @return string Captured output, truncated to maxOutputLength
 	 *
 	 */
-	protected function executeEvalPhp(string $code): string {
+	protected function executeEvalPhp(string $code, bool $dryRun = false): string {
 		$at = $this->at;
 		extract($this->wire()->fuel->getArray());
-		$validationError = $this->validateEvalPhp($code);
+		$validationError = $this->validateEvalPhp($code, $dryRun);
 		if($validationError !== '') return "ERROR: $validationError";
 		$errors = [];
 		set_error_handler(function($severity, $message, $file, $line) use(&$errors) {
@@ -1992,7 +1996,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	 * @return string Error message, or blank string when allowed
 	 *
 	 */
-	public function validateEvalPhp(string $code): string {
+	public function validateEvalPhp(string $code, bool $dryRun = false): string {
 		$blockedFunctions = [
 			'exec',
 			'shell_exec',
@@ -2010,7 +2014,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 				return 'PHP backtick shell execution is not allowed in eval_php.';
 			}
 			if(!is_array($token)) continue;
-			if($this->isEvalPhpBlockedConstruct($token)) {
+			if(!$this->allowEvalPhpIncludeRequire() && $this->isEvalPhpBlockedConstruct($token)) {
 				return 'include/require are not allowed in eval_php. Use read_file or ProcessWire APIs instead.';
 			}
 			if($token[0] === T_FUNCTION && $this->isEvalPhpNamedFunctionDeclaration($tokens, $n)) {
@@ -2033,7 +2037,92 @@ class AgentToolsEngineer extends AgentToolsHelper {
 				}
 			}
 		}
+		if($dryRun) {
+			$dryRunError = $this->validateDryRunEvalPhp($tokens);
+			if($dryRunError !== '') return $dryRunError;
+		}
 		return '';
+	}
+
+	/**
+	 * Validate preview-only eval_php code before executing it.
+	 *
+	 * This is intentionally conservative: preview mode may inspect live data, but
+	 * must not call common ProcessWire/PHP mutation APIs.
+	 *
+	 * @param array $tokens
+	 * @return string
+	 *
+	 */
+	protected function validateDryRunEvalPhp(array $tokens): string {
+		$blockedFunctions = [
+			'chgrp',
+			'chmod',
+			'chown',
+			'copy',
+			'fopen',
+			'file_put_contents',
+			'link',
+			'mkdir',
+			'rename',
+			'rmdir',
+			'symlink',
+			'touch',
+			'unlink',
+		];
+		$blockedMethods = [
+			'add',
+			'addstatus',
+			'clone',
+			'delete',
+			'deleteall',
+			'execute',
+			'exec',
+			'import',
+			'insert',
+			'move',
+			'publish',
+			'query',
+			'remove',
+			'removestatus',
+			'save',
+			'savefield',
+			'setandsave',
+			'trash',
+			'unpublish',
+			'update',
+		];
+
+		foreach($tokens as $n => $token) {
+			if(!is_array($token)) continue;
+			$name = $this->getEvalPhpTokenName($token);
+			if($name === '') continue;
+			if(in_array($name, $blockedFunctions, true) && $this->isEvalPhpFunctionCall($tokens, $n)) {
+				return "Preview-only mode blocked mutating eval_php function: $name().";
+			}
+			if(in_array($name, $blockedMethods, true) && $this->isEvalPhpMethodCall($tokens, $n)) {
+				return "Preview-only mode blocked mutating eval_php method: $name().";
+			}
+			if(($name === 'call_user_func' || $name === 'call_user_func_array') && $this->isEvalPhpFunctionCall($tokens, $n)) {
+				$called = strtolower(ltrim($this->getEvalPhpFirstCallArgumentString($tokens, $n), '\\'));
+				$called = basename(str_replace('\\', '/', $called));
+				if(in_array($called, $blockedFunctions, true) || in_array($called, $blockedMethods, true)) {
+					return "Preview-only mode blocked mutating eval_php callback: $called().";
+				}
+			}
+		}
+
+		return '';
+	}
+
+	/**
+	 * Are include/require statements allowed in eval_php?
+	 *
+	 * @return bool
+	 *
+	 */
+	protected function allowEvalPhpIncludeRequire(): bool {
+		return (bool) $this->at->get('engineer_allow_include');
 	}
 
 	/**
@@ -2116,6 +2205,21 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		if($prev === '->' || $prev === '::') return false;
 		if(is_array($prev) && in_array($prev[0], [ T_FUNCTION, T_NEW ], true)) return false;
 		return true;
+	}
+
+	/**
+	 * Is the token at index n being called as an object/static method?
+	 *
+	 * @param array $tokens
+	 * @param int $n
+	 * @return bool
+	 *
+	 */
+	protected function isEvalPhpMethodCall(array $tokens, int $n): bool {
+		$next = $this->nextEvalPhpSignificantToken($tokens, $n + 1);
+		if($next !== '(') return false;
+		$prev = $this->prevEvalPhpSignificantToken($tokens, $n - 1);
+		return $prev === '->' || $prev === '::';
 	}
 
 	/**

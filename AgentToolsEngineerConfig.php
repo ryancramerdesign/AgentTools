@@ -129,6 +129,16 @@ class AgentToolsEngineerConfig extends Wire {
 		$f->val((int) $this->at->get('engineer_readonly'));
 		$f->columnWidth = 50;
 		$outerFs->add($f);
+
+		/** @var InputfieldToggle $f */
+		$f = $modules->get('InputfieldToggle');
+		$f->attr('name', 'engineer_allow_include');
+		$f->label = $this->_('Allow include/require in eval_php?');
+		$f->description = $this->_('When enabled, Engineer tools may use PHP include/require statements from eval_php.');
+		$f->notes = $this->_('Leave disabled unless trusted agents need to load site-specific PHP classes that are not autoloaded. Shell/process execution and function/class declarations remain blocked.');
+		$f->val((int) $this->at->get('engineer_allow_include'));
+		$f->columnWidth = 50;
+		$outerFs->add($f);
 		
 		/** @var InputfieldInteger $f */
 		$f = $modules->get('InputfieldInteger');

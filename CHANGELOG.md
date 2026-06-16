@@ -1,5 +1,22 @@
 # Changelog
 
+## Version 23
+
+### Page Engineer
+
+- Added a collapsible conversation history view to Page Engineer fields, so
+  editors can review prior requests and responses without clearing the field.
+- Strengthened Preview only mode with runtime `eval_php` validation that blocks
+  common page, database, and file mutation calls before preview code executes.
+- Preserved Preview only mode through background Page Engineer jobs.
+
+### Engineer
+
+- Added an admin setting to allow `include`/`require` in `eval_php` only when a
+  trusted site needs it, while keeping the default restriction in place.
+
+---
+
 ## Version 22
 
 ### Page Engineer
