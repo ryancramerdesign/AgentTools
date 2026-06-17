@@ -46,7 +46,7 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 			'title' => 'Agent Tools',
 			'summary' => "Enables AI coding agents to access ProcessWire's API and provides a database migration system.",
 			'icon' => 'at',
-			'version' => 23,
+			'version' => 24,
 			'author' => 'Ryan Cramer, Claude (Anthropic), GPT 5.5 Codex',
 			'requires' => 'ProcessWire>=3.0.255, PHP>=8.0.0',
 			'installs' => 'ProcessAgentTools, FieldtypePageEngineer',
@@ -345,8 +345,18 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 	public function renderHelp(array $help = [], $label = 'Usage') {
 		if(empty($help)) $help = $this->cliHelp();
 		$maxCodeLength = 0;
+		$description = [];
+		$note = [];
 
 		foreach($help as $code => $desc) {
+			if($code === ':description') {
+				$description = is_array($desc) ? $desc : [ $desc ];
+				continue;
+			}
+			if($code === ':note') {
+				$note = is_array($desc) ? $desc : [ $desc ];
+				continue;
+			}
 			$length = strlen($code);
 			if($length > $maxCodeLength) $maxCodeLength = $length;
 		}
@@ -358,9 +368,20 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 			"\n======================" .
 			"\n$label:\n";
 
+		if(count($description)) {
+			foreach($description as $line) $out .= "  $line\n";
+			$out .= "\n";
+		}
+
 		foreach($help as $code => $desc) {
+			if($code === ':description' || $code === ':note') continue;
 			while(strlen($code) < $maxCodeLength) $code .= ' ';
 			$out .= "  $code $desc\n";
+		}
+
+		if(count($note)) {
+			$out .= "\n";
+			foreach($note as $line) $out .= "  $line\n";
 		}
 
 		return $out;

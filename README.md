@@ -333,9 +333,29 @@ All commands are run from your ProcessWire root directory (where `index.php` liv
 
 | Command | Description |
 |---------|-------------|
-| `php index.php --at-migrations-apply` | Apply all pending migrations |
-| `php index.php --at-migrations-list` | List all migrations and their status (applied/pending) |
-| `php index.php --at-migrations-test` | Preview pending migrations without applying them |
+| `php index.php --at-migrations-apply [--file=FILE\|--name=NAME] [--limit=N] [--dry-run] [--force]` | Apply pending migrations, optionally filtered |
+| `php index.php --at-migrations-list [--file=FILE\|--name=NAME]` | List all migrations and their status (applied/pending) |
+| `php index.php --at-migrations-test [--file=FILE\|--name=NAME] [--limit=N]` | Preview pending migrations without applying them |
+| `php index.php --at-migrations-rerun --file=FILE\|--name=NAME [--dry-run]` | Re-run one migration even if already applied |
+
+Migration command flags:
+
+| Flag | Commands | Description |
+|------|----------|-------------|
+| `--file=FILENAME.php` | `apply`, `test`, `list`, `rerun` | Select one exact migration filename |
+| `--name=NAME` | `apply`, `test`, `list`, `rerun` | Select one migration by unique full or partial name |
+| `--limit=N` | `apply`, `test` | Limit to the next N selected pending migrations |
+| `--dry-run` | `apply`, `rerun` | Preview selected migrations without applying them |
+| `--force` | `apply` | Re-run the selected migration even if it is already applied; requires `--file` or `--name` |
+
+Examples:
+
+```bash
+php index.php --at-migrations-test --limit=1
+php index.php --at-migrations-apply --file=20260617123000_add-blog-fields.php
+php index.php --at-migrations-apply --name=add-blog-fields --dry-run
+php index.php --at-migrations-rerun --name=add-blog-fields
+```
 
 ### Site map commands
 

@@ -32,9 +32,10 @@ All commands are run from the ProcessWire root directory (where `index.php` live
 | `php index.php --at-cli` | Opens the agent CLI for interactive API access |
 | `php index.php --at-eval 'CODE'` | Evaluate a PHP expression inline |
 | `echo 'CODE' \| php index.php --at-stdin` | Evaluate multi-line PHP code from stdin |
-| `php index.php --at-migrations-apply` | Apply all pending migrations |
-| `php index.php --at-migrations-list` | List migrations and their status |
-| `php index.php --at-migrations-test` | Preview pending without applying |
+| `php index.php --at-migrations-apply [--file=FILE\|--name=NAME] [--limit=N] [--dry-run] [--force]` | Apply pending migrations, optionally filtered |
+| `php index.php --at-migrations-list [--file=FILE\|--name=NAME]` | List migrations and their status |
+| `php index.php --at-migrations-test [--file=FILE\|--name=NAME] [--limit=N]` | Preview pending migrations without applying |
+| `php index.php --at-migrations-rerun --file=FILE\|--name=NAME [--dry-run]` | Re-run one migration even if already applied |
 | `php index.php --at-sitemap-generate` | Generate a JSON site map to `site/assets/at/site-map.json` |
 | `php index.php --at-sitemap-generate-schema` | Generate a schema JSON to `site/assets/at/site-map-schema.json` |
 | `php index.php --at-engineer "REQUEST"` | Ask the Engineer a question or request a change |
@@ -272,3 +273,27 @@ echo "- $name has been applied\n";
 ~~~~~
 php index.php --at-migrations-apply
 ~~~~~
+
+By default this applies every pending migration in timestamp order. To apply or
+preview a smaller set, use the documented migration flags:
+
+| Flag | Commands | Purpose |
+|------|----------|---------|
+| `--file=FILENAME.php` | `apply`, `test`, `list`, `rerun` | Select one exact migration filename |
+| `--name=NAME` | `apply`, `test`, `list`, `rerun` | Select one migration by unique full or partial name |
+| `--limit=N` | `apply`, `test` | Limit to the next N selected pending migrations |
+| `--dry-run` | `apply`, `rerun` | Preview selected migrations without applying them |
+| `--force` | `apply` | Re-run the selected migration even if it is already applied; requires `--file` or `--name` |
+
+Examples:
+
+~~~~~
+php index.php --at-migrations-test --limit=1
+php index.php --at-migrations-apply --file=20260617123000_add-blog-fields.php
+php index.php --at-migrations-apply --name=add-blog-fields --dry-run
+php index.php --at-migrations-rerun --name=add-blog-fields
+php index.php --at-migrations-apply --file=20260617123000_add-blog-fields.php --force
+~~~~~
+
+Agents should use only the documented migration flags above. Do not invent custom
+migration flags or ad-hoc arguments.

@@ -19,6 +19,7 @@ Run from the ProcessWire root directory (where `index.php` lives):
 | `php index.php --at-migrations-apply` | Apply all pending migrations |
 | `php index.php --at-migrations-list` | List migrations and their status |
 | `php index.php --at-migrations-test` | Preview pending without applying |
+| `php index.php --at-migrations-rerun --file=FILE` | Re-run one migration even if already applied |
 | `php index.php --at-sitemap-generate` | Generate a JSON site map to `site/assets/at/site-map.json` |
 | `php index.php --at-sitemap-generate-schema` | Generate a schema JSON to `site/assets/at/site-map-schema.json` |
 | `php index.php --at-cli` | Open an interactive agent CLI session |
@@ -57,6 +58,19 @@ Migration files live in `site/assets/at/migrations/` and are named:
 
 The applied migrations registry is stored in the database (AgentTools module config),
 so it is never overwritten by rsync or file transfers.
+
+Migration CLI flags:
+
+| Flag | Commands | Purpose |
+|------|----------|---------|
+| `--file=FILENAME.php` | `apply`, `test`, `list`, `rerun` | Select one exact migration filename |
+| `--name=NAME` | `apply`, `test`, `list`, `rerun` | Select one migration by unique full or partial name |
+| `--limit=N` | `apply`, `test` | Limit to the next N selected pending migrations |
+| `--dry-run` | `apply`, `rerun` | Preview selected migrations without applying them |
+| `--force` | `apply` | Re-run the selected migration even if it is already applied; requires `--file` or `--name` |
+
+Agents should use these documented migration flags only. Do not invent unsupported
+flag combinations or ad-hoc migration arguments not listed here.
 
 Migrations can also be applied from the ProcessWire admin at **Setup > Agent Tools**.
 

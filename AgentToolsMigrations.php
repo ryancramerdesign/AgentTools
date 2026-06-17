@@ -14,9 +14,17 @@ class AgentToolsMigrations extends AgentToolsHelper {
 	 */
 	public function cliHelp() {
 		return array_merge(parent::cliHelp(), [
-			"php index.php --at-migrations-apply" => "Apply all pending migrations",
-			"php index.php --at-migrations-list" => "List migrations and their status",
-			"php index.php --at-migrations-test" => "Preview pending without applying",
+			"php index.php --at-migrations-apply [options]" => "Apply pending migrations, optionally filtered",
+			"php index.php --at-migrations-list [options]" => "List migrations and their status",
+			"php index.php --at-migrations-test [options]" => "Preview pending migrations without applying",
+			"php index.php --at-migrations-rerun [options]" => "Re-run one migration even if already applied",
+			':note' => [
+				'Migration options: --file=FILE, --name=NAME, --limit=N, --dry-run, --force',
+				'                   --file and --name select one migration',
+				'                   --limit applies to apply and test',
+				'                   --dry-run previews apply or rerun without applying',
+				'                   --force applies to a selected apply or rerun',
+			],
 		]);
 	}
 	
@@ -32,7 +40,7 @@ class AgentToolsMigrations extends AgentToolsHelper {
 			echo $this->at->renderHelp($this->cliHelp(), 'Migrations usage');
 			return true;
 		}
-		if(!in_array($atAction, ['apply', 'list', 'test'], true)) return null;
+		if(!in_array($atAction, ['apply', 'list', 'test', 'rerun'], true)) return null;
 		$at = $this->at;
 		$fuel = $this->wire()->fuel->getArray();
 		extract($fuel);

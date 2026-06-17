@@ -1,5 +1,18 @@
 # Changelog
 
+## Version 24
+
+### Migrations
+
+- Added documented migration CLI flags for selecting one migration with
+  `--file` or `--name`, limiting pending runs with `--limit`, previewing
+  selected runs with `--dry-run`, and intentionally re-running one migration
+  with `--force` or `--at-migrations-rerun`.
+- Updated agent-facing docs and CLI help so agents have a defined migration
+  flag contract instead of inventing ad-hoc arguments.
+
+---
+
 ## Version 23
 
 ### Page Engineer
