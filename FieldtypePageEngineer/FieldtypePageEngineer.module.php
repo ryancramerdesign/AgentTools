@@ -157,6 +157,12 @@ class FieldtypePageEngineer extends Fieldtype implements Module {
 
 		$f->addHookAfter('processInput', function($e) use($t, $f, $page, $field, $values) {
 			$text = $f->val();
+			$input = $t->wire()->input;
+			if(!strlen($text) && !$input->post('_at_reset') && !$input->post('_at_undo')) {
+				$page->set($field->name, $values);
+				$f->val($values->getJson());
+				return;
+			}
 			$method = 'ProcessPageEdit::processSaveRedirect';
 			$t->addHookBefore($method, function($e) use($t, $text, $page, $field, $values) {
 				$at = $t->wire('at'); /** @var AgentTools $at */
