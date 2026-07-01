@@ -1,0 +1,184 @@
+<?php namespace ProcessWire;
+
+/**
+ * Fast, deterministic tests for AgentTools helper behavior.
+ *
+ */
+class WireTest_AgentTools extends WireTest {
+
+	/**
+	 * Temporary files created by tests.
+	 *
+	 * @var array
+	 *
+	 */
+	protected $tmpFiles = [];
+
+	/**
+	 * Temporary directories created by tests.
+	 *
+	 * @var array
+	 *
+	 */
+	protected $tmpDirs = [];
+
+	/**
+	 * Run tests.
+	 *
+	 */
+	public function execute() {
+		$at = $this->wire()->modules->get('AgentTools');
+		$this->check('AgentTools module is installed', true, $at instanceof AgentTools);
+
+		$this->testEvalValidation($at);
+		$this->testCliEvalParsing($at);
+		$this->testMigrationLint($at);
+		$this->testSchemaTemplateFields($at);
+	}
+
+	/**
+	 * Clean up temporary files.
+	 *
+	 */
+	public function finish() {
+		foreach(array_reverse($this->tmpFiles) as $file) {
+			if(is_file($file)) unlink($file);
+		}
+		foreach(array_reverse($this->tmpDirs) as $dir) {
+			if(is_dir($dir)) rmdir($dir);
+		}
+	}
+
+	/**
+	 * Test eval PHP validation, including read-only mutation blocking.
+	 *
+	 * @param AgentTools $at
+	 *
+	 */
+	protected function testEvalValidation(AgentTools $at) {
+		$engineer = $at->engineer();
+
+		$this->check('Read-only validation allows read snippets', '', $engineer->validateEvalPhp('echo $pages->count();', true, 'Read-only mode'));
+		$this->check('Read-only validation blocks ProcessWire save()', 'Read-only mode blocked mutating eval_php method: save().', $engineer->validateEvalPhp('$page->save();', true, 'Read-only mode'));
+		$this->check('Read-only validation blocks filesystem writes', 'Read-only mode blocked mutating eval_php function: file_put_contents().', $engineer->validateEvalPhp('file_put_contents("/tmp/at-test", "x");', true, 'Read-only mode'));
+		$this->check('Normal eval validation allows ProcessWire save() syntax', '', $engineer->validateEvalPhp('$page->save();'));
+	}
+
+	/**
+	 * Test CLI eval argument parsing and source normalization.
+	 *
+	 * @param AgentTools $at
+	 *
+	 */
+	protected function testCliEvalParsing(AgentTools $at) {
+		$options = $this->invokeProtected($at, 'parseCliEvalArgs', [[ '--readonly', 'echo 1;' ]]);
+		$this->check('Eval parser detects --readonly', true, $options['readOnly']);
+		$this->check('Eval parser keeps code after --readonly', 'echo 1;', $options['code']);
+		$this->check('Eval parser reports no error for valid readonly code', '', $options['error']);
+
+		$options = $this->invokeProtected($at, 'parseCliEvalArgs', [[ 'echo', '$pages->count();', '--readonly=false' ]]);
+		$this->check('Eval parser supports --readonly=false', false, $options['readOnly']);
+		$this->check('Eval parser joins code arguments', 'echo $pages->count();', $options['code']);
+
+		$options = $this->invokeProtected($at, 'parseCliEvalArgs', [[ '--unknown', 'echo 1;' ]]);
+		$this->check('Eval parser rejects unknown options', 'Unknown eval option: --unknown', $options['error']);
+
+		$normalized = $this->invokeProtected($at, 'normalizeCliEvalCode', [ "\xEF\xBB\xBF<?php echo \"ok\";\n" ]);
+		$this->check('Eval normalizer removes BOM and opening PHP tag', "echo \"ok\";\n", $normalized);
+
+		$normalized = $this->invokeProtected($at, 'normalizeCliEvalCode', [ "  echo \"ok\";\n" ]);
+		$this->check('Eval normalizer trims leading whitespace', "echo \"ok\";\n", $normalized);
+	}
+
+	/**
+	 * Test migration option parsing and static lint checks.
+	 *
+	 * @param AgentTools $at
+	 *
+	 */
+	protected function testMigrationLint(AgentTools $at) {
+		$migrations = $at->migrations();
+
+		$options = $this->invokeProtected($migrations, 'parseSelectionOptions', [[ '--file', '20260101000000_test.php' ]]);
+		$this->check('Migration parser accepts --file value', '20260101000000_test.php', $options['file']);
+		$this->check('Migration parser leaves --file parse error blank', '', $options['error']);
+
+		$options = $this->invokeProtected($migrations, 'parseSelectionOptions', [[ '--file=a.php', '--name=a' ]]);
+		$this->check('Migration parser rejects --file with --name', 'Use either --file or --name, not both.', $options['error']);
+
+		$dir = $this->makeTempDir();
+		$good = $dir . '20260101000000_add_subtitle.php';
+		$this->writeTempFile($good, "<?php namespace ProcessWire;\n\n\$name = wire('at')->migrations->getName(__FILE__);\necho \"# \$name\\n\\n\";\nif(\$fields->get('subtitle')) {\n\techo \"- Skipped existing field: subtitle\\n\";\n\treturn;\n}\necho \"- \$name has been applied\\n\";\n");
+
+		$result = $this->invokeProtected($migrations, 'lintFile', [ $good ]);
+		$this->check('Migration lint accepts standard migration fixture errors', [], $result['errors']);
+		$this->check('Migration lint accepts standard migration fixture warnings', [], $result['warnings']);
+
+		$bad = $dir . 'bad.php';
+		$this->writeTempFile($bad, "<?php echo \"not namespaced\";\n");
+		$result = $this->invokeProtected($migrations, 'lintFile', [ $bad ]);
+		$this->check('Migration lint catches bad filename', true, in_array('Filename should match YYYYMMDDhhmmss_description.php.', $result['errors'], true));
+		$this->check('Migration lint catches missing namespace', true, in_array('File should begin with "<?php namespace ProcessWire;".', $result['errors'], true));
+		$this->check('Migration lint warns about missing getName()', true, in_array('Missing standard $name assignment with wire(\'at\')->migrations->getName(__FILE__).', $result['warnings'], true));
+	}
+
+	/**
+	 * Test schema template data includes ordered template fields.
+	 *
+	 * @param AgentTools $at
+	 *
+	 */
+	protected function testSchemaTemplateFields(AgentTools $at) {
+		$sitemap = $at->sitemap();
+		$templates = $this->invokeProtected($sitemap, 'getSchemaTemplatesData');
+		$this->check('Schema template data is an array', true, is_array($templates));
+		$this->check('Schema contains home template', true, isset($templates['home']));
+		$this->check('Home template includes fields array', true, isset($templates['home']['fields']) && is_array($templates['home']['fields']));
+		$this->check('Home template fields include title', true, in_array('title', $templates['home']['fields'], true));
+	}
+
+	/**
+	 * Invoke a protected method for focused helper testing.
+	 *
+	 * @param object $object
+	 * @param string $method
+	 * @param array $args
+	 * @return mixed
+	 *
+	 */
+	protected function invokeProtected($object, string $method, array $args = []) {
+		$reflection = new \ReflectionMethod($object, $method);
+		$reflection->setAccessible(true);
+		return $reflection->invokeArgs($object, $args);
+	}
+
+	/**
+	 * Make a temporary directory.
+	 *
+	 * @return string
+	 *
+	 */
+	protected function makeTempDir(): string {
+		$base = rtrim(sys_get_temp_dir(), DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR;
+		$dir = $base . 'agenttools-test-' . uniqid('', true) . DIRECTORY_SEPARATOR;
+		if(!mkdir($dir, 0700, true) && !is_dir($dir)) {
+			$this->fail("Unable to create temp dir: $dir");
+		}
+		$this->tmpDirs[] = $dir;
+		return $dir;
+	}
+
+	/**
+	 * Write a temporary file and remember it for cleanup.
+	 *
+	 * @param string $file
+	 * @param string $content
+	 *
+	 */
+	protected function writeTempFile(string $file, string $content) {
+		if(file_put_contents($file, $content) === false) {
+			$this->fail("Unable to write temp file: $file");
+		}
+		$this->tmpFiles[] = $file;
+	}
+}
