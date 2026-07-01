@@ -1,5 +1,16 @@
 # Changelog
 
+## Version 25
+
+### CLI
+
+- Added `--readonly` for `--at-eval` and `--at-stdin`, using runtime validation
+  to block common ProcessWire, database, and filesystem mutation calls.
+- Added `--at-migrations-lint` to check migration filenames, PHP syntax, and
+  AgentTools migration conventions without applying migrations.
+
+---
+
 ## Version 24
 
 ### Migrations

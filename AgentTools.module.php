@@ -46,7 +46,7 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 			'title' => 'Agent Tools',
 			'summary' => "Enables AI coding agents to access ProcessWire's API and provides a database migration system.",
 			'icon' => 'at',
-			'version' => 24,
+			'version' => 25,
 			'author' => 'Ryan Cramer, Claude (Anthropic), GPT 5.5 Codex',
 			'requires' => 'ProcessWire>=3.0.255, PHP>=8.0.0',
 			'installs' => 'ProcessAgentTools, FieldtypePageEngineer',
@@ -204,14 +204,26 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 				echo "ERROR: Unable to locate agent_cli.php file\n";
 			}
 
-		} else if($atAction === 'eval' && !empty($GLOBALS['argv'][2])) {
+		} else if($atAction === 'eval' && count($GLOBALS['argv']) > 2) {
 			$showHelpOnFailure = false;
-			$success = $this->cliEval($GLOBALS['argv'][2], $fuel);
+			$evalOptions = $this->parseCliEvalArgs(array_slice($GLOBALS['argv'], 2));
+			if($evalOptions['error']) {
+				echo "ERROR: {$evalOptions['error']}\n";
+				$success = false;
+			} else {
+				$success = $this->cliEval($evalOptions['code'], $fuel, [ 'readOnly' => $evalOptions['readOnly'] ]);
+			}
 
 		} else if($atAction === 'stdin') {
 			$showHelpOnFailure = false;
 			$code = file_get_contents('php://stdin');
-			if(strlen(trim($code))) $success = $this->cliEval($code, $fuel);
+			$evalOptions = $this->parseCliEvalArgs(array_slice($GLOBALS['argv'], 2), false);
+			if($evalOptions['error']) {
+				echo "ERROR: {$evalOptions['error']}\n";
+				$success = false;
+			} else if(strlen(trim($code))) {
+				$success = $this->cliEval($code, $fuel, [ 'readOnly' => $evalOptions['readOnly'] ]);
+			}
 
 		} else if($atAction === 'cron') {
 			$showHelpOnFailure = false;
@@ -260,10 +272,11 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 	 *
 	 * @param string $code PHP code to evaluate, optionally with opening <?php tag
 	 * @param array $fuel ProcessWire API variables
+	 * @param array $options
 	 * @return bool
 	 *
 	 */
-	protected function cliEval($code, array $fuel) {
+	protected function cliEval($code, array $fuel, array $options = []) {
 		$at = $this;
 		extract($fuel);
 		$code = $this->normalizeCliEvalCode($code);
@@ -276,7 +289,8 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 			$code = 'namespace ProcessWire; ' . $code;
 		}
 		$code = $declare . $code;
-		$validationError = $this->engineer->validateEvalPhp($code);
+		$readOnly = !empty($options['readOnly']);
+		$validationError = $this->engineer->validateEvalPhp($code, $readOnly, 'Read-only mode');
 		if($validationError !== '') {
 			echo "ERROR: $validationError\n";
 			return false;
@@ -289,6 +303,45 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 			echo "  Line: " . $e->getLine() . "\n";
 			return false;
 		}
+	}
+
+	/**
+	 * Parse --at-eval/--at-stdin arguments.
+	 *
+	 * @param array $args
+	 * @param bool $expectCode
+	 * @return array
+	 *
+	 */
+	protected function parseCliEvalArgs(array $args, bool $expectCode = true): array {
+		$options = [
+			'code' => '',
+			'readOnly' => false,
+			'error' => '',
+		];
+		$codeParts = [];
+		foreach($args as $arg) {
+			$arg = (string) $arg;
+			if($arg === '--readonly' || $arg === '--read-only') {
+				$options['readOnly'] = true;
+				continue;
+			}
+			if(strpos($arg, '--readonly=') === 0 || strpos($arg, '--read-only=') === 0) {
+				$value = strtolower(substr($arg, strpos($arg, '=') + 1));
+				$options['readOnly'] = !in_array($value, ['', '0', 'false', 'no', 'off'], true);
+				continue;
+			}
+			if(strpos($arg, '--') === 0) {
+				$options['error'] = "Unknown eval option: $arg";
+				return $options;
+			}
+			$codeParts[] = $arg;
+		}
+		if($expectCode) {
+			$options['code'] = trim(implode(' ', $codeParts));
+			if($options['code'] === '') $options['error'] = 'No code provided.';
+		}
+		return $options;
 	}
 
 	/**
@@ -327,8 +380,8 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 	protected function cliHelp() {
 		$help = [
 			"php index.php --at-cli" => "Used by AI agents to work with the ProcessWire API",
-			"php index.php --at-eval 'CODE'" => "Evaluate a PHP expression",
-			"echo 'CODE' | php index.php --at-stdin" => "Evaluate PHP code from stdin",
+			"php index.php --at-eval [--readonly] 'CODE'" => "Evaluate a PHP expression",
+			"echo 'CODE' | php index.php --at-stdin [--readonly]" => "Evaluate PHP code from stdin",
 		];
 		foreach($this->getHelpers() as $helper) {
 			$help += $helper->cliHelp();

@@ -42,6 +42,15 @@ If the command runner rewrites `$p` before PHP receives it, switch to
 `--at-stdin` with a single-quoted heredoc. In Docker-like environments where that
 transport still fails, use the wrapper's `eval-b64` mode.
 
+Use `--readonly` for inspection-only snippets on unfamiliar sites:
+
+```bash
+php index.php --at-eval --readonly 'echo wire()->pages->count() . " pages\n";'
+```
+
+Read-only mode validates code before it runs and blocks common ProcessWire,
+database, and filesystem mutation calls.
+
 ## --at-stdin
 
 Evaluate multi-line PHP from stdin. Use a **single-quoted heredoc** (`<<'PHP'`) to prevent the shell from expanding PHP `$variables`:
@@ -62,6 +71,14 @@ Without the single-quoted delimiter, bash expands `$items`, `$item`, etc. before
 so generated PHP files can be piped directly.
 
 The `ProcessWire` namespace is injected automatically, same as `--at-eval`.
+
+`--at-stdin` also supports `--readonly`:
+
+```bash
+cat <<'PHP' | php index.php --at-stdin --readonly
+echo $templates->get('home')->name . " template\n";
+PHP
+```
 
 **Prefer `--at-stdin` over `--at-eval`** for anything beyond a trivial one-liner.
 

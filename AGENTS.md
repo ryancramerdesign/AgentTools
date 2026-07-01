@@ -14,11 +14,12 @@ Run from the ProcessWire root directory (where `index.php` lives):
 
 | Command | Purpose |
 |---------|---------|
-| `php index.php --at-eval 'CODE'` | Evaluate a PHP expression with full PW API access |
-| `echo 'CODE' \| php index.php --at-stdin` | Evaluate multi-line PHP code from stdin |
+| `php index.php --at-eval [--readonly] 'CODE'` | Evaluate a PHP expression with full PW API access |
+| `echo 'CODE' \| php index.php --at-stdin [--readonly]` | Evaluate multi-line PHP code from stdin |
 | `php index.php --at-migrations-apply` | Apply all pending migrations |
 | `php index.php --at-migrations-list` | List migrations and their status |
 | `php index.php --at-migrations-test` | Preview pending without applying |
+| `php index.php --at-migrations-lint` | Check migration syntax and AgentTools conventions |
 | `php index.php --at-migrations-rerun --file=FILE` | Re-run one migration even if already applied |
 | `php index.php --at-sitemap-generate` | Generate a JSON site map to `site/assets/at/site-map.json` |
 | `php index.php --at-sitemap-generate-schema` | Generate a schema JSON to `site/assets/at/site-map-schema.json` |
@@ -63,14 +64,18 @@ Migration CLI flags:
 
 | Flag | Commands | Purpose |
 |------|----------|---------|
-| `--file=FILENAME.php` | `apply`, `test`, `list`, `rerun` | Select one exact migration filename |
-| `--name=NAME` | `apply`, `test`, `list`, `rerun` | Select one migration by unique full or partial name |
+| `--file=FILENAME.php` | `apply`, `test`, `list`, `lint`, `rerun` | Select one exact migration filename |
+| `--name=NAME` | `apply`, `test`, `list`, `lint`, `rerun` | Select one migration by unique full or partial name |
 | `--limit=N` | `apply`, `test` | Limit to the next N selected pending migrations |
 | `--dry-run` | `apply`, `rerun` | Preview selected migrations without applying them |
 | `--force` | `apply` | Re-run the selected migration even if it is already applied; requires `--file` or `--name` |
 
 Agents should use these documented migration flags only. Do not invent unsupported
 flag combinations or ad-hoc migration arguments not listed here.
+
+Use `--readonly` with `--at-eval` or `--at-stdin` for inspection-only snippets on
+unfamiliar sites. Read-only mode blocks common ProcessWire, database, and
+filesystem mutation calls before code runs.
 
 Migrations can also be applied from the ProcessWire admin at **Setup > Agent Tools**.
 

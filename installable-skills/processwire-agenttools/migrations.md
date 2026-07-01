@@ -78,6 +78,98 @@ if(!$templates->get('blog')) {
 }
 ```
 
+## Defensive recipes
+
+Use these small patterns when building migrations. They keep files safe to
+re-run and easier to review.
+
+Create a field only when missing:
+
+```php
+$field = $fields->get('subtitle');
+if(!$field) {
+    $field = new Field();
+    $field->type = $modules->get('FieldtypeText');
+    $field->name = 'subtitle';
+    $field->label = 'Subtitle';
+    $field->save();
+    echo "- Created field: subtitle\n";
+} else {
+    echo "- Skipped existing field: subtitle\n";
+}
+```
+
+Add a field to a template in order:
+
+```php
+$template = $templates->get('blog-post');
+$field = $fields->get('subtitle');
+if(!$template) {
+    echo "- Error: template 'blog-post' does not exist.\n";
+    return;
+}
+if(!$field) {
+    echo "- Error: field 'subtitle' does not exist.\n";
+    return;
+}
+
+$fieldgroup = $template->fieldgroup;
+if($fieldgroup->hasField($field)) {
+    echo "- Skipped existing field on template: subtitle\n";
+} else {
+    $fieldgroup->add($field);
+    if($fieldgroup->hasField('summary')) {
+        $fieldgroup->insertAfter($field, $fieldgroup->getField('summary'));
+    }
+    $fieldgroup->save();
+    echo "- Added field 'subtitle' to template 'blog-post'\n";
+}
+```
+
+Create a template with its fieldgroup only when missing:
+
+```php
+if($templates->get('event')) {
+    echo "- Skipped existing template: event\n";
+} else {
+    $fieldgroup = new Fieldgroup();
+    $fieldgroup->name = 'event';
+    $fieldgroup->add($fields->get('title'));
+    $fieldgroup->add($fields->get('body'));
+    $fieldgroup->save();
+
+    $template = new Template();
+    $template->name = 'event';
+    $template->fieldgroup = $fieldgroup;
+    $template->save();
+    echo "- Created template: event\n";
+}
+```
+
+Create a page only when missing under the expected parent:
+
+```php
+$parent = $pages->get('/blog/');
+$template = $templates->get('blog-post');
+if(!$parent->id || !$template) {
+    echo "- Error: required parent or template is missing.\n";
+    return;
+}
+
+$page = $pages->get("parent_id={$parent->id}, name=hello-world, include=all");
+if($page->id) {
+    echo "- Skipped existing page: {$page->path}\n";
+} else {
+    $page = new Page();
+    $page->template = $template;
+    $page->parent = $parent;
+    $page->name = 'hello-world';
+    $page->title = 'Hello World';
+    $page->save();
+    echo "- Created page: {$page->path}\n";
+}
+```
+
 ## Output format
 
 - Start with `echo "# $name\n\n";`
@@ -100,13 +192,18 @@ if(!$templates->get('blog')) {
 | `php index.php --at-migrations-apply` | Apply all pending |
 | `php index.php --at-migrations-list` | Show status of all |
 | `php index.php --at-migrations-test` | Preview without applying |
+| `php index.php --at-migrations-lint` | Check syntax and AgentTools conventions |
+| `php index.php --at-migrations-rerun --file=FILE` | Re-run one migration |
 
 Migrations can also be applied from the admin: **Setup > Agent Tools**.
 
 If direct PHP commands are unreliable in a Docker or similar environment, the
 compatibility wrapper exposes the same modes as
 `bash .agents/skills/processwire-agenttools/scripts/pw-at.sh migrations-apply`,
-`migrations-list`, and `migrations-test`.
+`migrations-list`, `migrations-test`, `migrations-lint`, and `migrations-rerun`.
+
+Use `--at-migrations-lint` before applying newly generated migrations when you
+want a cheap syntax and convention check that does not execute migration files.
 
 ## Verifying after apply
 

@@ -906,9 +906,9 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			"Use the site_info tool to retrieve information about this site. " .
 			"Call with type='pages' for a map of the site's page tree, type='schema' for the site's " .
 			"fields and templates structure, or type='modules' for a list of all installed modules. " .
-			"Schema output is JSON with fields, fieldgroups, and templates; fieldgroups include " .
-			"ordered fields arrays and per-field context overrides, which are useful when adding " .
-			"fields before or after existing fields. Modules output is useful for knowing whether " .
+			"Schema output is JSON with fields, fieldgroups, and templates; templates include " .
+			"ordered fields arrays, and fieldgroups include per-field context overrides. These are " .
+			"useful when adding fields before or after existing fields. Modules output is useful for knowing whether " .
 			"modules like FormBuilder, ProCache, or specific Fieldtypes are available. " .
 			"Fetch only what the request requires.\n\n" .
 
@@ -1291,8 +1291,8 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		$siteInfoDesc =
 			"Retrieve information about this ProcessWire site. Use type='pages' for the page tree, " .
 			"type='schema' for JSON containing fields, fieldgroups, and templates, or type='modules' " .
-			"for a list of all installed modules. Schema fieldgroups include ordered fields arrays " .
-			"and per-field context overrides.";
+			"for a list of all installed modules. Schema templates include ordered fields arrays, " .
+			"and fieldgroups include per-field context overrides.";
 
 		$siteInfoParams = [
 			'type' => 'object',
@@ -1300,7 +1300,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 				'type' => [
 					'type' => 'string',
 					'enum' => ['pages', 'schema', 'modules'],
-					'description' => "Use 'pages' for the site page tree, 'schema' for fields/fieldgroups/templates with ordered fieldgroups, 'modules' for installed modules",
+					'description' => "Use 'pages' for the site page tree, 'schema' for fields/fieldgroups/templates with ordered template fields, 'modules' for installed modules",
 				],
 				'refresh' => [
 					'type' => 'boolean',
@@ -1996,7 +1996,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	 * @return string Error message, or blank string when allowed
 	 *
 	 */
-	public function validateEvalPhp(string $code, bool $dryRun = false): string {
+	public function validateEvalPhp(string $code, bool $dryRun = false, string $dryRunLabel = 'Preview-only mode'): string {
 		$blockedFunctions = [
 			'exec',
 			'shell_exec',
@@ -2038,7 +2038,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			}
 		}
 		if($dryRun) {
-			$dryRunError = $this->validateDryRunEvalPhp($tokens);
+			$dryRunError = $this->validateDryRunEvalPhp($tokens, $dryRunLabel);
 			if($dryRunError !== '') return $dryRunError;
 		}
 		return '';
@@ -2051,10 +2051,11 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	 * must not call common ProcessWire/PHP mutation APIs.
 	 *
 	 * @param array $tokens
+	 * @param string $label
 	 * @return string
 	 *
 	 */
-	protected function validateDryRunEvalPhp(array $tokens): string {
+	protected function validateDryRunEvalPhp(array $tokens, string $label = 'Preview-only mode'): string {
 		$blockedFunctions = [
 			'chgrp',
 			'chmod',
@@ -2098,16 +2099,16 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			$name = $this->getEvalPhpTokenName($token);
 			if($name === '') continue;
 			if(in_array($name, $blockedFunctions, true) && $this->isEvalPhpFunctionCall($tokens, $n)) {
-				return "Preview-only mode blocked mutating eval_php function: $name().";
+				return "$label blocked mutating eval_php function: $name().";
 			}
 			if(in_array($name, $blockedMethods, true) && $this->isEvalPhpMethodCall($tokens, $n)) {
-				return "Preview-only mode blocked mutating eval_php method: $name().";
+				return "$label blocked mutating eval_php method: $name().";
 			}
 			if(($name === 'call_user_func' || $name === 'call_user_func_array') && $this->isEvalPhpFunctionCall($tokens, $n)) {
 				$called = strtolower(ltrim($this->getEvalPhpFirstCallArgumentString($tokens, $n), '\\'));
 				$called = basename(str_replace('\\', '/', $called));
 				if(in_array($called, $blockedFunctions, true) || in_array($called, $blockedMethods, true)) {
-					return "Preview-only mode blocked mutating eval_php callback: $called().";
+					return "$label blocked mutating eval_php callback: $called().";
 				}
 			}
 		}

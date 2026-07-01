@@ -30,11 +30,12 @@ All commands are run from the ProcessWire root directory (where `index.php` live
 | Command | Purpose |
 |---------|---------|
 | `php index.php --at-cli` | Opens the agent CLI for interactive API access |
-| `php index.php --at-eval 'CODE'` | Evaluate a PHP expression inline |
-| `echo 'CODE' \| php index.php --at-stdin` | Evaluate multi-line PHP code from stdin |
+| `php index.php --at-eval [--readonly] 'CODE'` | Evaluate a PHP expression inline |
+| `echo 'CODE' \| php index.php --at-stdin [--readonly]` | Evaluate multi-line PHP code from stdin |
 | `php index.php --at-migrations-apply [--file=FILE\|--name=NAME] [--limit=N] [--dry-run] [--force]` | Apply pending migrations, optionally filtered |
 | `php index.php --at-migrations-list [--file=FILE\|--name=NAME]` | List migrations and their status |
 | `php index.php --at-migrations-test [--file=FILE\|--name=NAME] [--limit=N]` | Preview pending migrations without applying |
+| `php index.php --at-migrations-lint [--file=FILE\|--name=NAME]` | Check migration syntax and AgentTools conventions without applying |
 | `php index.php --at-migrations-rerun --file=FILE\|--name=NAME [--dry-run]` | Re-run one migration even if already applied |
 | `php index.php --at-sitemap-generate` | Generate a JSON site map to `site/assets/at/site-map.json` |
 | `php index.php --at-sitemap-generate-schema` | Generate a schema JSON to `site/assets/at/site-map-schema.json` |
@@ -69,6 +70,17 @@ The single-quoted delimiter (`<<'PHP'`) prevents the shell from interpreting
 
 `--at-stdin` also accepts normal PHP file contents with an opening `<?php` tag,
 so generated PHP files can be piped directly.
+
+Add `--readonly` when the snippet is for inspection only:
+~~~~~
+php index.php --at-eval --readonly 'echo $pages->count() . " pages\n";'
+cat <<'PHP' | php index.php --at-stdin --readonly
+echo $templates->get('home')->name . " template\n";
+PHP
+~~~~~
+
+Read-only mode validates code before it runs and blocks common ProcessWire,
+database, and filesystem mutation calls.
 
 ---
 
@@ -242,6 +254,98 @@ if(!$templates->get('blog')) {
 }
 ~~~~~
 
+### Defensive migration recipes
+
+Use these small patterns when building migrations. They keep generated files
+safe to re-run and easier to review.
+
+**Create a field only when missing:**
+
+~~~~~
+$field = $fields->get('subtitle');
+if(!$field) {
+    $field = new Field();
+    $field->type = $modules->get('FieldtypeText');
+    $field->name = 'subtitle';
+    $field->label = 'Subtitle';
+    $field->save();
+    echo "- Created field: subtitle\n";
+} else {
+    echo "- Skipped existing field: subtitle\n";
+}
+~~~~~
+
+**Add a field to a template in order:**
+
+~~~~~
+$template = $templates->get('blog-post');
+$field = $fields->get('subtitle');
+if(!$template) {
+    echo "- Error: template 'blog-post' does not exist.\n";
+    return;
+}
+if(!$field) {
+    echo "- Error: field 'subtitle' does not exist.\n";
+    return;
+}
+
+$fieldgroup = $template->fieldgroup;
+if($fieldgroup->hasField($field)) {
+    echo "- Skipped existing field on template: subtitle\n";
+} else {
+    $fieldgroup->add($field);
+    if($fieldgroup->hasField('summary')) {
+        $fieldgroup->insertAfter($field, $fieldgroup->getField('summary'));
+    }
+    $fieldgroup->save();
+    echo "- Added field 'subtitle' to template 'blog-post'\n";
+}
+~~~~~
+
+**Create a template with its fieldgroup only when missing:**
+
+~~~~~
+if($templates->get('event')) {
+    echo "- Skipped existing template: event\n";
+} else {
+    $fieldgroup = new Fieldgroup();
+    $fieldgroup->name = 'event';
+    $fieldgroup->add($fields->get('title'));
+    $fieldgroup->add($fields->get('body'));
+    $fieldgroup->save();
+
+    $template = new Template();
+    $template->name = 'event';
+    $template->fieldgroup = $fieldgroup;
+    $template->save();
+    echo "- Created template: event\n";
+}
+~~~~~
+
+**Create a page only when missing under the expected parent:**
+
+~~~~~
+$parent = $pages->get('/blog/');
+$template = $templates->get('blog-post');
+if(!$parent->id || !$template) {
+    echo "- Error: required parent or template is missing.\n";
+    return;
+}
+
+$page = $pages->get("parent_id={$parent->id}, name=hello-world, include=all");
+if($page->id) {
+    echo "- Skipped existing page: {$page->path}\n";
+} else {
+    $page = new Page();
+    $page->template = $template;
+    $page->parent = $parent;
+    $page->name = 'hello-world';
+    $page->title = 'Hello World';
+    $page->save();
+    echo "- Created page: {$page->path}\n";
+}
+~~~~~
+
 ### Output format
 
 Migrations output plain text in markdown format. Rules:
@@ -279,8 +383,8 @@ preview a smaller set, use the documented migration flags:
 
 | Flag | Commands | Purpose |
 |------|----------|---------|
-| `--file=FILENAME.php` | `apply`, `test`, `list`, `rerun` | Select one exact migration filename |
-| `--name=NAME` | `apply`, `test`, `list`, `rerun` | Select one migration by unique full or partial name |
+| `--file=FILENAME.php` | `apply`, `test`, `list`, `lint`, `rerun` | Select one exact migration filename |
+| `--name=NAME` | `apply`, `test`, `list`, `lint`, `rerun` | Select one migration by unique full or partial name |
 | `--limit=N` | `apply`, `test` | Limit to the next N selected pending migrations |
 | `--dry-run` | `apply`, `rerun` | Preview selected migrations without applying them |
 | `--force` | `apply` | Re-run the selected migration even if it is already applied; requires `--file` or `--name` |
@@ -289,6 +393,8 @@ Examples:
 
 ~~~~~
 php index.php --at-migrations-test --limit=1
+php index.php --at-migrations-lint
+php index.php --at-migrations-lint --file=20260617123000_add-blog-fields.php
 php index.php --at-migrations-apply --file=20260617123000_add-blog-fields.php
 php index.php --at-migrations-apply --name=add-blog-fields --dry-run
 php index.php --at-migrations-rerun --name=add-blog-fields

@@ -12,6 +12,8 @@ Usage:
   scripts/pw-at.sh migrations-apply
   scripts/pw-at.sh migrations-list
   scripts/pw-at.sh migrations-test
+  scripts/pw-at.sh migrations-lint
+  scripts/pw-at.sh migrations-rerun --file=FILE
   scripts/pw-at.sh sitemap-generate
   scripts/pw-at.sh sitemap-generate-schema
   scripts/pw-at.sh engineer [--model=N] [--readonly] [--verbose] 'REQUEST'
@@ -101,8 +103,10 @@ case "$mode" in
   stdin-b64)
     [[ $# -eq 1 ]] || { echo "stdin-b64 requires exactly one base64 payload argument" >&2; exit 1; }
     ;;
-  stdin|cli|migrations-apply|migrations-list|migrations-test|sitemap-generate|sitemap-generate-schema)
+  stdin|cli|sitemap-generate|sitemap-generate-schema)
     [[ $# -eq 0 ]] || { echo "$mode does not accept positional arguments" >&2; exit 1; }
+    ;;
+  migrations-apply|migrations-list|migrations-test|migrations-lint|migrations-rerun)
     ;;
   engineer|engineer-migrate)
     [[ $# -ge 1 ]] || { echo "$mode requires a request string" >&2; exit 1; }
@@ -132,7 +136,10 @@ case "$mode" in
   cli)
     run_php --at-cli
     ;;
-  migrations-apply|migrations-list|migrations-test|sitemap-generate|sitemap-generate-schema)
+  migrations-apply|migrations-list|migrations-test|migrations-lint|migrations-rerun)
+    run_php "--at-$mode" "$@"
+    ;;
+  sitemap-generate|sitemap-generate-schema)
     run_php "--at-$mode"
     ;;
   engineer|engineer-migrate)

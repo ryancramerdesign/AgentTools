@@ -126,6 +126,7 @@ class AgentToolsSitemap extends AgentToolsHelper {
 			'generated' => date('Y-m-d H:i:s'),
 			'_readme' => [
 				'Fieldgroup-template matching: when a template has no "fieldgroup" property, its fieldgroup shares the same name as the template.',
+				'Templates include a "fields" array listing the fields assigned to the template in admin edit order.',
 				'Template properties are non-default values only. Absent properties use ProcessWire defaults.',
 				'Fieldgroup context: the "context" object keys are field names; values are property overrides that apply to that field when used in templates referencing this fieldgroup, taking precedence over the global field definition in "fields".',
 				'rolesPermissions: a `-` prefix on a permission name means it is revoked for that role rather than granted.',
@@ -224,6 +225,13 @@ class AgentToolsSitemap extends AgentToolsHelper {
 			// Include fieldgroup only when it differs from the template name (shared fieldgroup)
 			$fieldgroupName = $template->fieldgroup ? $template->fieldgroup->name : '';
 			if($fieldgroupName !== $template->name) $entry['fieldgroup'] = $fieldgroupName;
+			// Always include ordered template fields for quick schema inspection.
+			$entry['fields'] = [];
+			if($template->fieldgroup) {
+				foreach($template->fieldgroup as $field) {
+					$entry['fields'][] = $field->name;
+				}
+			}
 			// Include pageClass only when it differs from the PW default
 			$pageClass = $template->getPageClass();
 			if($pageClass !== 'ProcessWire\\Page') $entry['pageClass'] = $pageClass;

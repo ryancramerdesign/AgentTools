@@ -333,31 +333,37 @@ All commands are run from your ProcessWire root directory (where `index.php` liv
 
 ### Migration commands
 
-| Command | Description |
-|---------|-------------|
-| `php index.php --at-migrations-apply [--file=FILE\|--name=NAME] [--limit=N] [--dry-run] [--force]` | Apply pending migrations, optionally filtered |
-| `php index.php --at-migrations-list [--file=FILE\|--name=NAME]` | List all migrations and their status (applied/pending) |
-| `php index.php --at-migrations-test [--file=FILE\|--name=NAME] [--limit=N]` | Preview pending migrations without applying them |
-| `php index.php --at-migrations-rerun --file=FILE\|--name=NAME [--dry-run]` | Re-run one migration even if already applied |
+| Command                                                                                            | Description                                                        |
+|----------------------------------------------------------------------------------------------------|--------------------------------------------------------------------|
+| `php index.php --at-migrations-apply [--file=FILE\|--name=NAME] [--limit=N] [--dry-run] [--force]` | Apply pending migrations, optionally filtered                      |
+| `php index.php --at-migrations-list [--file=FILE\|--name=NAME]`                                    | List all migrations and their status (applied/pending)             |
+| `php index.php --at-migrations-test [--file=FILE\|--name=NAME] [--limit=N]`                        | Preview pending migrations without applying them                   |
+| `php index.php --at-migrations-lint [--file=FILE\|--name=NAME]`                                    | Check migration syntax and AgentTools conventions without applying |
+| `php index.php --at-migrations-rerun --file=FILE\|--name=NAME [--dry-run]`                         | Re-run one migration even if already applied                       |
 
 Migration command flags:
 
-| Flag | Commands | Description |
-|------|----------|-------------|
-| `--file=FILENAME.php` | `apply`, `test`, `list`, `rerun` | Select one exact migration filename |
-| `--name=NAME` | `apply`, `test`, `list`, `rerun` | Select one migration by unique full or partial name |
-| `--limit=N` | `apply`, `test` | Limit to the next N selected pending migrations |
-| `--dry-run` | `apply`, `rerun` | Preview selected migrations without applying them |
-| `--force` | `apply` | Re-run the selected migration even if it is already applied; requires `--file` or `--name` |
+| Flag                  | Commands                                 | Description                                                                                |
+|-----------------------|------------------------------------------|--------------------------------------------------------------------------------------------|
+| `--file=FILENAME.php` | `apply`, `test`, `list`, `lint`, `rerun` | Select one exact migration filename                                                        |
+| `--name=NAME`         | `apply`, `test`, `list`, `lint`, `rerun` | Select one migration by unique full or partial name                                        |
+| `--limit=N`           | `apply`, `test`                          | Limit to the next N selected pending migrations                                            |
+| `--dry-run`           | `apply`, `rerun`                         | Preview selected migrations without applying them                                          |
+| `--force`             | `apply`                                  | Re-run the selected migration even if it is already applied; requires `--file` or `--name` |
 
 Examples:
 
 ```bash
 php index.php --at-migrations-test --limit=1
+php index.php --at-migrations-lint
+php index.php --at-migrations-lint --file=20260617123000_add-blog-fields.php
 php index.php --at-migrations-apply --file=20260617123000_add-blog-fields.php
 php index.php --at-migrations-apply --name=add-blog-fields --dry-run
 php index.php --at-migrations-rerun --name=add-blog-fields
 ```
+
+For migration file structure and defensive field/template/page recipes, see
+[`agent_cli.md`](agent_cli.md).
 
 ### Site map commands
 
@@ -365,9 +371,9 @@ The site map gives AI agents a complete JSON overview of your ProcessWire instal
 templates, fields, pages, and modules — so they can answer questions and create accurate
 migrations without querying the database on every request.
 
-| Command | Description |
-|---------|-------------|
-| `php index.php --at-sitemap-generate` | Generate a site map to `site/assets/at/site-map.json` |
+| Command                                      | Description                                                    |
+|----------------------------------------------|----------------------------------------------------------------|
+| `php index.php --at-sitemap-generate`        | Generate a site map to `site/assets/at/site-map.json`          |
 | `php index.php --at-sitemap-generate-schema` | Generate a schema map to `site/assets/at/site-map-schema.json` |
 
 Run `--at-sitemap-generate` at the start of a session on an unfamiliar site. Run
@@ -381,24 +387,27 @@ after applying migrations.
 These commands give your AI agent direct access to the ProcessWire API
 from the command line without needing to enter an interactive session.
 
-| Command | Description |
-|---------|-------------|
-| `php index.php --at-eval 'CODE'` | Evaluate a PHP expression with full ProcessWire API access |
-| `echo 'CODE' \| php index.php --at-stdin` | Evaluate multi-line PHP code piped from stdin |
-| `php index.php --at-cli` | Open an interactive agent CLI session |
-| `php index.php --at-engineer "REQUEST"` | Ask the Engineer a question or request a change |
-| `php index.php --at-engineer-migrate "REQUEST"` | Have the Engineer create a migration; outputs the migration file path |
-| `php index.php --at-engineer-site-info pages\|schema\|modules [--refresh]` | Print generated site info JSON without calling an AI provider |
-| `php index.php --at-engineer-api-docs-list` | List available ProcessWire API.md documentation without calling an AI provider |
-| `php index.php --at-engineer-api-docs-get NAME` | Print a ProcessWire API.md documentation file without calling an AI provider |
-| `php index.php --at-engineer-api-docs-search TERM` | Search ProcessWire API.md documentation without calling an AI provider |
-| `php index.php --at-engineer-read-file PATH` | Read a local site file without calling an AI provider |
-| `php index.php --at-cron` | Process one pending AgentTools background job; intended for system cron |
+| Command                                                                    | Description                                                                    |
+|----------------------------------------------------------------------------|--------------------------------------------------------------------------------|
+| `php index.php --at-eval [--readonly] 'CODE'`                              | Evaluate a PHP expression with full ProcessWire API access                     |
+| `echo 'CODE' \| php index.php --at-stdin [--readonly]`                     | Evaluate multi-line PHP code piped from stdin                                  |
+| `php index.php --at-cli`                                                   | Open an interactive agent CLI session                                          |
+| `php index.php --at-engineer "REQUEST"`                                    | Ask the Engineer a question or request a change                                |
+| `php index.php --at-engineer-migrate "REQUEST"`                            | Have the Engineer create a migration; outputs the migration file path          |
+| `php index.php --at-engineer-site-info pages\|schema\|modules [--refresh]` | Print generated site info JSON without calling an AI provider                  |
+| `php index.php --at-engineer-api-docs-list`                                | List available ProcessWire API.md documentation without calling an AI provider |
+| `php index.php --at-engineer-api-docs-get NAME`                            | Print a ProcessWire API.md documentation file without calling an AI provider   |
+| `php index.php --at-engineer-api-docs-search TERM`                         | Search ProcessWire API.md documentation without calling an AI provider         |
+| `php index.php --at-engineer-read-file PATH`                               | Read a local site file without calling an AI provider                          |
+| `php index.php --at-cron`                                                  | Process one pending AgentTools background job; intended for system cron        |
 
 **`--at-eval` example** — ask your AI agent how many pages are on your site:
 ```
 php index.php --at-eval 'echo wire()->pages->count() . " pages\n";'
 ```
+
+Add `--readonly` for inspection-only snippets. It validates code before it runs
+and blocks common ProcessWire, database, and filesystem mutation calls.
 
 **`--at-stdin` example** — useful for multi-line code. Snippets may include an opening
 `<?php` tag when piping a normal PHP file:

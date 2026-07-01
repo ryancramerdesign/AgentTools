@@ -17,6 +17,7 @@ class AgentToolsMigrations extends AgentToolsHelper {
 			"php index.php --at-migrations-apply [options]" => "Apply pending migrations, optionally filtered",
 			"php index.php --at-migrations-list [options]" => "List migrations and their status",
 			"php index.php --at-migrations-test [options]" => "Preview pending migrations without applying",
+			"php index.php --at-migrations-lint [options]" => "Check migration syntax and AgentTools conventions without applying",
 			"php index.php --at-migrations-rerun [options]" => "Re-run one migration even if already applied",
 			':note' => [
 				'Migration options: --file=FILE, --name=NAME, --limit=N, --dry-run, --force',
@@ -40,12 +41,221 @@ class AgentToolsMigrations extends AgentToolsHelper {
 			echo $this->at->renderHelp($this->cliHelp(), 'Migrations usage');
 			return true;
 		}
+		if($atAction === 'lint') return $this->cliLint();
 		if(!in_array($atAction, ['apply', 'list', 'test', 'rerun'], true)) return null;
 		$at = $this->at;
 		$fuel = $this->wire()->fuel->getArray();
 		extract($fuel);
 		$success = include(__DIR__ . '/agent_migrate.php');
 		return $success;
+	}
+
+	/**
+	 * Execute migration lint CLI action.
+	 *
+	 * @return bool
+	 *
+	 */
+	protected function cliLint(): bool {
+		$options = $this->parseSelectionOptions(array_slice($_SERVER['argv'] ?? [], 2));
+		if($options['help']) {
+			echo $this->at->renderHelp($this->cliHelp(), 'Migrations usage');
+			return true;
+		}
+		if($options['error'] !== '') {
+			echo "ERROR: {$options['error']}\n\n";
+			echo $this->at->renderHelp($this->cliHelp(), 'Migrations usage');
+			return false;
+		}
+
+		$error = '';
+		$files = $this->getFilesForSelection($options, $error);
+		if($error !== '') {
+			echo "ERROR: $error\n\n";
+			return false;
+		}
+		if(empty($files)) {
+			echo "No migration files found.\n";
+			return true;
+		}
+
+		echo "\nMigration lint\n";
+		echo str_repeat('=', 60) . "\n";
+		$failures = 0;
+		$warnings = 0;
+		foreach($files as $file) {
+			$result = $this->lintFile($file);
+			echo basename($file) . "\n";
+			foreach($result['errors'] as $message) {
+				echo "  ERROR: $message\n";
+				$failures++;
+			}
+			foreach($result['warnings'] as $message) {
+				echo "  Warning: $message\n";
+				$warnings++;
+			}
+			if(empty($result['errors']) && empty($result['warnings'])) echo "  OK\n";
+		}
+
+		echo str_repeat('=', 60) . "\n";
+		echo "Checked: " . count($files) . " migration(s), $failures error(s), $warnings warning(s).\n\n";
+		return $failures === 0;
+	}
+
+	/**
+	 * Parse common migration selection options.
+	 *
+	 * @param array $args
+	 * @return array
+	 *
+	 */
+	protected function parseSelectionOptions(array $args): array {
+		$options = [
+			'file' => '',
+			'name' => '',
+			'help' => false,
+			'error' => '',
+		];
+		for($n = 0; $n < count($args); $n++) {
+			$arg = (string) $args[$n];
+			if($arg === '--help' || $arg === '-h') {
+				$options['help'] = true;
+				continue;
+			}
+			if($arg === '--file' || $arg === '--name') {
+				if(!isset($args[$n + 1]) || strpos((string) $args[$n + 1], '--') === 0) {
+					$options['error'] = "Missing value for $arg.";
+					break;
+				}
+				$options[substr($arg, 2)] = (string) $args[++$n];
+				continue;
+			}
+			if(strpos($arg, '--file=') === 0) {
+				$options['file'] = substr($arg, 7);
+				continue;
+			}
+			if(strpos($arg, '--name=') === 0) {
+				$options['name'] = substr($arg, 7);
+				continue;
+			}
+			$options['error'] = "Unknown migration lint option: $arg";
+			break;
+		}
+		$options['file'] = trim((string) $options['file']);
+		$options['name'] = trim((string) $options['name']);
+		if($options['file'] !== '' && $options['name'] !== '') {
+			$options['error'] = 'Use either --file or --name, not both.';
+		}
+		return $options;
+	}
+
+	/**
+	 * Get migration files matching common selection options.
+	 *
+	 * @param array $options
+	 * @param string $error
+	 * @return array
+	 *
+	 */
+	protected function getFilesForSelection(array $options, string &$error): array {
+		$error = '';
+		$migrationsDir = $this->at->getFilesPath('migrations');
+		if(!is_dir($migrationsDir)) {
+			$error = "Migrations directory does not exist: $migrationsDir";
+			return [];
+		}
+		$files = $this->getFiles($migrationsDir);
+		if(empty($files)) return [];
+		if($options['file'] !== '') {
+			$fileName = basename($options['file']);
+			$files = array_values(array_filter($files, function($file) use($fileName) {
+				return basename($file) === $fileName;
+			}));
+			if(empty($files)) $error = "Migration file not found: $fileName";
+			return $files;
+		}
+		if($options['name'] === '') return $files;
+
+		$name = strtolower((string) $options['name']);
+		$name = preg_replace('/\.php$/', '', $name);
+		$name = str_replace('_', '-', $name);
+		$matches = [];
+		foreach($files as $file) {
+			$base = strtolower(basename($file, '.php'));
+			$migrationName = strtolower(str_replace('_', '-', $this->getName($file)));
+			if($base === $name || $migrationName === $name || strpos($base, $name) !== false || strpos($migrationName, $name) !== false) {
+				$matches[] = $file;
+			}
+		}
+		if(empty($matches)) {
+			$error = "Migration name not found: {$options['name']}";
+		} else if(count($matches) > 1) {
+			$lines = ["Migration name is ambiguous: {$options['name']}"];
+			foreach($matches as $file) $lines[] = '  - ' . basename($file);
+			$lines[] = 'Use --file=FILE to select one exact migration.';
+			$error = implode("\n", $lines);
+		}
+		return $matches;
+	}
+
+	/**
+	 * Lint one migration file without executing it.
+	 *
+	 * @param string $file
+	 * @return array
+	 *
+	 */
+	protected function lintFile(string $file): array {
+		$result = [
+			'errors' => [],
+			'warnings' => [],
+		];
+		$basename = basename($file);
+		if(!preg_match('/^[0-9]{14}_[a-z0-9][a-z0-9_-]*\.php$/', $basename)) {
+			$result['errors'][] = 'Filename should match YYYYMMDDhhmmss_description.php.';
+		}
+		if(!is_file($file) || !is_readable($file)) {
+			$result['errors'][] = 'File is not readable.';
+			return $result;
+		}
+		$content = (string) file_get_contents($file);
+		if(function_exists('exec')) {
+			$syntaxError = $this->lintPhpSyntax($file);
+			if($syntaxError !== '') $result['errors'][] = $syntaxError;
+		} else {
+			$result['warnings'][] = 'PHP syntax check unavailable because exec() is disabled.';
+		}
+		if(strpos($content, '<?php namespace ProcessWire;') !== 0) {
+			$result['errors'][] = 'File should begin with "<?php namespace ProcessWire;".';
+		}
+		if(strpos($content, "wire('at')->migrations->getName(__FILE__)") === false && strpos($content, 'wire("at")->migrations->getName(__FILE__)') === false) {
+			$result['warnings'][] = 'Missing standard $name assignment with wire(\'at\')->migrations->getName(__FILE__).';
+		}
+		if(!preg_match('/\b(if|return)\b/s', $content)) {
+			$result['warnings'][] = 'No obvious idempotency guard found.';
+		}
+		if(strpos($content, 'has been applied') === false) {
+			$result['warnings'][] = 'No standard "has been applied" success message found.';
+		}
+		return $result;
+	}
+
+	/**
+	 * Run PHP syntax lint on a file.
+	 *
+	 * @param string $file
+	 * @return string
+	 *
+	 */
+	protected function lintPhpSyntax(string $file): string {
+		$php = defined('PHP_BINARY') && PHP_BINARY ? PHP_BINARY : 'php';
+		$cmd = escapeshellarg($php) . ' -l ' . escapeshellarg($file) . ' 2>&1';
+		$output = [];
+		$status = 0;
+		exec($cmd, $output, $status);
+		if($status === 0) return '';
+		$text = trim(implode("\n", $output));
+		return $text === '' ? 'PHP syntax check failed.' : $text;
 	}
 
 	/**

@@ -27,11 +27,13 @@ Run from the ProcessWire root directory (where `index.php` lives).
 
 | Command | Purpose |
 |---------|---------|
-| `php index.php --at-eval 'CODE'` | Evaluate a PHP expression with full PW API access |
-| `echo 'CODE' \| php index.php --at-stdin` | Evaluate multi-line PHP code from stdin |
+| `php index.php --at-eval [--readonly] 'CODE'` | Evaluate a PHP expression with full PW API access |
+| `echo 'CODE' \| php index.php --at-stdin [--readonly]` | Evaluate multi-line PHP code from stdin |
 | `php index.php --at-migrations-apply` | Apply all pending migrations |
 | `php index.php --at-migrations-list` | List migrations and their status |
 | `php index.php --at-migrations-test` | Preview pending without applying |
+| `php index.php --at-migrations-lint` | Check migration syntax and AgentTools conventions |
+| `php index.php --at-migrations-rerun --file=FILE` | Re-run one migration even if already applied |
 | `php index.php --at-sitemap-generate` | Generate site map JSON to `site/assets/at/site-map.json` |
 | `php index.php --at-sitemap-generate-schema` | Generate schema JSON to `site/assets/at/site-map-schema.json` |
 | `php index.php --at-cli` | Open interactive agent CLI session |
