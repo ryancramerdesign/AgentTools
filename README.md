@@ -1,3 +1,5 @@
+<img src="AgentTools.png" alt="Agent Tools" style="width:150px;float:right;">
+
 # Agent Tools module for ProcessWire
 
 Enables AI coding agents to access ProcessWire’s API. Also provides a content migration system and a page-editor AI assistant.

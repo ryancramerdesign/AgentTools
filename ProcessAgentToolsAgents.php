@@ -15,7 +15,7 @@ class ProcessAgentToolsAgents extends ProcessAgentToolsHelper {
 	public function executeAgents() {
 		$modules = $this->wire()->modules;
 		$at = $this->at;
-		$maxAgents = 15;
+		$maxAgents = 25;
 		$numAgents = 0;
 		$form = $modules->get('InputfieldForm'); /** @var InputfieldForm $form */
 		$form->attr('id', 'at-agents-form');

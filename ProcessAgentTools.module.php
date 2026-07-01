@@ -348,6 +348,11 @@ class ProcessAgentTools extends Process {
 		$input = $this->wire()->input;
 		$session = $this->wire()->session;
 
+		/* To work on later:
+		$atUrl = $this->wire()->config->urls($this);
+		$this->wire()->adminTheme->addExtraMarkup('content-head', "<img width='120' style='float:right' src='{$atUrl}AgentTools.png'>"); 
+		*/
+
 		$this->headline($this->label('engineer'));
 
 		if($this->at->get('engineer_suspicious') === 'all' && $this->at->isUserSuspicious()) {
