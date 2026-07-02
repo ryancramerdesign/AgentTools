@@ -24,7 +24,9 @@ ProcessWire API from the command line, and this module provides 3 distinct ways 
 Claude to do so. AI agents can also use the command line to create migrations, generate 
 JSON sitemaps that provide an overview of the entire ProcessWire installation, install
 AI agent skills into your ProcessWire installation. Further, AI agents connected through
-the command line interface (CLI) can do anything that the ProcessWire API can do. 
+the command line interface (CLI) can do anything that the ProcessWire API can do.
+AgentTools also includes a local stdio MCP server for read-only ProcessWire
+inspection tools in MCP-capable clients.
 
 ### Admin tools for you
 
@@ -164,6 +166,12 @@ Claude Code (below).
 
 ### Agent skill (optional)
 
+> Note that it is not necessary to install the agent skill if your AI agent has already read the
+/site/modules/AgentTools/AGENTS.md file. The agent skill is primarily useful for agent sessions new
+to your project, as they can self discover it in the `.agents/` directory off of the root of your
+ProcessWire installation. The /site/modules/AgentTools/AGENTS.md file is generally not self discovered
+by agents unless you point them to the AgentTools/ directory.
+
 The module ships with an installable agent skill in
 `installable-skills/processwire-agenttools/` — a set of markdown docs that teach
 AI coding agents how to use the CLI and migration system. Agents that support the
@@ -240,6 +248,54 @@ See the resulting post here: [ProcessWire and AI](https://processwire.com/blog/p
 
 - This migrations system is somewhat experimental and not intended to replace a mature system like RockMigrations.
 - File-based assets are not yet supported by migrations. 
+
+### MCP server
+
+AgentTools provides several read-only tools available through MCP. This is typically installed directly
+in your AI harness configuration. We'll cover the Codex App and Claude Desktop as examples, but use whatever
+process your harness documents, which is likely similar.
+
+MCP is most useful when an MCP-capable local AI client wants structured, read-only access
+to ProcessWire without constructing shell commands. Use it for site status, schema/page
+inspection, API documentation lookup, file reads, migration listing/linting, and small
+read-only ProcessWire queries. Use the CLI for automation and migration apply/test
+commands, and use the Engineer when you want AgentTools' built-in ProcessWire-aware
+assistant to reason about a request or create a migration.
+
+#### Codex App
+
+1. Click your name in the lower left corner, then "Settings > MCP Servers"
+2. Click "Add Server" and enter the following:
+   - Command to launch: `/usr/bin/php` (use the actual path to your php)
+   - Arguments (1): `index.php`
+   - Arguments (2): `--at-mcp`
+   - Skip the environment variables settings
+   - Working directory: `/htdocs/your-website/` (use actual path to your ProcessWire site)
+3. Click "Save", then the "Restart" button (if you see one), or quit and restart the Codex
+   app, and Codex should now be able to see your MCP server.
+
+#### Claude Desktop
+
+1. Click your name in the lower left corner, then "Settings > Developer > Edit Config".
+2. It will open a window that shows you the location of your `claude_desktop_config.json` file.
+   Edit this file in your favorite text editor.
+3. Unless Anthropic has improved things, you'll now be editing a JSON file directly. You'll want
+   to add a new root-level "mcpServers" element in the JSON (or edit an existing one):
+   ```
+    {
+     "mcpServers": {
+       "agenttools": {
+          "command": "/bin/bash",
+          "args": [
+            "-lc",
+            "cd /htdocs/your-website/ && AGENTTOOLS_MCP_HEARTBEAT=30 /usr/bin/php index.php --at-mcp"
+          ]
+        }
+      }
+    }
+   ```
+   *Remember to add commas before and/or after the above example, depending on where you place it in the JSON file.*
+4. Save and then restart the Claude Desktop app. Claude should now be able to see your MCP server.
 
 ## Background jobs with cron
 
@@ -400,6 +456,7 @@ from the command line without needing to enter an interactive session.
 | `php index.php --at-engineer-api-docs-search TERM`                         | Search ProcessWire API.md documentation without calling an AI provider         |
 | `php index.php --at-engineer-read-file PATH`                               | Read a local site file without calling an AI provider                          |
 | `php index.php --at-cron`                                                  | Process one pending AgentTools background job; intended for system cron        |
+| `php index.php --at-mcp`                                                   | Run the local AgentTools MCP server over stdio                                 |
 
 **`--at-eval` example** — ask your AI agent how many pages are on your site:
 ```
@@ -408,6 +465,22 @@ php index.php --at-eval 'echo wire()->pages->count() . " pages\n";'
 
 Add `--readonly` for inspection-only snippets. It validates code before it runs
 and blocks common ProcessWire, database, and filesystem mutation calls.
+
+### MCP server
+
+AgentTools can expose a local stdio MCP server for MCP-capable clients:
+
+```bash
+php index.php --at-mcp
+```
+
+The initial MCP tools are read-only: `at_status`, `at_site_info`,
+`at_api_docs`, `at_read_file`, `at_migrations_list`, `at_migrations_lint`,
+and `at_eval_readonly`. These mirror existing AgentTools CLI/Engineer helper
+capabilities without adding remote HTTP access or migration-apply tools.
+
+If an MCP client disconnects idle stdio servers (like Claude Desktop, at the time this was written),
+set `AGENTTOOLS_MCP_HEARTBEAT=30` in that server command to send periodic JSON-RPC `ping` heartbeats.
 
 **`--at-stdin` example** — useful for multi-line code. Snippets may include an opening
 `<?php` tag when piping a normal PHP file:

@@ -9,6 +9,7 @@ Run AgentTools commands directly from the ProcessWire root directory, where
 php index.php --at-eval 'CODE'
 echo 'CODE' | php index.php --at-stdin
 php index.php --at-cli
+php index.php --at-mcp
 ```
 
 The `scripts/pw-at.sh` wrapper is only a compatibility layer for Docker or
@@ -110,6 +111,21 @@ php index.php --at-cli
 
 Each run executes the file once — state does not persist between runs. Use for extended multi-step operations where you update the code and re-run.
 
+## --at-mcp
+
+Runs the local AgentTools MCP server over stdio:
+
+```bash
+php index.php --at-mcp
+```
+
+The initial MCP tools are read-only and use the `at_` prefix: `at_status`,
+`at_site_info`, `at_api_docs`, `at_read_file`, `at_migrations_list`,
+`at_migrations_lint`, and `at_eval_readonly`.
+
+If an MCP client disconnects idle stdio servers, set `AGENTTOOLS_MCP_HEARTBEAT=30`
+in that server command to send periodic JSON-RPC `ping` heartbeats.
+
 ## When to use which
 
 | Scenario | Command |
@@ -117,6 +133,7 @@ Each run executes the file once — state does not persist between runs. Use for
 | Quick data lookup, simple expression | `eval` |
 | Multi-line code, anything with `$` or quotes | `stdin` with heredoc |
 | Extended multi-step session | `cli` |
+| MCP-capable client integration | `mcp` |
 
 ## Common mistakes
 

@@ -1,5 +1,15 @@
 # Changelog
 
+## Version 26
+
+### MCP
+
+- Added `php index.php --at-mcp`, a local stdio MCP server with read-only
+  AgentTools tools for site info, API docs, file reads, migration listing,
+  migration linting, and read-only ProcessWire eval.
+
+---
+
 ## Version 25
 
 ### CLI

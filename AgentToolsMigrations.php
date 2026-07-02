@@ -205,7 +205,7 @@ class AgentToolsMigrations extends AgentToolsHelper {
 	 * @return array
 	 *
 	 */
-	protected function lintFile(string $file): array {
+	public function lintFile(string $file): array {
 		$result = [
 			'errors' => [],
 			'warnings' => [],

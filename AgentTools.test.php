@@ -34,6 +34,7 @@ class WireTest_AgentTools extends WireTest {
 		$this->testCliEvalParsing($at);
 		$this->testMigrationLint($at);
 		$this->testSchemaTemplateFields($at);
+		$this->testMcpMessageShapes($at);
 	}
 
 	/**
@@ -138,6 +139,111 @@ class WireTest_AgentTools extends WireTest {
 	}
 
 	/**
+	 * Test MCP JSON-RPC message shapes without starting a stdio server.
+	 *
+	 * @param AgentTools $at
+	 *
+	 */
+	protected function testMcpMessageShapes(AgentTools $at) {
+		$mcp = $at->mcp();
+
+		$response = $this->decodeJson($mcp->handleJson(json_encode([
+			'jsonrpc' => '2.0',
+			'id' => 1,
+			'method' => 'initialize',
+			'params' => ['protocolVersion' => '2025-06-18'],
+		])));
+		$this->check('MCP initialize returns protocol version', '2025-06-18', $response['result']['protocolVersion']);
+		$this->check('MCP initialize exposes tools capability', true, isset($response['result']['capabilities']['tools']));
+
+		$response = $this->decodeJson($mcp->handleJson(json_encode([
+			'jsonrpc' => '2.0',
+			'id' => 2,
+			'method' => 'tools/list',
+		])));
+		$tools = $response['result']['tools'];
+		$names = array_column($tools, 'name');
+		$this->check('MCP tools/list includes at_status', true, in_array('at_status', $names, true));
+		$this->check('MCP tools/list includes at_site_info', true, in_array('at_site_info', $names, true));
+		$this->check('MCP tools/list includes at_eval_readonly', true, in_array('at_eval_readonly', $names, true));
+		$this->check('MCP tool definitions use inputSchema', true, isset($tools[0]['inputSchema']));
+
+		$response = $this->decodeJson($mcp->handleJson(json_encode([
+			'jsonrpc' => '2.0',
+			'id' => 3,
+			'method' => 'tools/call',
+			'params' => [
+				'name' => 'at_eval_readonly',
+				'arguments' => ['code' => 'echo $pages->count();'],
+			],
+		])));
+		$this->check('MCP tool call returns text content', 'text', $response['result']['content'][0]['type']);
+		$this->check('MCP readonly eval returns numeric output', true, ctype_digit(trim($response['result']['content'][0]['text'])));
+
+		$response = $this->decodeJson($mcp->handleJson(json_encode([
+			'jsonrpc' => '2.0',
+			'id' => 4,
+			'method' => 'tools/call',
+			'params' => [
+				'name' => 'at_eval_readonly',
+				'arguments' => ['code' => '$page->save();'],
+			],
+		])));
+		$this->check('MCP readonly eval blocks save()', 'ERROR: Preview-only mode blocked mutating eval_php method: save().', $response['result']['content'][0]['text']);
+
+		$response = $this->decodeJson($mcp->handleJson(json_encode([
+			'jsonrpc' => '2.0',
+			'id' => 5,
+			'method' => 'tools/call',
+			'params' => [
+				'name' => 'at_migrations_list',
+				'arguments' => [],
+			],
+		])));
+		$list = $this->decodeJson($response['result']['content'][0]['text']);
+		$this->check('MCP migrations list returns count', true, isset($list['count']));
+		$this->check('MCP migrations list returns migrations array', true, isset($list['migrations']) && is_array($list['migrations']));
+
+		$response = $this->decodeJson($mcp->handleJson(json_encode([
+			'jsonrpc' => '2.0',
+			'id' => 6,
+			'method' => 'tools/call',
+			'params' => [
+				'name' => 'at_status',
+				'arguments' => [],
+			],
+		])));
+		$status = $this->decodeJson($response['result']['content'][0]['text']);
+		$this->check('MCP status returns AgentTools version', true, isset($status['agentTools']['version']));
+		$this->check('MCP status includes tool names', true, in_array('at_eval_readonly', $status['tools'], true));
+
+		$response = $this->decodeJson($mcp->handleJson(json_encode([
+			'jsonrpc' => '2.0',
+			'id' => 7,
+			'method' => 'tools/call',
+			'params' => [
+				'name' => 'not_a_tool',
+				'arguments' => [],
+			],
+		])));
+		$this->check('MCP unknown tool returns tool error', true, !empty($response['result']['isError']));
+
+		$response = $this->decodeJson($mcp->handleJson('{'));
+		$this->check('MCP invalid JSON returns parse error', -32700, $response['error']['code']);
+
+		$this->check('MCP initialized notification returns no response', '', $mcp->handleJson(json_encode([
+			'jsonrpc' => '2.0',
+			'method' => 'notifications/initialized',
+		])));
+
+		$this->check('MCP JSON-RPC responses return no response', '', $mcp->handleJson(json_encode([
+			'jsonrpc' => '2.0',
+			'id' => 'heartbeat-1',
+			'result' => new \stdClass(),
+		])));
+	}
+
+	/**
 	 * Invoke a protected method for focused helper testing.
 	 *
 	 * @param object $object
@@ -180,5 +286,20 @@ class WireTest_AgentTools extends WireTest {
 			$this->fail("Unable to write temp file: $file");
 		}
 		$this->tmpFiles[] = $file;
+	}
+
+	/**
+	 * Decode JSON or fail the test.
+	 *
+	 * @param string $json
+	 * @return array
+	 *
+	 */
+	protected function decodeJson(string $json): array {
+		$data = json_decode($json, true);
+		if(!is_array($data) || json_last_error() !== JSON_ERROR_NONE) {
+			$this->fail('Invalid JSON in test response: ' . json_last_error_msg());
+		}
+		return $data;
 	}
 }

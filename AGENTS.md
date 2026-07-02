@@ -32,6 +32,7 @@ Run from the ProcessWire root directory (where `index.php` lives):
 | `php index.php --at-engineer-api-docs-search TERM` | Search ProcessWire API.md documentation without calling an AI provider |
 | `php index.php --at-engineer-read-file PATH` | Read a local site file without calling an AI provider |
 | `php index.php --at-cron` | Process one pending AgentTools background job; intended for system cron |
+| `php index.php --at-mcp` | Run the local AgentTools MCP server over stdio |
 
 ## Getting oriented on a new site
 
@@ -76,6 +77,29 @@ flag combinations or ad-hoc migration arguments not listed here.
 Use `--readonly` with `--at-eval` or `--at-stdin` for inspection-only snippets on
 unfamiliar sites. Read-only mode blocks common ProcessWire, database, and
 filesystem mutation calls before code runs.
+
+## MCP server
+
+AgentTools can run as a local stdio MCP server:
+```
+php index.php --at-mcp
+```
+
+The initial MCP tool set is read-only: `at_status`, `at_site_info`,
+`at_api_docs`, `at_read_file`, `at_migrations_list`, `at_migrations_lint`,
+and `at_eval_readonly`. Do not use MCP for applying migrations or saving
+changes unless a future AgentTools release explicitly documents write-capable
+tools.
+
+If an MCP client disconnects idle stdio servers, set `AGENTTOOLS_MCP_HEARTBEAT=30`
+in that server command to send periodic JSON-RPC `ping` heartbeats.
+
+Use MCP when your current client exposes AgentTools MCP tools directly and you need
+read-only site inspection, API documentation lookup, file reads, migration listing/linting,
+or small read-only ProcessWire queries. Use direct CLI commands for deterministic
+automation and migration apply/test workflows. Use `--at-engineer` when you want
+AgentTools' built-in ProcessWire-aware assistant to reason about a request or create
+a migration.
 
 Migrations can also be applied from the ProcessWire admin at **Setup > Agent Tools**.
 

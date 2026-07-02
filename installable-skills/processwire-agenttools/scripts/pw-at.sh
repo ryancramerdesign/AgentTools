@@ -9,6 +9,7 @@ Usage:
   scripts/pw-at.sh stdin
   scripts/pw-at.sh stdin-b64 'BASE64_PHP_CODE'
   scripts/pw-at.sh cli
+  scripts/pw-at.sh mcp
   scripts/pw-at.sh migrations-apply
   scripts/pw-at.sh migrations-list
   scripts/pw-at.sh migrations-test
@@ -103,7 +104,7 @@ case "$mode" in
   stdin-b64)
     [[ $# -eq 1 ]] || { echo "stdin-b64 requires exactly one base64 payload argument" >&2; exit 1; }
     ;;
-  stdin|cli|sitemap-generate|sitemap-generate-schema)
+  stdin|cli|mcp|sitemap-generate|sitemap-generate-schema)
     [[ $# -eq 0 ]] || { echo "$mode does not accept positional arguments" >&2; exit 1; }
     ;;
   migrations-apply|migrations-list|migrations-test|migrations-lint|migrations-rerun)
@@ -135,6 +136,9 @@ case "$mode" in
     ;;
   cli)
     run_php --at-cli
+    ;;
+  mcp)
+    run_php --at-mcp
     ;;
   migrations-apply|migrations-list|migrations-test|migrations-lint|migrations-rerun)
     run_php "--at-$mode" "$@"

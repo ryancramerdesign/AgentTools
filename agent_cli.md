@@ -47,6 +47,7 @@ All commands are run from the ProcessWire root directory (where `index.php` live
 | `php index.php --at-engineer-api-docs-search TERM` | Search ProcessWire API.md documentation without calling an AI provider |
 | `php index.php --at-engineer-read-file PATH` | Read a local site file without calling an AI provider |
 | `php index.php --at-cron` | Process one pending AgentTools background job; intended for system cron |
+| `php index.php --at-mcp` | Run the local AgentTools MCP server over stdio |
 
 ### When to use `--at-eval` vs `--at-stdin`
 
@@ -125,10 +126,35 @@ Several read-only helper commands are available without calling an AI provider:
 | `php index.php --at-engineer-api-docs-get NAME` | Print the contents of an API.md file by name |
 | `php index.php --at-engineer-api-docs-search TERM` | Search API docs and print JSON matches with `name`, `file`, `line`, and `snippet` |
 | `php index.php --at-engineer-read-file PATH` | Print a file inside the ProcessWire root; paths outside the root are denied |
+| `php index.php --at-mcp` | Run the local AgentTools MCP server over stdio |
 
 Use these local helper commands when an external coding agent needs structured
 site context, ProcessWire API documentation, or a small local file without
 spending provider tokens.
+
+### MCP server
+
+AgentTools can run as a local stdio MCP server:
+
+~~~~~
+php index.php --at-mcp
+~~~~~
+
+The initial MCP tool set is read-only and uses the `at_` prefix to avoid naming
+collisions when clients connect to multiple MCP servers:
+
+| Tool | Purpose |
+|------|---------|
+| `at_status` | Show AgentTools, ProcessWire, PHP, site path, generated files, and tool names |
+| `at_site_info` | Retrieve page tree, schema, or installed module info |
+| `at_api_docs` | List, retrieve, or search ProcessWire API.md documentation |
+| `at_read_file` | Read a file inside the ProcessWire installation |
+| `at_migrations_list` | List migrations and applied/pending status |
+| `at_migrations_lint` | Check migration syntax and conventions without executing files |
+| `at_eval_readonly` | Run read-only ProcessWire eval with mutation validation |
+
+If an MCP client disconnects idle stdio servers, set `AGENTTOOLS_MCP_HEARTBEAT=30`
+in that server command to send periodic JSON-RPC `ping` heartbeats.
 
 `--at-cron` is for queued background jobs from the admin Engineer, Page Engineer,
 and Tasks screens. It should be run by system cron from the ProcessWire root. Do

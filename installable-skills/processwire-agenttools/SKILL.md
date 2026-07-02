@@ -44,6 +44,22 @@ Run from the ProcessWire root directory (where `index.php` lives).
 | `php index.php --at-engineer-api-docs-get NAME` | Print a ProcessWire API.md documentation file without calling an AI provider |
 | `php index.php --at-engineer-api-docs-search TERM` | Search ProcessWire API.md documentation without calling an AI provider |
 | `php index.php --at-engineer-read-file PATH` | Read a local site file without calling an AI provider |
+| `php index.php --at-mcp` | Run the local AgentTools MCP server over stdio |
+
+## MCP server
+
+AgentTools can run as a local stdio MCP server:
+
+```bash
+php index.php --at-mcp
+```
+
+The initial MCP tool set is read-only: `at_status`, `at_site_info`,
+`at_api_docs`, `at_read_file`, `at_migrations_list`, `at_migrations_lint`,
+and `at_eval_readonly`.
+
+If an MCP client disconnects idle stdio servers, set `AGENTTOOLS_MCP_HEARTBEAT=30`
+in that server command to send periodic JSON-RPC `ping` heartbeats.
 
 ## Getting oriented on a new site
 

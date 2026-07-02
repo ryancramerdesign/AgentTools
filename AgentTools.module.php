@@ -14,7 +14,6 @@
  * @property AgentToolsTasks $tasks
  * @property AgentToolsJobs $jobs
  * @property AgentToolsTraces $traces
- * @method AgentToolsJobs jobs()
  *
  * @property string $engineer_provider
  * @property string $engineer_api_key
@@ -38,6 +37,13 @@
  * @property string $engineer_additional_models
  * @property string|int $engineer_user
  *
+ * @method AgentToolsEngineer engineer()
+ * @method AgentToolsMigrations migrations()
+ * @method AgentToolsTasks tasks()
+ * @method AgentToolsJobs jobs()
+ * @method AgentToolsTraces traces()
+ * @method AgentToolsSitemap sitemap()
+ *
  */
 class AgentTools extends WireData implements Module, ConfigurableModule {
 
@@ -46,7 +52,7 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 			'title' => 'Agent Tools',
 			'summary' => "Enables AI coding agents to access ProcessWire's API and provides a database migration system.",
 			'icon' => 'at',
-			'version' => 25,
+			'version' => 26,
 			'author' => 'Ryan Cramer, Claude (Anthropic), GPT 5.5 Codex',
 			'requires' => 'ProcessWire>=3.0.255, PHP>=8.0.0',
 			'installs' => 'ProcessAgentTools, FieldtypePageEngineer',
@@ -72,6 +78,7 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 		'migrations' => null,
 		'sitemap' => null,
 		'engineer' => null,
+		'mcp' => null,
 		'jobs' => null,
 		'skills' => null,
 	];

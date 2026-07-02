@@ -725,6 +725,32 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	}
 
 	/**
+	 * Execute local Engineer tools without calling an AI provider.
+	 *
+	 * This is intentionally limited to read-only tools suitable for CLI/MCP use.
+	 *
+	 * @param string $name Tool name
+	 * @param array $input Tool input
+	 * @return string
+	 *
+	 */
+	public function executeLocalTool(string $name, array $input = []): string {
+		if($name === 'eval_php') {
+			return $this->executeTool('eval_php', ['code' => (string) ($input['code'] ?? '')], ['dryRun' => true]);
+		}
+		if($name === 'site_info' || $name === 'read_file') {
+			return $this->executeTool($name, $input);
+		}
+		if($name === 'api_docs') {
+			$action = (string) ($input['action'] ?? 'list');
+			if($action === 'list') return $this->getApiDocsListJson();
+			if($action === 'search') return $this->searchApiDocsJson((string) ($input['term'] ?? ''));
+			return $this->executeTool('api_docs', $input);
+		}
+		return "Unknown local tool: $name";
+	}
+
+	/**
 	 * Parse a single additional model line into a model entry array
 	 *
 	 * Pipe-separated format (whitespace around pipes is ignored):
