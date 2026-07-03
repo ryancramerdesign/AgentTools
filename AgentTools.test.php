@@ -35,6 +35,8 @@ class WireTest_AgentTools extends WireTest {
 		$this->testMigrationLint($at);
 		$this->testSchemaTemplateFields($at);
 		$this->testMcpMessageShapes($at);
+		$this->testScheduledTaskIntervals($at);
+		$this->testTraceJsonEncoding($at);
 	}
 
 	/**
@@ -241,6 +243,51 @@ class WireTest_AgentTools extends WireTest {
 			'id' => 'heartbeat-1',
 			'result' => new \stdClass(),
 		])));
+	}
+
+	/**
+	 * Test scheduled task interval next-run calculations.
+	 *
+	 * @param AgentTools $at
+	 *
+	 */
+	protected function testScheduledTaskIntervals(AgentTools $at) {
+		$schedules = $at->getScheduledTasks();
+		$task = $schedules->makeBlankItem();
+		$after = strtotime('2026-07-03 12:00:00');
+		$intervals = [
+			'2-minutes' => 2 * 60,
+			'5-minutes' => 5 * 60,
+			'10-minutes' => 10 * 60,
+			'15-minutes' => 15 * 60,
+		];
+
+		foreach($intervals as $frequency => $seconds) {
+			$task->frequency = $frequency;
+			$this->check("Scheduled task interval $frequency", $after + $seconds, $schedules->calculateNextRun($task, $after));
+		}
+	}
+
+	/**
+	 * Test trace JSON encoding tolerates malformed UTF-8 from provider/tool output.
+	 *
+	 * @param AgentTools $at
+	 *
+	 */
+	protected function testTraceJsonEncoding(AgentTools $at) {
+		$traces = $at->getTraces();
+		$trace = $traces->newTrace([
+			'type' => 'task',
+			'provider' => 'test',
+			'model' => 'test-model',
+		]);
+		$trace->response = "bad byte: \xB1";
+		$file = $traces->save($trace);
+		$this->tmpFiles[] = $file;
+		$json = file_get_contents($file);
+		$data = json_decode((string) $json, true);
+		$this->check('Trace JSON with malformed UTF-8 saves valid JSON', true, is_array($data));
+		$this->check('Trace JSON substitutes malformed UTF-8', JSON_ERROR_NONE, json_last_error());
 	}
 
 	/**

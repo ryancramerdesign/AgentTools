@@ -438,6 +438,10 @@ field context overrides, or detailed template settings — useful when creating 
 that depend on existing configuration. The admin Engineer regenerates these automatically
 after applying migrations.
 
+If an agent needs the same JSON in stdout rather than written to a file, use
+`php index.php --at-engineer-site-info pages --refresh` or
+`php index.php --at-engineer-site-info schema --refresh`.
+
 ### API access commands
 
 These commands give your AI agent direct access to the ProcessWire API

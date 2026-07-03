@@ -1054,6 +1054,9 @@ class ProcessAgentToolsTasks extends ProcessAgentToolsHelper {
 		$f->label = $this->_('Frequency');
 		$f->icon = 'refresh';
 		$f->required = true;
+		$f->addOption('2-minutes', $this->_('Every 2 minutes'));
+		$f->addOption('5-minutes', $this->_('Every 5 minutes'));
+		$f->addOption('10-minutes', $this->_('Every 10 minutes'));
 		$f->addOption('15-minutes', $this->_('Every 15 minutes'));
 		$f->addOption('30-minutes', $this->_('Every 30 minutes'));
 		$f->addOption('hour', $this->_('Hourly'));

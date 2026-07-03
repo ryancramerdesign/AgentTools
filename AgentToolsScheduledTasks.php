@@ -130,8 +130,8 @@ class AgentToolsScheduledTasks extends WireArray {
 			$previousFile = $this->getPath() . strtolower($previousName) . '.json';
 			if(is_file($previousFile)) $this->wire()->files->unlink($previousFile);
 		}
-		$json = json_encode($task->getArray(), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-		if($json === false) throw new WireException('Unable to encode scheduled task JSON');
+		$json = json_encode($task->getArray(), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
+		if($json === false) throw new WireException('Unable to encode scheduled task JSON: ' . json_last_error_msg());
 		$result = $this->wire()->files->filePutContents($file, $json . "\n", LOCK_EX);
 		if(!$this->getTask($task->name)) $this->add($task);
 		return $result;
@@ -272,6 +272,9 @@ class AgentToolsScheduledTasks extends WireArray {
 		if($after < 1) $after = time();
 		$frequency = $task->frequency;
 		$intervals = [
+			'2-minutes' => 2 * 60,
+			'5-minutes' => 5 * 60,
+			'10-minutes' => 10 * 60,
 			'15-minutes' => 15 * 60,
 			'30-minutes' => 30 * 60,
 			'hour' => 60 * 60,

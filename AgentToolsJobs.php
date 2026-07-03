@@ -730,8 +730,8 @@ class AgentToolsJobs extends AgentToolsHelper {
 	 *
 	 */
 	protected function writeJobFile(string $file, array $job): void {
-		$json = json_encode($job, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-		if($json === false) throw new WireException('Unable to encode AgentTools job JSON');
+		$json = json_encode($job, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
+		if($json === false) throw new WireException('Unable to encode AgentTools job JSON: ' . json_last_error_msg());
 		$tmp = $file . '.tmp.' . getmypid() . '.' . mt_rand(1000, 9999);
 		$this->wire()->files->filePutContents($tmp, $json . "\n", LOCK_EX);
 		if(!@rename($tmp, $file)) {

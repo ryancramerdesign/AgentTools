@@ -99,6 +99,18 @@ covering the full scope of the installation:
 Run this at the start of a session on an unfamiliar site to get a complete
 picture of its structure before making any changes.
 
+If you need the same data printed directly to stdout, use:
+
+~~~~~
+php index.php --at-engineer-site-info pages --refresh
+~~~~~
+
+For full field/template configuration JSON in stdout, use:
+
+~~~~~
+php index.php --at-engineer-site-info schema --refresh
+~~~~~
+
 ---
 
 ## Engineer helper commands

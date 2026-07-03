@@ -63,18 +63,30 @@ in that server command to send periodic JSON-RPC `ping` heartbeats.
 
 ## Getting oriented on a new site
 
-If you are working on a site for the first time, run:
+If you are working on a site for the first time and need JSON in stdout, run:
+
+```bash
+php index.php --at-engineer-site-info pages --refresh
+```
+
+This regenerates the site map and prints the JSON directly. If you need to update
+the file for later use instead, run:
 
 ```bash
 php index.php --at-sitemap-generate
 ```
 
-Then read `site/assets/at/site-map.json` to understand the site's templates,
-fields, page tree, and installed modules before making changes.
+Then read `site/assets/at/site-map.json`.
 
 If you need full field/template configuration details, including type-specific
-field settings, per-template field context overrides, and template settings, also
-run:
+field settings, per-template field context overrides, and template settings,
+prefer stdout JSON with:
+
+```bash
+php index.php --at-engineer-site-info schema --refresh
+```
+
+Or update the schema file for later use with:
 
 ```bash
 php index.php --at-sitemap-generate-schema

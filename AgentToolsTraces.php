@@ -111,8 +111,8 @@ class AgentToolsTraces extends Wire {
 		$this->prune();
 		$file = $this->getPath() . $trace->id . '.json';
 		$trace->traceFile = $this->getRelativePath($file);
-		$json = json_encode($trace->toArray(), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-		if($json === false) throw new WireException('Unable to encode AgentTools trace JSON');
+		$json = json_encode($trace->toArray(), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
+		if($json === false) throw new WireException('Unable to encode AgentTools trace JSON: ' . json_last_error_msg());
 		$this->wire()->files->filePutContents($file, $json . "\n", LOCK_EX);
 		return $file;
 	}

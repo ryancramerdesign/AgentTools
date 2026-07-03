@@ -1,5 +1,26 @@
 # Changelog
 
+## Version 27
+
+### Tasks
+
+- Added scheduled task frequency options for every 2, 5, and 10 minutes.
+
+### Traces
+
+- Made trace, job, and schedule JSON encoding tolerate malformed UTF-8 so trace
+  logging cannot cause an otherwise successful background job to fail.
+- Trace save errors now include the JSON encoder error reason and are logged
+  without replacing the job response.
+
+### Docs
+
+- Clarified that agents can use `--at-engineer-site-info pages --refresh` and
+  `--at-engineer-site-info schema --refresh` when they need site map/schema JSON
+  printed directly to stdout.
+
+---
+
 ## Version 26
 
 ### MCP

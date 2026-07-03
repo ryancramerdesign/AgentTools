@@ -36,15 +36,25 @@ Run from the ProcessWire root directory (where `index.php` lives):
 
 ## Getting oriented on a new site
 
-If you are working on a site for the first time, run:
+If you are working on a site for the first time and need JSON in stdout, run:
+```
+php index.php --at-engineer-site-info pages --refresh
+```
+
+This regenerates the site map and prints the JSON directly. If you need to update
+the file for later use instead, run:
 ```
 php index.php --at-sitemap-generate
 ```
-Then read `site/assets/at/site-map.json` to get a complete picture of the site's
-templates, fields, page tree, and installed modules before making any changes.
+Then read `site/assets/at/site-map.json`.
 
 If you need full field/template configuration details (type-specific field settings,
-per-template field context overrides, all template settings), also run:
+per-template field context overrides, all template settings), prefer stdout JSON with:
+```
+php index.php --at-engineer-site-info schema --refresh
+```
+
+Or update the schema file for later use with:
 ```
 php index.php --at-sitemap-generate-schema
 ```

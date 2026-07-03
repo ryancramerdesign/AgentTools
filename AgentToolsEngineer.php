@@ -313,7 +313,8 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			try {
 				$this->at->getTraces()->save($trace);
 			} catch(\Throwable $e) {
-				if(empty($result['error'])) $result['error'] = $e->getMessage();
+				$result['traceError'] = $e->getMessage();
+				$this->wire()->log->save('agent-tools', 'Trace save failed: ' . $e->getMessage());
 			}
 		}
 		$result['trace'] = $trace->toArray();
