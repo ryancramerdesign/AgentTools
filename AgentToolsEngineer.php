@@ -2484,7 +2484,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			$response = curl_exec($ch);
 			$httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
 			$curlError = curl_error($ch);
-			curl_close($ch);
+			unset($ch);
 
 			if($response === false) throw new WireException("API request failed: $curlError");
 
