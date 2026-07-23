@@ -34,6 +34,8 @@ All commands are run from the ProcessWire root directory (where `index.php` live
 | `php index.php --at-eval [--readonly] [--json] 'CODE'` | Evaluate a PHP expression inline |
 | `echo 'CODE' \| php index.php --at-stdin [--readonly] [--json]` | Evaluate multi-line PHP code from stdin |
 | `php index.php --at-status [--json]` | Print AgentTools and site status JSON (JSON is the default output) |
+| `php index.php --at-test [--json]` | Run the AgentTools self-test suite |
+| `php index.php --at-selftest [--json]` | Alias of `--at-test` |
 | `php index.php --at-migrations-apply [--file=FILE\|--name=NAME] [--limit=N] [--dry-run] [--force]` | Apply pending migrations, optionally filtered |
 | `php index.php --at-migrations-list [--json] [--file=FILE\|--name=NAME]` | List migrations and their status |
 | `php index.php --at-migrations-test [--file=FILE\|--name=NAME] [--limit=N]` | Preview pending migrations without applying |
@@ -54,6 +56,9 @@ All commands are run from the ProcessWire root directory (where `index.php` live
 When arriving on an unfamiliar site, start with `php index.php --at-status`.
 It prints JSON status information by default; `--json` is accepted for
 explicitness but is not required.
+
+Use `php index.php --at-test` for a quick AgentTools self-test. Add `--json`
+when another tool needs machine-readable test results.
 
 ### When to use `--at-eval` vs `--at-stdin`
 
@@ -122,6 +127,9 @@ covering the full scope of the installation:
 
 Run this at the start of a session on an unfamiliar site to get a complete
 picture of its structure before making any changes.
+
+After CLI migration apply/rerun commands successfully apply one or more
+migrations, AgentTools regenerates both the site map and schema files.
 
 If you need the same data printed directly to stdout, use:
 

@@ -323,6 +323,20 @@ try {
 	$at->migrations->unlockApply($lockFp);
 }
 
+if($passCount > 0) {
+	echo str_repeat('-', 60) . "\n";
+	echo "Regenerating site map and schema...\n";
+	try {
+		$siteMapOk = $at->sitemap->generate();
+		$schemaOk = $at->sitemap->generateSchema();
+		if(!$siteMapOk || !$schemaOk) {
+			echo "Warning: Migration(s) applied, but one or more site map files could not be regenerated.\n";
+		}
+	} catch(\Throwable $e) {
+		echo "Warning: Migration(s) applied, but site map regeneration failed: " . $e->getMessage() . "\n";
+	}
+}
+
 // ----------------------------------------------------------------
 // Summary
 // ----------------------------------------------------------------

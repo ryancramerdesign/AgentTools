@@ -8,6 +8,7 @@ Run AgentTools commands directly from the ProcessWire root directory, where
 ```bash
 php index.php --at-help
 php index.php --at-status
+php index.php --at-test
 php index.php --at-eval 'CODE'
 echo 'CODE' | php index.php --at-stdin
 php index.php --at-cli
@@ -42,6 +43,22 @@ The status includes AgentTools, ProcessWire, and PHP versions; site paths;
 generated site-map/schema file state; migration counts; background job and cron
 state; scheduled task count; configured agent count; and available AgentTools
 CLI commands.
+
+## --at-test / --at-selftest
+
+Run the AgentTools self-test suite:
+
+```bash
+php index.php --at-test
+```
+
+Use `--json` when another tool needs machine-readable test results:
+
+```bash
+php index.php --at-test --json
+```
+
+`--at-selftest` is an alias of `--at-test`.
 
 ## --at-eval
 

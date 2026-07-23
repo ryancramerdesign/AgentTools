@@ -52,7 +52,7 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 			'title' => 'Agent Tools',
 			'summary' => "Enables AI coding agents to access ProcessWire's API and provides a database migration system.",
 			'icon' => 'at',
-			'version' => 28,
+			'version' => 29,
 			'author' => 'Ryan Cramer, Claude (Anthropic), GPT 5.5 Codex',
 			'requires' => 'ProcessWire>=3.0.255, PHP>=8.0.0',
 			'installs' => 'ProcessAgentTools, FieldtypePageEngineer',
@@ -276,6 +276,10 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 		} else if($atAction === 'status') {
 			$showHelpOnFailure = false;
 			$success = $this->cliStatus(array_slice($GLOBALS['argv'], 2));
+
+		} else if($atAction === 'test' || $atAction === 'selftest') {
+			$showHelpOnFailure = false;
+			$success = $this->cliTest(array_slice($GLOBALS['argv'], 2));
 
 		} else {
 			$found = false;
@@ -578,6 +582,8 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 			"php index.php --at-eval [--readonly] [--json] 'CODE'" => "Evaluate a PHP expression",
 			"echo 'CODE' | php index.php --at-stdin [--readonly] [--json]" => "Evaluate PHP code from stdin",
 			"php index.php --at-status [--json]" => "Print AgentTools and site status JSON (JSON is the default output)",
+			"php index.php --at-test [--json]" => "Run the AgentTools self-test suite",
+			"php index.php --at-selftest [--json]" => "Alias of --at-test",
 		];
 		foreach($this->getHelpers() as $helper) {
 			$help += $helper->cliHelp();
@@ -668,6 +674,64 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 
 		echo $json . "\n";
 		return true;
+	}
+
+	/**
+	 * Execute --at-test / --at-selftest CLI command
+	 *
+	 * Runs the AgentTools WireTest suite. This intentionally defaults to the
+	 * AgentTools test only; use ProcessWire's native `php index.php test NAME`
+	 * command for general site/core tests.
+	 *
+	 * @param array $args
+	 * @return bool
+	 *
+	 */
+	protected function cliTest(array $args): bool {
+		$json = false;
+		foreach($args as $arg) {
+			$arg = (string) $arg;
+			if($arg === '--json') {
+				$json = true;
+				continue;
+			}
+			if($arg === '--help' || $arg === '-h') {
+				echo "Usage: php index.php --at-test [--json]\n";
+				echo "       php index.php --at-selftest [--json]\n";
+				return true;
+			}
+			fwrite(STDERR, "ERROR: Unknown test option: $arg\n");
+			return false;
+		}
+
+		$tests = $this->wire()->modules->get('WireTests');
+		if(!$tests || !$tests instanceof Wire) {
+			fwrite(STDERR, "ERROR: WireTests module is not available on this ProcessWire installation.\n");
+			return false;
+		}
+
+		$testArgs = [ 'AgentTools' ];
+		if($json) $testArgs[] = '--json';
+
+		$tests->executeCli($testArgs);
+		return $this->getWireTestsFailedCount($tests) === 0;
+	}
+
+	/**
+	 * Get failed test count from WireTests after cli execution
+	 *
+	 * @param Wire $tests
+	 * @return int
+	 *
+	 */
+	protected function getWireTestsFailedCount(Wire $tests): int {
+		try {
+			$property = new \ReflectionProperty($tests, 'failed');
+			$property->setAccessible(true);
+			return (int) $property->getValue($tests);
+		} catch(\Throwable $e) {
+			return 0;
+		}
 	}
 
 	/**

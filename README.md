@@ -439,6 +439,9 @@ field context overrides, or detailed template settings — useful when creating 
 that depend on existing configuration. The admin Engineer regenerates these automatically
 after applying migrations.
 
+CLI migration apply/rerun commands also regenerate the site map and schema after
+one or more migrations are successfully applied.
+
 If an agent needs the same JSON in stdout rather than written to a file, use
 `php index.php --at-engineer-site-info pages --refresh` or
 `php index.php --at-engineer-site-info schema --refresh`.
@@ -454,6 +457,8 @@ from the command line without needing to enter an interactive session.
 | `php index.php --at-eval [--readonly] [--json] 'CODE'`                     | Evaluate a PHP expression with full ProcessWire API access                     |
 | `echo 'CODE' \| php index.php --at-stdin [--readonly] [--json]`            | Evaluate multi-line PHP code piped from stdin                                  |
 | `php index.php --at-status [--json]`                                       | Print AgentTools and site status JSON (JSON is the default output)             |
+| `php index.php --at-test [--json]`                                         | Run the AgentTools self-test suite                                             |
+| `php index.php --at-selftest [--json]`                                     | Alias of `--at-test`                                                           |
 | `php index.php --at-cli`                                                   | Open an interactive agent CLI session                                          |
 | `php index.php --at-engineer "REQUEST"`                                    | Ask the Engineer a question or request a change                                |
 | `php index.php --at-engineer-migrate "REQUEST"`                            | Have the Engineer create a migration; outputs the migration file path          |
@@ -473,6 +478,9 @@ under `site/modules/` are followed.
 When orienting on an unfamiliar site, start with `php index.php --at-status`.
 It prints JSON status information by default; `--json` is accepted for
 explicitness but is not required.
+
+Run `php index.php --at-test` when you want a quick AgentTools self-test. Add
+`--json` when another tool needs machine-readable test results.
 
 **`--at-eval` example** — ask your AI agent how many pages are on your site:
 ```

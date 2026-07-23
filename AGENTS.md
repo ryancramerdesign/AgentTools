@@ -18,6 +18,8 @@ Run from the ProcessWire root directory (where `index.php` lives):
 | `php index.php --at-eval [--readonly] [--json] 'CODE'` | Evaluate a PHP expression with full PW API access |
 | `echo 'CODE' \| php index.php --at-stdin [--readonly] [--json]` | Evaluate multi-line PHP code from stdin |
 | `php index.php --at-status [--json]` | Print AgentTools and site status JSON (JSON is the default output) |
+| `php index.php --at-test [--json]` | Run the AgentTools self-test suite |
+| `php index.php --at-selftest [--json]` | Alias of `--at-test` |
 | `php index.php --at-migrations-apply` | Apply all pending migrations |
 | `php index.php --at-migrations-list [--json]` | List migrations and their status |
 | `php index.php --at-migrations-test` | Preview pending without applying |
@@ -131,6 +133,8 @@ AgentTools' built-in ProcessWire-aware assistant to reason about a request or cr
 a migration.
 
 Migrations can also be applied from the ProcessWire admin at **Setup > Agent Tools**.
+When migrations are applied from the CLI, AgentTools regenerates the site map
+and schema files afterward so future Engineer context reflects the updated site.
 
 ## Background jobs
 

@@ -31,6 +31,8 @@ Run from the ProcessWire root directory (where `index.php` lives).
 | `php index.php --at-eval [--readonly] [--json] 'CODE'` | Evaluate a PHP expression with full PW API access |
 | `echo 'CODE' \| php index.php --at-stdin [--readonly] [--json]` | Evaluate multi-line PHP code from stdin |
 | `php index.php --at-status [--json]` | Print AgentTools and site status JSON (JSON is the default output) |
+| `php index.php --at-test [--json]` | Run the AgentTools self-test suite |
+| `php index.php --at-selftest [--json]` | Alias of `--at-test` |
 | `php index.php --at-migrations-apply` | Apply all pending migrations |
 | `php index.php --at-migrations-list [--json]` | List migrations and their status |
 | `php index.php --at-migrations-test` | Preview pending without applying |
@@ -80,6 +82,9 @@ If you are working on a site for the first time, start with status JSON:
 ```bash
 php index.php --at-status
 ```
+
+Use `php index.php --at-test` for a quick AgentTools self-test. Add `--json`
+when another tool needs machine-readable test results.
 
 If you need the page tree JSON in stdout, run:
 

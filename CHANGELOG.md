@@ -1,5 +1,24 @@
 # Changelog
 
+## Version 29
+
+### CLI
+
+- Added `php index.php --at-test [--json]` and the `--at-selftest` alias for
+  running the AgentTools self-test suite from AgentTools' own CLI surface.
+- Added the self-test commands to `--at-status` output, README, AGENTS.md, CLI
+  docs, and packaged AgentTools skill docs.
+
+### Migrations
+
+- CLI migration apply/rerun commands now regenerate the site map and schema
+  after one or more migrations successfully apply, matching the admin migration
+  apply behavior.
+- Site map regeneration failures after CLI migration apply are reported as
+  warnings without changing the migration apply result.
+
+---
+
 ## Version 28
 
 ### CLI

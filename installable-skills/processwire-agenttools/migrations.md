@@ -213,6 +213,10 @@ After applying, confirm the migration worked:
 php index.php --at-migrations-list
 ```
 
+When CLI apply/rerun successfully applies one or more migrations, AgentTools
+regenerates the site map and schema files afterward so future Engineer context
+reflects the updated site.
+
 Use `php index.php --at-migrations-list --json` when the result will be consumed
 by another tool. Then spot-check the created state via CLI:
 

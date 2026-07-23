@@ -372,6 +372,7 @@ class WireTest_AgentTools extends WireTest {
 		$this->check('Status data includes job counts', true, isset($status['jobs']['counts']['pending'], $status['jobs']['counts']['failed']));
 		$this->check('Status data includes cron health', true, isset($status['jobs']['cron']['healthy']));
 		$this->check('Status data includes status command', true, in_array('php index.php --at-status [--json]', $status['cliCommands'], true));
+		$this->check('Status data includes self-test command', true, in_array('php index.php --at-test [--json]', $status['cliCommands'], true));
 	}
 
 	/**
