@@ -52,7 +52,7 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 			'title' => 'Agent Tools',
 			'summary' => "Enables AI coding agents to access ProcessWire's API and provides a database migration system.",
 			'icon' => 'at',
-			'version' => 27,
+			'version' => 28,
 			'author' => 'Ryan Cramer, Claude (Anthropic), GPT 5.5 Codex',
 			'requires' => 'ProcessWire>=3.0.255, PHP>=8.0.0',
 			'installs' => 'ProcessAgentTools, FieldtypePageEngineer',
@@ -107,6 +107,8 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 	 */
 	protected $traces = null;
 
+	protected $action = '';
+
 	/**
 	 * Construct
 	 *
@@ -142,19 +144,9 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 	 *
 	 */
 	public function ready() {
-		if(php_sapi_name() === 'cli') {
-			$argv = $_SERVER['argv'];
-			if(count($argv) > 1) {
-				$prefix = '--' . self::name . '-';
-				$command = empty($argv[1]) ? '' : $argv[1];
-				if(strpos($command, $prefix) === 0) {
-					$atAction = str_replace($prefix, '', $command);
-					$this->cliReady($atAction);
-				}
-			}
-		}
 		$at = $this;
 		$methods = 'WireSaveableItems::saved, WireSaveableItems::added, WireSaveableItems::deleted';
+
 		$this->addHookAfter($methods, function(HookEvent $e) use($at) {
 			$item = $e->arguments(0); /** @var Template|Fieldgroup $template */
 			$name = strtolower($item->className());
@@ -169,6 +161,41 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 				}
 			}
 		});
+
+		if(php_sapi_name() !== 'cli') return;
+
+		$prefix = '--' . self::name . '-';
+		$argv = $_SERVER['argv'];
+		$action = empty($argv[1]) ? '' : $argv[1];
+
+		if(count($argv) < 2) return;
+		if(strpos($action, $prefix) !== 0) return;
+
+		$action = str_replace($prefix, '', $action);
+
+		if(version_compare($this->wire()->config->version, '3.0.260', '<')) {
+			// for PW versions prior to CliModule interface (3.0.259 and prior)
+			$this->cliReady($action);
+			return;
+		}
+
+		$this->action = $action;
+
+		$this->addHookBefore('ProcessWireCli::ready', function(HookEvent $e) use($action, $argv) {
+			/** @var ProcessWireCli $pwCli */
+			$e->arguments(0, self::name);
+			$e->arguments(1, [ $action ]);
+		});
+	}
+
+	/**
+	 * Execute CLI action (used by ProcessWire 3.0.260+)
+	 *
+	 * @param array $args
+	 *
+	 */
+	public function executeCli(array $args) {
+		if($this->action) $this->cliReady($this->action);
 	}
 
 	/**
@@ -218,7 +245,10 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 				echo "ERROR: {$evalOptions['error']}\n";
 				$success = false;
 			} else {
-				$success = $this->cliEval($evalOptions['code'], $fuel, [ 'readOnly' => $evalOptions['readOnly'] ]);
+				$success = $this->cliEval($evalOptions['code'], $fuel, [
+					'readOnly' => $evalOptions['readOnly'],
+					'json' => $evalOptions['json'],
+				]);
 			}
 
 		} else if($atAction === 'stdin') {
@@ -229,12 +259,23 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 				echo "ERROR: {$evalOptions['error']}\n";
 				$success = false;
 			} else if(strlen(trim($code))) {
-				$success = $this->cliEval($code, $fuel, [ 'readOnly' => $evalOptions['readOnly'] ]);
+				$success = $this->cliEval($code, $fuel, [
+					'readOnly' => $evalOptions['readOnly'],
+					'json' => $evalOptions['json'],
+				]);
 			}
 
 		} else if($atAction === 'cron') {
 			$showHelpOnFailure = false;
 			$success = $this->jobs()->cliExecute('cron');
+
+		} else if($atAction === 'help') {
+			echo $this->renderHelp();
+			$success = true;
+
+		} else if($atAction === 'status') {
+			$showHelpOnFailure = false;
+			$success = $this->cliStatus(array_slice($GLOBALS['argv'], 2));
 
 		} else {
 			$found = false;
@@ -255,7 +296,6 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 			}
 			if(!$found) {
 				echo "Unrecognized AgentTools action: $atAction\n";
-				if($atAction === 'help') $showHelpOnFailure = false;
 				$success = false;
 			}
 		}
@@ -297,19 +337,157 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 		}
 		$code = $declare . $code;
 		$readOnly = !empty($options['readOnly']);
+		$json = !empty($options['json']);
 		$validationError = $this->engineer->validateEvalPhp($code, $readOnly, 'Read-only mode');
 		if($validationError !== '') {
-			echo "ERROR: $validationError\n";
+			if($json) {
+				$this->echoCliEvalJson(false, '', null, $validationError);
+			} else {
+				echo "ERROR: $validationError\n";
+			}
 			return false;
 		}
+
+		ob_start();
 		try {
-			eval($code);
+			$returnValue = eval($code);
+			$output = (string) ob_get_clean();
+			if($json) {
+				$this->echoCliEvalJson(true, $output, $returnValue);
+			} else {
+				echo $output;
+			}
 			return true;
 		} catch(\Throwable $e) {
-			echo "ERROR: " . $e->getMessage() . "\n";
-			echo "  Line: " . $e->getLine() . "\n";
+			$output = (string) ob_get_clean();
+			if($json) {
+				$this->echoCliEvalJson(false, $output, null, $e->getMessage(), $e->getLine());
+			} else {
+				echo $output;
+				echo "ERROR: " . $e->getMessage() . "\n";
+				echo "  Line: " . $e->getLine() . "\n";
+			}
 			return false;
 		}
+	}
+
+	/**
+	 * Echo a JSON result envelope for --at-eval/--at-stdin --json
+	 *
+	 * @param bool $success
+	 * @param string $output Captured echo output from the evaluated code
+	 * @param mixed $returnValue Value returned by the evaluated code, if any
+	 * @param string $error Error message, or blank when none
+	 * @param int $errorLine Error line number, or 0 when not applicable
+	 *
+	 */
+	protected function echoCliEvalJson(bool $success, string $output, $returnValue = null, string $error = '', int $errorLine = 0): void {
+		$result = [
+			'ok' => $success,
+			'output' => $output,
+			'return' => $this->normalizeCliEvalValue($returnValue),
+			'error' => null,
+		];
+		if($error !== '') {
+			$result['error'] = [
+				'message' => $error,
+				'line' => $errorLine > 0 ? $errorLine : null,
+			];
+		}
+
+		$flags = JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PARTIAL_OUTPUT_ON_ERROR | JSON_INVALID_UTF8_SUBSTITUTE;
+		$json = json_encode($result, $flags);
+		if($json === false) {
+			$result['output'] = '';
+			$result['return'] = null;
+			$json = json_encode($result, $flags);
+		}
+		echo ($json === false ? '{"ok":false,"output":"","return":null,"error":{"message":"JSON encode failed.","line":null}}' : $json) . "\n";
+	}
+
+	/**
+	 * Normalize a PHP value for JSON output from --at-eval/--at-stdin --json
+	 *
+	 * ProcessWire objects are represented by concise identity fields rather than
+	 * attempting to serialize their full object graphs.
+	 *
+	 * @param mixed $value
+	 * @param int $depth
+	 * @return mixed
+	 *
+	 */
+	protected function normalizeCliEvalValue($value, int $depth = 0) {
+		if($value === null || is_bool($value) || is_int($value) || is_float($value) || is_string($value)) return $value;
+		if(is_resource($value)) return [ '_type' => 'resource', 'type' => get_resource_type($value) ];
+
+		if(is_array($value)) {
+			if($depth >= 4) return [ '_type' => 'array', 'count' => count($value), 'truncated' => true ];
+			$out = [];
+			$qty = 0;
+			foreach($value as $key => $item) {
+				if($qty >= 100) {
+					$out['_truncated'] = true;
+					break;
+				}
+				$out[$key] = $this->normalizeCliEvalValue($item, $depth + 1);
+				$qty++;
+			}
+			return $out;
+		}
+
+		if($value instanceof Page) {
+			return [
+				'_type' => $value->className(),
+				'id' => (int) $value->id,
+				'name' => (string) $value->name,
+				'title' => (string) $value->title,
+				'path' => (string) $value->path,
+				'template' => $value->template ? (string) $value->template->name : '',
+				'status' => (int) $value->status,
+			];
+		}
+
+		if($value instanceof WireArray) {
+			$items = [];
+			foreach($value as $item) {
+				if(count($items) >= 100) break;
+				$items[] = $this->normalizeCliEvalValue($item, $depth + 1);
+			}
+			return [
+				'_type' => $value->className(),
+				'count' => count($value),
+				'items' => $items,
+				'truncated' => count($value) > count($items),
+			];
+		}
+
+		if($value instanceof Field || $value instanceof Template || $value instanceof Fieldgroup || $value instanceof Role || $value instanceof Permission) {
+			return [
+				'_type' => $value->className(),
+				'id' => (int) $value->id,
+				'name' => (string) $value->name,
+				'label' => (string) $value->get('label|title'),
+			];
+		}
+
+		if($value instanceof \JsonSerializable) {
+			return $this->normalizeCliEvalValue($value->jsonSerialize(), $depth + 1);
+		}
+
+		if($value instanceof WireData) {
+			if($depth >= 4) return [ '_type' => $value->className() ];
+			return [
+				'_type' => $value->className(),
+				'data' => $this->normalizeCliEvalValue($value->getArray(), $depth + 1),
+			];
+		}
+
+		if(is_object($value)) {
+			if(method_exists($value, '__toString')) return (string) $value;
+			return [ '_type' => get_class($value) ];
+		}
+
+		return (string) $value;
 	}
 
 	/**
@@ -324,6 +502,7 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 		$options = [
 			'code' => '',
 			'readOnly' => false,
+			'json' => false,
 			'error' => '',
 		];
 		$codeParts = [];
@@ -336,6 +515,15 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 			if(strpos($arg, '--readonly=') === 0 || strpos($arg, '--read-only=') === 0) {
 				$value = strtolower(substr($arg, strpos($arg, '=') + 1));
 				$options['readOnly'] = !in_array($value, ['', '0', 'false', 'no', 'off'], true);
+				continue;
+			}
+			if($arg === '--json') {
+				$options['json'] = true;
+				continue;
+			}
+			if(strpos($arg, '--json=') === 0) {
+				$value = strtolower(substr($arg, 7));
+				$options['json'] = !in_array($value, ['', '0', 'false', 'no', 'off'], true);
 				continue;
 			}
 			if(strpos($arg, '--') === 0) {
@@ -387,8 +575,9 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 	protected function cliHelp() {
 		$help = [
 			"php index.php --at-cli" => "Used by AI agents to work with the ProcessWire API",
-			"php index.php --at-eval [--readonly] 'CODE'" => "Evaluate a PHP expression",
-			"echo 'CODE' | php index.php --at-stdin [--readonly]" => "Evaluate PHP code from stdin",
+			"php index.php --at-eval [--readonly] [--json] 'CODE'" => "Evaluate a PHP expression",
+			"echo 'CODE' | php index.php --at-stdin [--readonly] [--json]" => "Evaluate PHP code from stdin",
+			"php index.php --at-status [--json]" => "Print AgentTools and site status JSON (JSON is the default output)",
 		];
 		foreach($this->getHelpers() as $helper) {
 			$help += $helper->cliHelp();
@@ -445,6 +634,158 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 		}
 
 		return $out;
+	}
+
+	/**
+	 * Execute --at-status CLI command
+	 *
+	 * Status output is JSON by default. The --json flag is accepted for
+	 * explicitness and consistency with other agent-oriented commands.
+	 *
+	 * @param array $args
+	 * @return bool
+	 *
+	 */
+	protected function cliStatus(array $args): bool {
+		foreach($args as $arg) {
+			$arg = (string) $arg;
+			if($arg === '--json') continue;
+			if(strpos($arg, '--') === 0) {
+				fwrite(STDERR, "ERROR: Unknown status option: $arg\n");
+				return false;
+			}
+		}
+
+		$json = json_encode(
+			$this->getStatusData(),
+			JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PARTIAL_OUTPUT_ON_ERROR
+		);
+
+		if($json === false) {
+			fwrite(STDERR, "ERROR: Unable to encode status JSON: " . json_last_error_msg() . "\n");
+			return false;
+		}
+
+		echo $json . "\n";
+		return true;
+	}
+
+	/**
+	 * Get AgentTools and site status data
+	 *
+	 * This is shared by the CLI --at-status command and the MCP at_status tool.
+	 * It intentionally excludes API keys and other secret configuration values.
+	 *
+	 * @return array
+	 *
+	 */
+	public function getStatusData(): array {
+		$config = $this->wire()->config;
+		$moduleInfo = self::getModuleInfo();
+		$filesPath = $this->getFilesPath();
+		$migrationsPath = $this->getFilesPath('migrations');
+		$jobsPath = $filesPath . 'jobs/';
+
+		$sitemap = $this->sitemap;
+		$migrations = $this->migrations;
+		$migrationFiles = is_dir($migrationsPath) ? $migrations->getFiles($migrationsPath) : [];
+		$appliedMigrations = 0;
+		foreach($migrationFiles as $file) {
+			if($migrations->isApplied($file)) $appliedMigrations++;
+		}
+
+		$jobs = $this->jobs;
+		$jobCounts = [];
+		foreach([ AgentToolsJobs::statusPending, AgentToolsJobs::statusRunning, AgentToolsJobs::statusDone, AgentToolsJobs::statusFailed ] as $status) {
+			$jobCounts[$status] = count($jobs->getJobs($status));
+		}
+		$cronLastRun = $jobs->getCronLastRun();
+
+		$agents = $this->getAgents();
+		$primaryAgent = $agents->first();
+		$primaryAgentData = null;
+		if($primaryAgent) {
+			$primaryAgentData = [
+				'id' => (string) $primaryAgent->id,
+				'label' => (string) ($primaryAgent->label ?: $primaryAgent->model),
+				'model' => (string) $primaryAgent->model,
+				'provider' => (string) $primaryAgent->provider,
+				'agentName' => (string) $primaryAgent->agentName,
+			];
+		}
+
+		return [
+			'generated' => date('c'),
+			'php' => [
+				'version' => PHP_VERSION,
+			],
+			'agentTools' => [
+				'version' => (string) ($moduleInfo['version'] ?? ''),
+				'apiVariable' => '$' . self::name,
+				'filesPath' => $filesPath,
+				'filesPathWritable' => is_writable($filesPath),
+				'htaccessFile' => $this->getStatusFileData($filesPath . '.htaccess'),
+			],
+			'processWire' => [
+				'version' => (string) $config->version,
+				'apiVariable' => '$wire',
+				'rootUrl' => $config->urls->root,
+				'httpRootUrl' => $config->urls->httpRoot,
+				'rootPath' => $config->paths->root,
+			],
+			'sitemaps' => [
+				'pages' => $this->getStatusFileData($sitemap->getOutputFile()),
+				'schema' => $this->getStatusFileData($sitemap->getSchemaOutputFile()),
+			],
+			'migrations' => [
+				'path' => $migrationsPath,
+				'count' => count($migrationFiles),
+				'applied' => $appliedMigrations,
+				'pending' => count($migrationFiles) - $appliedMigrations,
+			],
+			'jobs' => [
+				'path' => $jobsPath,
+				'counts' => $jobCounts,
+				'cron' => [
+					'healthy' => $jobs->isCronHealthy(),
+					'lastRun' => $cronLastRun ? date('c', $cronLastRun) : null,
+					'lastRunTimestamp' => $cronLastRun,
+				],
+			],
+			'tasks' => [
+				'scheduled' => count($this->getScheduledTasks()),
+			],
+			'agents' => [
+				'count' => count($agents),
+				'primary' => $primaryAgentData,
+			],
+			'cliCommands' => array_values(array_filter(array_keys($this->cliHelp()), function($command) {
+				return strpos((string) $command, ':') !== 0;
+			})),
+			'notes' => [
+				'Status output is JSON by default; --json is accepted for explicitness.',
+				'The .htaccess file in site/assets/at/ applies to Apache. Verify equivalent protection on nginx or other web servers.',
+			],
+		];
+	}
+
+	/**
+	 * Get file status data for --at-status and MCP at_status
+	 *
+	 * @param string $file
+	 * @return array
+	 *
+	 */
+	protected function getStatusFileData(string $file): array {
+		$exists = is_file($file);
+		return [
+			'file' => $file,
+			'exists' => $exists,
+			'readable' => is_readable($file),
+			'writable' => is_writable($file),
+			'size' => $exists ? filesize($file) : null,
+			'modified' => $exists ? date('c', filemtime($file)) : null,
+		];
 	}
 
 	/**

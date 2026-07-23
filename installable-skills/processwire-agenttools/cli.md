@@ -6,6 +6,8 @@ Run AgentTools commands directly from the ProcessWire root directory, where
 `index.php` lives:
 
 ```bash
+php index.php --at-help
+php index.php --at-status
 php index.php --at-eval 'CODE'
 echo 'CODE' | php index.php --at-stdin
 php index.php --at-cli
@@ -21,6 +23,25 @@ Wrapper-only compatibility helpers:
 
 - `eval-b64` for inline code when the execution environment rewrites `$variables`
 - `stdin-b64` for multi-line code when command transport is unreliable
+
+## --at-status
+
+Print AgentTools and site status JSON. Use this first on an unfamiliar site.
+
+```bash
+php index.php --at-status
+```
+
+JSON is the default output. `--json` is accepted for explicitness:
+
+```bash
+php index.php --at-status --json
+```
+
+The status includes AgentTools, ProcessWire, and PHP versions; site paths;
+generated site-map/schema file state; migration counts; background job and cron
+state; scheduled task count; configured agent count; and available AgentTools
+CLI commands.
 
 ## --at-eval
 
@@ -50,7 +71,18 @@ php index.php --at-eval --readonly 'echo wire()->pages->count() . " pages\n";'
 ```
 
 Read-only mode validates code before it runs and blocks common ProcessWire,
-database, and filesystem mutation calls.
+database, and filesystem mutation calls. It is a conservative guardrail rather
+than a complete PHP sandbox; avoid dynamic function/method dispatch in readonly
+snippets.
+
+Use `--json` when the output will be consumed by another tool:
+
+```bash
+php index.php --at-eval --json 'return ["count" => wire()->pages->count()];'
+```
+
+Eval JSON output is an envelope with `ok`, captured `output`, a normalized
+`return` value, and `error`.
 
 ## --at-stdin
 
@@ -78,6 +110,17 @@ The `ProcessWire` namespace is injected automatically, same as `--at-eval`.
 ```bash
 cat <<'PHP' | php index.php --at-stdin --readonly
 echo $templates->get('home')->name . " template\n";
+PHP
+```
+
+Use `--json` when the output will be consumed by another tool:
+
+```bash
+cat <<'PHP' | php index.php --at-stdin --json
+return [
+    'pages' => $pages->count(),
+    'home' => $pages->get(1)->title,
+];
 PHP
 ```
 
@@ -121,7 +164,8 @@ php index.php --at-mcp
 
 The initial MCP tools are read-only and use the `at_` prefix: `at_status`,
 `at_site_info`, `at_api_docs`, `at_read_file`, `at_migrations_list`,
-`at_migrations_lint`, and `at_eval_readonly`.
+`at_migrations_lint`, and `at_eval_readonly`. `at_read_file` supports optional
+`offset` and `limit` arguments for reading portions of larger files.
 
 If an MCP client disconnects idle stdio servers, set `AGENTTOOLS_MCP_HEARTBEAT=30`
 in that server command to send periodic JSON-RPC `ping` heartbeats.

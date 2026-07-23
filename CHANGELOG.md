@@ -1,5 +1,37 @@
 # Changelog
 
+## Version 28
+
+### CLI
+
+- Added `php index.php --at-help` as an explicit first-contact help command.
+- Added `php index.php --at-status [--json]` for machine-readable AgentTools,
+  ProcessWire, sitemap, migration, job, cron, task, and agent status.
+- Added `--json` output for `--at-eval`, `--at-stdin`, and
+  `--at-migrations-list`, including stable eval envelopes with captured output,
+  normalized return values, and structured errors.
+
+### Read-only and File Tools
+
+- Added `--offset` and `--limit` support to `--at-engineer-read-file` and the
+  MCP `at_read_file` tool.
+- Allowed `read_file` access to the configured ProcessWire `wire/` path, even
+  when it resolves through a symlink, while keeping other non-module symlink
+  reads blocked.
+- Hardened readonly eval validation against common ProcessWire helper
+  mutations, module config writes, callback-based mutations, and dynamic
+  function/method dispatch.
+
+### Tests and Docs
+
+- Added regression coverage for CLI JSON output, status data, read_file ranges,
+  symlink handling, and readonly guard bypasses.
+- Updated README, AGENTS.md, CLI docs, and packaged AgentTools skill docs for
+  the new commands, JSON output, ranged file reads, and readonly guardrail
+  wording.
+
+---
+
 ## Version 27
 
 ### Tasks

@@ -27,10 +27,12 @@ Run from the ProcessWire root directory (where `index.php` lives).
 
 | Command | Purpose |
 |---------|---------|
-| `php index.php --at-eval [--readonly] 'CODE'` | Evaluate a PHP expression with full PW API access |
-| `echo 'CODE' \| php index.php --at-stdin [--readonly]` | Evaluate multi-line PHP code from stdin |
+| `php index.php --at-help` | Print AgentTools CLI help |
+| `php index.php --at-eval [--readonly] [--json] 'CODE'` | Evaluate a PHP expression with full PW API access |
+| `echo 'CODE' \| php index.php --at-stdin [--readonly] [--json]` | Evaluate multi-line PHP code from stdin |
+| `php index.php --at-status [--json]` | Print AgentTools and site status JSON (JSON is the default output) |
 | `php index.php --at-migrations-apply` | Apply all pending migrations |
-| `php index.php --at-migrations-list` | List migrations and their status |
+| `php index.php --at-migrations-list [--json]` | List migrations and their status |
 | `php index.php --at-migrations-test` | Preview pending without applying |
 | `php index.php --at-migrations-lint` | Check migration syntax and AgentTools conventions |
 | `php index.php --at-migrations-rerun --file=FILE` | Re-run one migration even if already applied |
@@ -43,8 +45,17 @@ Run from the ProcessWire root directory (where `index.php` lives).
 | `php index.php --at-engineer-api-docs-list` | List available ProcessWire API.md documentation without calling an AI provider |
 | `php index.php --at-engineer-api-docs-get NAME` | Print a ProcessWire API.md documentation file without calling an AI provider |
 | `php index.php --at-engineer-api-docs-search TERM` | Search ProcessWire API.md documentation without calling an AI provider |
-| `php index.php --at-engineer-read-file PATH` | Read a local site file without calling an AI provider |
+| `php index.php --at-engineer-read-file PATH [--offset=N] [--limit=N]` | Read a local site file without calling an AI provider |
 | `php index.php --at-mcp` | Run the local AgentTools MCP server over stdio |
+
+Use `--json` with `--at-eval`, `--at-stdin`, or `--at-migrations-list` when the
+output will be consumed by another tool. Eval/stdin JSON is an envelope with
+`ok`, captured `output`, normalized `return` value, and `error`.
+
+`--at-engineer-read-file` reads up to 100KB by default; use `--offset=N` and
+`--limit=N` to read a byte range from a larger file. Paths outside the
+ProcessWire root are denied, except the configured `wire/` path and symlinks
+under `site/modules/` are followed.
 
 ## MCP server
 
@@ -56,14 +67,21 @@ php index.php --at-mcp
 
 The initial MCP tool set is read-only: `at_status`, `at_site_info`,
 `at_api_docs`, `at_read_file`, `at_migrations_list`, `at_migrations_lint`,
-and `at_eval_readonly`.
+and `at_eval_readonly`. `at_read_file` supports optional `offset` and `limit`
+arguments for reading portions of larger files.
 
 If an MCP client disconnects idle stdio servers, set `AGENTTOOLS_MCP_HEARTBEAT=30`
 in that server command to send periodic JSON-RPC `ping` heartbeats.
 
 ## Getting oriented on a new site
 
-If you are working on a site for the first time and need JSON in stdout, run:
+If you are working on a site for the first time, start with status JSON:
+
+```bash
+php index.php --at-status
+```
+
+If you need the page tree JSON in stdout, run:
 
 ```bash
 php index.php --at-engineer-site-info pages --refresh

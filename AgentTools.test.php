@@ -32,9 +32,13 @@ class WireTest_AgentTools extends WireTest {
 
 		$this->testEvalValidation($at);
 		$this->testCliEvalParsing($at);
+		$this->testCliEvalJson($at);
+		$this->testReadFileRanges($at);
+		$this->testReadFileSymlinks($at);
 		$this->testMigrationLint($at);
 		$this->testSchemaTemplateFields($at);
 		$this->testMcpMessageShapes($at);
+		$this->testStatusData($at);
 		$this->testScheduledTaskIntervals($at);
 		$this->testTraceJsonEncoding($at);
 	}
@@ -64,6 +68,10 @@ class WireTest_AgentTools extends WireTest {
 		$this->check('Read-only validation allows read snippets', '', $engineer->validateEvalPhp('echo $pages->count();', true, 'Read-only mode'));
 		$this->check('Read-only validation blocks ProcessWire save()', 'Read-only mode blocked mutating eval_php method: save().', $engineer->validateEvalPhp('$page->save();', true, 'Read-only mode'));
 		$this->check('Read-only validation blocks filesystem writes', 'Read-only mode blocked mutating eval_php function: file_put_contents().', $engineer->validateEvalPhp('file_put_contents("/tmp/at-test", "x");', true, 'Read-only mode'));
+		$this->check('Read-only validation blocks WireFileTools writes', 'Read-only mode blocked mutating eval_php method: fileputcontents().', $engineer->validateEvalPhp('$files->filePutContents("/tmp/at-test", "x");', true, 'Read-only mode'));
+		$this->check('Read-only validation blocks module config writes', 'Read-only mode blocked mutating eval_php method: saveconfig().', $engineer->validateEvalPhp('$modules->saveConfig("AgentTools", []);', true, 'Read-only mode'));
+		$this->check('Read-only validation blocks array callback writes', 'Read-only mode blocked mutating eval_php callback: save().', $engineer->validateEvalPhp('call_user_func([$page, "save"]);', true, 'Read-only mode'));
+		$this->check('Read-only validation blocks dynamic method calls', 'Read-only mode blocked dynamic eval_php method call.', $engineer->validateEvalPhp('$method = "save"; $page->$method();', true, 'Read-only mode'));
 		$this->check('Normal eval validation allows ProcessWire save() syntax', '', $engineer->validateEvalPhp('$page->save();'));
 	}
 
@@ -83,6 +91,13 @@ class WireTest_AgentTools extends WireTest {
 		$this->check('Eval parser supports --readonly=false', false, $options['readOnly']);
 		$this->check('Eval parser joins code arguments', 'echo $pages->count();', $options['code']);
 
+		$options = $this->invokeProtected($at, 'parseCliEvalArgs', [[ '--json', 'return 123;' ]]);
+		$this->check('Eval parser detects --json', true, $options['json']);
+		$this->check('Eval parser keeps code after --json', 'return 123;', $options['code']);
+
+		$options = $this->invokeProtected($at, 'parseCliEvalArgs', [[ '--json=false', 'return 123;' ]]);
+		$this->check('Eval parser supports --json=false', false, $options['json']);
+
 		$options = $this->invokeProtected($at, 'parseCliEvalArgs', [[ '--unknown', 'echo 1;' ]]);
 		$this->check('Eval parser rejects unknown options', 'Unknown eval option: --unknown', $options['error']);
 
@@ -91,6 +106,90 @@ class WireTest_AgentTools extends WireTest {
 
 		$normalized = $this->invokeProtected($at, 'normalizeCliEvalCode', [ "  echo \"ok\";\n" ]);
 		$this->check('Eval normalizer trims leading whitespace', "echo \"ok\";\n", $normalized);
+	}
+
+	/**
+	 * Test JSON output from CLI eval.
+	 *
+	 * @param AgentTools $at
+	 *
+	 */
+	protected function testCliEvalJson(AgentTools $at) {
+		$fuel = $this->wire()->fuel->getArray();
+
+		ob_start();
+		$success = $this->invokeProtected($at, 'cliEval', [ 'return ["count" => 123, "page" => $pages->get(1)];', $fuel, [ 'json' => true ] ]);
+		$data = $this->decodeJson((string) ob_get_clean());
+		$this->check('CLI eval JSON succeeds', true, $success);
+		$this->check('CLI eval JSON reports ok', true, $data['ok']);
+		$this->check('CLI eval JSON returns array values', 123, $data['return']['count']);
+		$this->check('CLI eval JSON summarizes Page objects', 1, $data['return']['page']['id']);
+
+		ob_start();
+		$success = $this->invokeProtected($at, 'cliEval', [ 'throw new WireException("Nope");', $fuel, [ 'json' => true ] ]);
+		$data = $this->decodeJson((string) ob_get_clean());
+		$this->check('CLI eval JSON error returns false', false, $success);
+		$this->check('CLI eval JSON error reports not ok', false, $data['ok']);
+		$this->check('CLI eval JSON error includes message', 'Nope', $data['error']['message']);
+	}
+
+	/**
+	 * Test read_file offset/limit ranges.
+	 *
+	 * @param AgentTools $at
+	 *
+	 */
+	protected function testReadFileRanges(AgentTools $at) {
+		$file = $this->wire()->config->paths->assets . 'at-read-file-test.txt';
+		$this->writeTempFile($file, '0123456789abcdefghijklmnopqrstuvwxyz');
+
+		$result = $at->engineer->executeLocalTool('read_file', [ 'path' => $file ]);
+		$this->check('read_file returns full file', '0123456789abcdefghijklmnopqrstuvwxyz', $result);
+
+		$result = $at->engineer->executeLocalTool('read_file', [ 'path' => $file, 'offset' => 10, 'limit' => 5 ]);
+		$this->check('read_file returns byte range', 'abcde', $result);
+
+		$result = $at->engineer->executeLocalTool('read_file', [ 'path' => $file, 'limit' => 5 ]);
+		$this->check('read_file honors limit without offset', '01234', $result);
+
+		$result = $at->engineer->executeLocalTool('read_file', [ 'path' => $file, 'offset' => 40, 'limit' => 5 ]);
+		$this->check('read_file range beyond EOF returns blank', '', $result);
+
+		$result = $at->engineer->executeLocalTool('read_file', [ 'path' => 'wire/core/Functions.php', 'offset' => 0, 'limit' => 5 ]);
+		$this->check('read_file allows configured wire path', '<?php', $result);
+	}
+
+	/**
+	 * Test read_file symlink handling.
+	 *
+	 * @param AgentTools $at
+	 *
+	 */
+	protected function testReadFileSymlinks(AgentTools $at) {
+		if(!function_exists('symlink')) return;
+
+		$outsideDir = $this->makeTempDir();
+		$outsideFile = $outsideDir . 'outside.txt';
+		$this->writeTempFile($outsideFile, 'outside-module');
+
+		$moduleLink = $this->wire()->config->paths->siteModules . 'at-read-file-test.txt';
+		if(!@symlink($outsideFile, $moduleLink)) return;
+		$this->tmpFiles[] = $moduleLink;
+
+		$result = $at->engineer->executeLocalTool('read_file', [ 'path' => $moduleLink ]);
+		$this->check('read_file allows site/modules symlinks', 'outside-module', $result);
+
+		$targetFile = $this->wire()->config->paths->assets . 'at-read-file-target.txt';
+		$this->writeTempFile($targetFile, 'target');
+		$assetLink = $this->wire()->config->paths->assets . 'at-read-file-link.txt';
+		if(!@symlink($targetFile, $assetLink)) return;
+		$this->tmpFiles[] = $assetLink;
+
+		$result = $at->engineer->executeLocalTool('read_file', [ 'path' => $assetLink ]);
+		$this->check('read_file denies non-module symlinks', 'Access denied: symlinks are not allowed for this file.', $result);
+
+		$result = $at->engineer->executeLocalTool('read_file', [ 'path' => 'site/modules/../config.php' ]);
+		$this->check('read_file denies traversal paths', 'Access denied: invalid file path.', $result);
 	}
 
 	/**
@@ -170,6 +269,16 @@ class WireTest_AgentTools extends WireTest {
 		$this->check('MCP tools/list includes at_eval_readonly', true, in_array('at_eval_readonly', $names, true));
 		$this->check('MCP tool definitions use inputSchema', true, isset($tools[0]['inputSchema']));
 
+		$readFileTool = null;
+		foreach($tools as $tool) {
+			if($tool['name'] === 'at_read_file') {
+				$readFileTool = $tool;
+				break;
+			}
+		}
+		$this->check('MCP read_file tool supports offset', true, isset($readFileTool['inputSchema']['properties']['offset']));
+		$this->check('MCP read_file tool supports limit', true, isset($readFileTool['inputSchema']['properties']['limit']));
+
 		$response = $this->decodeJson($mcp->handleJson(json_encode([
 			'jsonrpc' => '2.0',
 			'id' => 3,
@@ -243,6 +352,26 @@ class WireTest_AgentTools extends WireTest {
 			'id' => 'heartbeat-1',
 			'result' => new \stdClass(),
 		])));
+	}
+
+	/**
+	 * Test shared AgentTools status data.
+	 *
+	 * @param AgentTools $at
+	 *
+	 */
+	protected function testStatusData(AgentTools $at) {
+		$status = $at->getStatusData();
+		$this->check('Status data includes AgentTools version', true, isset($status['agentTools']['version']));
+		$this->check('Status data includes AgentTools files path', true, isset($status['agentTools']['filesPath']));
+		$this->check('Status data includes AgentTools htaccess file', true, isset($status['agentTools']['htaccessFile']['file']));
+		$this->check('Status data includes ProcessWire version', true, isset($status['processWire']['version']));
+		$this->check('Status data includes ProcessWire URLs', true, isset($status['processWire']['rootUrl'], $status['processWire']['httpRootUrl']));
+		$this->check('Status data includes sitemap files', true, isset($status['sitemaps']['pages']['file'], $status['sitemaps']['schema']['file']));
+		$this->check('Status data includes migration counts', true, isset($status['migrations']['count'], $status['migrations']['applied'], $status['migrations']['pending']));
+		$this->check('Status data includes job counts', true, isset($status['jobs']['counts']['pending'], $status['jobs']['counts']['failed']));
+		$this->check('Status data includes cron health', true, isset($status['jobs']['cron']['healthy']));
+		$this->check('Status data includes status command', true, in_array('php index.php --at-status [--json]', $status['cliCommands'], true));
 	}
 
 	/**

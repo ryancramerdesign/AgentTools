@@ -35,6 +35,7 @@ $options = [
 	'limit' => 0,
 	'force' => false,
 	'dryRun' => false,
+	'json' => false,
 	'help' => false,
 ];
 $argv = isset($_SERVER['argv']) && is_array($_SERVER['argv']) ? $_SERVER['argv'] : [];
@@ -58,6 +59,15 @@ for($n = 0; $n < count($args); $n++) {
 	if(strpos($arg, '--dry-run=') === 0) {
 		$value = strtolower(substr($arg, 10));
 		$options['dryRun'] = !in_array($value, ['', '0', 'false', 'no', 'off'], true);
+		continue;
+	}
+	if($arg === '--json') {
+		$options['json'] = true;
+		continue;
+	}
+	if(strpos($arg, '--json=') === 0) {
+		$value = strtolower(substr($arg, 7));
+		$options['json'] = !in_array($value, ['', '0', 'false', 'no', 'off'], true);
 		continue;
 	}
 	if($arg === '--file' || $arg === '--name' || $arg === '--limit') {
@@ -101,6 +111,11 @@ $hasSelector = $options['file'] !== '' || $options['name'] !== '';
 $force = $options['force'] || $rerun;
 $dryRun = $dryRun || $options['dryRun'];
 if($dryRun) $apply = false;
+
+if($options['json'] && !$listOnly) {
+	echo "ERROR: --json is currently supported only with --at-migrations-list.\n\n";
+	return false;
+}
 
 if($options['file'] !== '' && $options['name'] !== '') {
 	echo "ERROR: Use either --file or --name, not both.\n\n";
@@ -197,13 +212,43 @@ if($options['limit']) $runnable = array_slice($runnable, 0, (int) $options['limi
 // ----------------------------------------------------------------
 
 if($listOnly) {
+	$appliedCount = count($selectedFiles) - count($pending);
+
+	if($options['json']) {
+		$items = [];
+		foreach($selectedFiles as $file) {
+			$isApplied = $at->migrations->isApplied($file);
+			$info = $at->migrations->getInfo($file);
+			$items[] = [
+				'file' => basename($file),
+				'name' => $at->migrations->getName($file),
+				'title' => $info['title'],
+				'datetime' => $info['datetime'],
+				'status' => $isApplied ? 'applied' : 'pending',
+				'summary' => $info['summary'],
+			];
+		}
+		$json = json_encode([
+			'count' => count($items),
+			'applied' => $appliedCount,
+			'pending' => count($pending),
+			'migrations' => $items,
+		], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PARTIAL_OUTPUT_ON_ERROR | JSON_INVALID_UTF8_SUBSTITUTE);
+		if($json === false) {
+			echo "ERROR: Unable to encode migration list JSON: " . json_last_error_msg() . "\n";
+			return false;
+		}
+		echo $json . "\n";
+		return true;
+	}
+
 	echo "\nMigration status\n";
 	echo str_repeat('-', 60) . "\n";
 	foreach($selectedFiles as $file) {
 		$status = $at->migrations->isApplied($file) ? '[applied]' : '[pending]';
 		echo "  $status  " . basename($file) . "\n";
 	}
-	echo "\n" . (count($selectedFiles) - count($pending)) . " applied, " . count($pending) . " pending.\n\n";
+	echo "\n$appliedCount applied, " . count($pending) . " pending.\n\n";
 	return 1;
 }
 

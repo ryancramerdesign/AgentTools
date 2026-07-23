@@ -221,13 +221,21 @@ class AgentToolsMcp extends AgentToolsHelper {
 			),
 			$this->tool(
 				'at_read_file',
-				'Read a file within this ProcessWire installation. Paths outside the ProcessWire root are denied.',
+				'Read a file within this ProcessWire installation. Paths outside the ProcessWire root are denied, except the configured wire path and symlinks under site/modules/ are followed. Use offset and limit to read a portion of a larger file.',
 				[
 					'type' => 'object',
 					'properties' => [
 						'path' => [
 							'type' => 'string',
 							'description' => "File path relative to the ProcessWire root, such as 'site/templates/home.php'.",
+						],
+						'offset' => [
+							'type' => 'integer',
+							'description' => 'Optional byte offset to start reading from (default 0).',
+						],
+						'limit' => [
+							'type' => 'integer',
+							'description' => 'Optional maximum bytes to read (default and max 102400).',
 						],
 					],
 					'required' => ['path'],
@@ -311,43 +319,11 @@ class AgentToolsMcp extends AgentToolsHelper {
 	 *
 	 */
 	protected function callStatus(array $args): array {
-		$moduleInfo = AgentTools::getModuleInfo();
-		$config = $this->wire()->config;
-		$filesPath = $this->at->getFilesPath();
-		$pagesFile = $filesPath . 'site-map.json';
-		$schemaFile = $filesPath . 'site-map-schema.json';
-		$tools = array_map(function($tool) {
+		$status = $this->at->getStatusData();
+		$status['tools'] = array_map(function($tool) {
 			return $tool['name'];
 		}, $this->getTools());
-
-		return $this->jsonResult([
-			'agentTools' => [
-				'version' => (string) ($moduleInfo['version'] ?? ''),
-			],
-			'processWire' => [
-				'version' => (string) ($config->version ?? ''),
-			],
-			'php' => [
-				'version' => PHP_VERSION,
-			],
-			'site' => [
-				'rootPath' => $config->paths->root,
-				'rootUrl' => $config->urls->root,
-			],
-			'generatedFiles' => [
-				'pages' => [
-					'path' => $pagesFile,
-					'exists' => is_file($pagesFile),
-					'modified' => is_file($pagesFile) ? date('c', filemtime($pagesFile)) : null,
-				],
-				'schema' => [
-					'path' => $schemaFile,
-					'exists' => is_file($schemaFile),
-					'modified' => is_file($schemaFile) ? date('c', filemtime($schemaFile)) : null,
-				],
-			],
-			'tools' => $tools,
-		]);
+		return $this->jsonResult($status);
 	}
 
 	/**
@@ -399,7 +375,10 @@ class AgentToolsMcp extends AgentToolsHelper {
 	protected function callReadFile(array $args): array {
 		$path = trim((string) ($args['path'] ?? ''));
 		if($path === '') return $this->toolError('Missing required argument: path.');
-		return $this->textResult($this->at->engineer()->executeLocalTool('read_file', ['path' => $path]));
+		$input = [ 'path' => $path ];
+		if(isset($args['offset'])) $input['offset'] = (int) $args['offset'];
+		if(isset($args['limit'])) $input['limit'] = (int) $args['limit'];
+		return $this->textResult($this->at->engineer()->executeLocalTool('read_file', $input));
 	}
 
 	/**

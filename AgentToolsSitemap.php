@@ -113,6 +113,16 @@ class AgentToolsSitemap extends AgentToolsHelper {
 	}
 
 	/**
+	 * Get the schema output file path
+	 *
+	 * @return string
+	 *
+	 */
+	public function getSchemaOutputFile() {
+		return $this->at->getFilesPath() . self::schemaFile;
+	}
+
+	/**
 	 * Generate the schema JSON file (fields, fieldgroups, templates with full settings)
 	 *
 	 * @return bool

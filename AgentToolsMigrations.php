@@ -15,16 +15,17 @@ class AgentToolsMigrations extends AgentToolsHelper {
 	public function cliHelp() {
 		return array_merge(parent::cliHelp(), [
 			"php index.php --at-migrations-apply [options]" => "Apply pending migrations, optionally filtered",
-			"php index.php --at-migrations-list [options]" => "List migrations and their status",
+			"php index.php --at-migrations-list [--json] [options]" => "List migrations and their status",
 			"php index.php --at-migrations-test [options]" => "Preview pending migrations without applying",
 			"php index.php --at-migrations-lint [options]" => "Check migration syntax and AgentTools conventions without applying",
 			"php index.php --at-migrations-rerun [options]" => "Re-run one migration even if already applied",
 			':note' => [
-				'Migration options: --file=FILE, --name=NAME, --limit=N, --dry-run, --force',
+				'Migration options: --file=FILE, --name=NAME, --limit=N, --dry-run, --force, --json',
 				'                   --file and --name select one migration',
 				'                   --limit applies to apply and test',
 				'                   --dry-run previews apply or rerun without applying',
 				'                   --force applies to a selected apply or rerun',
+				'                   --json applies to list and outputs JSON',
 			],
 		]);
 	}

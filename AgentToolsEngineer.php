@@ -55,10 +55,16 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	const defaultMemoryMaxLength = 30000;
 
 	/**
-	 * Max characters of eval_php output returned to the AI
+	 * Max characters of tool output to return
 	 *
 	 */
 	const maxOutputLength = 50000;
+
+	/**
+	 * Max bytes to read from a file with the read_file tool
+	 *
+	 */
+	const maxReadFileLength = 102400;
 
 	/**
 	 * debug mode: log request/response JSON to site/assets/logs/agent-tools-engineer.txt log
@@ -571,7 +577,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 				'Print a ProcessWire API documentation file without calling an AI provider',
 			'php index.php --at-engineer-api-docs-search TERM' =>
 				'Search ProcessWire API documentation files without calling an AI provider',
-			'php index.php --at-engineer-read-file PATH' =>
+			'php index.php --at-engineer-read-file PATH [--offset=N] [--limit=N]' =>
 				'Read a file within this ProcessWire installation without calling an AI provider',
 		];
 	}
@@ -713,12 +719,34 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		}
 
 		if($action === 'read-file') {
-			$path = (string) ($args[0] ?? '');
+			$path = '';
+			$input = [];
+			foreach($args as $arg) {
+				$arg = (string) $arg;
+				if(strpos($arg, '--offset=') === 0) {
+					$input['offset'] = (int) substr($arg, 9);
+					continue;
+				}
+				if(strpos($arg, '--limit=') === 0) {
+					$input['limit'] = (int) substr($arg, 8);
+					continue;
+				}
+				if(strpos($arg, '--') === 0) {
+					fwrite(STDERR, "ERROR: Unknown read-file option: $arg\n");
+					return false;
+				}
+				if($path !== '') {
+					fwrite(STDERR, "ERROR: Usage: php index.php --at-engineer-read-file PATH [--offset=N] [--limit=N]\n");
+					return false;
+				}
+				$path = $arg;
+			}
 			if($path === '') {
-				fwrite(STDERR, "ERROR: Usage: php index.php --at-engineer-read-file PATH\n");
+				fwrite(STDERR, "ERROR: Usage: php index.php --at-engineer-read-file PATH [--offset=N] [--limit=N]\n");
 				return false;
 			}
-			echo $this->executeTool('read_file', ['path' => $path]) . "\n";
+			$input['path'] = $path;
+			echo $this->executeTool('read_file', $input) . "\n";
 			return true;
 		}
 
@@ -1337,10 +1365,13 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			'required' => ['type'],
 		];
 
+		$maxReadFileLength = self::maxReadFileLength;
 		$readFileDesc =
 			"Read the contents of a file within this ProcessWire installation. " .
 			"Accepts paths relative to the site root (e.g. 'site/templates/home.php') or absolute paths. " .
-			"Files larger than 100KB cannot be read directly — use eval_php for those.";
+			"Reads up to $maxReadFileLength bytes by default. Use offset and limit to read a portion of a larger file. " .
+			"Paths outside the ProcessWire root are denied, except the configured wire path and symlinks under site/modules/ are followed. " .
+			"Other symlinks are not read.";
 
 		$readFileParams = [
 			'type' => 'object',
@@ -1348,6 +1379,14 @@ class AgentToolsEngineer extends AgentToolsHelper {
 				'path' => [
 					'type' => 'string',
 					'description' => "File path relative to the ProcessWire root (e.g. 'site/templates/home.php') or absolute",
+				],
+				'offset' => [
+					'type' => 'integer',
+					'description' => 'Optional byte offset to start reading from (default 0)',
+				],
+				'limit' => [
+					'type' => 'integer',
+					'description' => "Optional maximum bytes to read (default and max $maxReadFileLength)",
 				],
 			],
 			'required' => ['path'],
@@ -1667,16 +1706,54 @@ class AgentToolsEngineer extends AgentToolsHelper {
 				$root = $this->wire()->config->paths->root;
 				$rootReal = realpath($root);
 				if($rootReal === false) return "Access denied: unable to resolve ProcessWire root.";
+				$root = rtrim($root, '/') . '/';
 
+				$path = str_replace('\\', '/', $path);
 				if(strpos($path, '/') !== 0) $path = $root . $path;
+				if(strpos($path, "\0") !== false || preg_match('!(^|/)\.\.?(/|$)!', $path)) {
+					return "Access denied: invalid file path.";
+				}
+
 				$realPath = realpath($path);
 				if($realPath === false || !is_file($realPath)) return "File not found: $path";
-				if(strpos($realPath . '/', rtrim($rootReal, '/') . '/') !== 0) {
+				if(!is_readable($realPath)) return "File not readable: $path";
+
+				$insideRoot = strpos($realPath . '/', rtrim($rootReal, '/') . '/') === 0;
+				$isModulePath = strpos($path, $root . 'site/modules/') === 0;
+				$wireRoot = rtrim($this->wire()->config->paths->wire, '/') . '/';
+				$wireRootReal = realpath($wireRoot);
+				$insideWire = $wireRootReal !== false && strpos($realPath . '/', rtrim($wireRootReal, '/') . '/') === 0;
+				if(!$insideRoot && !$insideWire && !$isModulePath) {
 					return "Access denied: file is outside the ProcessWire root.";
+				}
+				if(!$insideWire && !$isModulePath) {
+					$currentPath = rtrim($root, '/');
+					$relativePath = substr($path, strlen($currentPath) + 1);
+					foreach(explode('/', $relativePath) as $part) {
+						if($part === '') continue;
+						$currentPath .= '/' . $part;
+						if(is_link($currentPath)) {
+							return "Access denied: symlinks are not allowed for this file.";
+						}
+					}
 				}
 
 				$size = filesize($realPath);
-				if($size > 102400) return "File too large ($size bytes). Use eval_php to read specific portions.";
+				$offset = (int) ($input['offset'] ?? 0);
+				$limit = (int) ($input['limit'] ?? self::maxReadFileLength);
+				if($offset < 0) $offset = 0;
+				if($limit < 1 || $limit > self::maxReadFileLength) $limit = self::maxReadFileLength;
+
+				if($offset > 0 || $limit < $size || $size > self::maxReadFileLength) {
+					if($offset >= $size) return '';
+					$fp = fopen($realPath, 'rb');
+					if($fp === false) return "Unable to open file: $path";
+					if($offset > 0) fseek($fp, $offset);
+					$contents = fread($fp, $limit);
+					fclose($fp);
+					return $contents === false ? '' : (string) $contents;
+				}
+
 				return (string) file_get_contents($realPath);
 			} else if($name === 'site_info') {
 				$type = (string) ($input['type'] ?? '');
@@ -2088,8 +2165,10 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			'chmod',
 			'chown',
 			'copy',
+			'file',
 			'fopen',
 			'file_put_contents',
+			'fwrite',
 			'link',
 			'mkdir',
 			'rename',
@@ -2101,28 +2180,52 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		$blockedMethods = [
 			'add',
 			'addstatus',
+			'chgrp',
+			'chmod',
+			'chown',
 			'clone',
+			'copy',
 			'delete',
 			'deleteall',
 			'execute',
 			'exec',
+			'fileputcontents',
+			'fwrite',
 			'import',
 			'insert',
+			'install',
+			'link',
+			'mkdir',
 			'move',
 			'publish',
 			'query',
+			'rename',
 			'remove',
 			'removestatus',
+			'rmdir',
 			'save',
+			'saveconfig',
 			'savefield',
+			'setconfig',
 			'setandsave',
+			'sort',
+			'symlink',
+			'touch',
 			'trash',
+			'unlink',
+			'uninstall',
 			'unpublish',
 			'update',
 		];
 
 		foreach($tokens as $n => $token) {
 			if(!is_array($token)) continue;
+			if($this->isEvalPhpDynamicFunctionCall($tokens, $n)) {
+				return "$label blocked dynamic eval_php function call.";
+			}
+			if($this->isEvalPhpDynamicMethodCall($tokens, $n)) {
+				return "$label blocked dynamic eval_php method call.";
+			}
 			$name = $this->getEvalPhpTokenName($token);
 			if($name === '') continue;
 			if(in_array($name, $blockedFunctions, true) && $this->isEvalPhpFunctionCall($tokens, $n)) {
@@ -2132,8 +2235,11 @@ class AgentToolsEngineer extends AgentToolsHelper {
 				return "$label blocked mutating eval_php method: $name().";
 			}
 			if(($name === 'call_user_func' || $name === 'call_user_func_array') && $this->isEvalPhpFunctionCall($tokens, $n)) {
-				$called = strtolower(ltrim($this->getEvalPhpFirstCallArgumentString($tokens, $n), '\\'));
+				$called = strtolower(ltrim($this->getEvalPhpCallbackName($tokens, $n), '\\'));
 				$called = basename(str_replace('\\', '/', $called));
+				if($called === '') {
+					return "$label blocked dynamic eval_php callback.";
+				}
 				if(in_array($called, $blockedFunctions, true) || in_array($called, $blockedMethods, true)) {
 					return "$label blocked mutating eval_php callback: $called().";
 				}
@@ -2251,6 +2357,63 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	}
 
 	/**
+	 * Is the token at index n a dynamic function call, like $fn()?
+	 *
+	 * @param array $tokens
+	 * @param int $n
+	 * @return bool
+	 *
+	 */
+	protected function isEvalPhpDynamicFunctionCall(array $tokens, int $n): bool {
+		$token = $tokens[$n] ?? null;
+		if(!is_array($token) || $token[0] !== T_VARIABLE) return false;
+		$next = $this->nextEvalPhpSignificantToken($tokens, $n + 1);
+		if($next !== '(') return false;
+		$prev = $this->prevEvalPhpSignificantToken($tokens, $n - 1);
+		return $prev !== '->' && $prev !== '::';
+	}
+
+	/**
+	 * Is the token at index n a dynamic method call, like $page->$method()?
+	 *
+	 * @param array $tokens
+	 * @param int $n
+	 * @return bool
+	 *
+	 */
+	protected function isEvalPhpDynamicMethodCall(array $tokens, int $n): bool {
+		$token = $tokens[$n] ?? null;
+		if(!is_array($token) || $token[0] !== T_VARIABLE) return false;
+		$next = $this->nextEvalPhpSignificantToken($tokens, $n + 1);
+		if($next !== '(') return false;
+		$prev = $this->prevEvalPhpSignificantToken($tokens, $n - 1);
+		return $prev === '->' || $prev === '::';
+	}
+
+	/**
+	 * Get callback function/method name from a call_user_func style call.
+	 *
+	 * Supports `call_user_func('name')` and `call_user_func([$object, 'name'])`.
+	 *
+	 * @param array $tokens
+	 * @param int $n Function token index
+	 * @return string
+	 *
+	 */
+	protected function getEvalPhpCallbackName(array $tokens, int $n): string {
+		$open = $this->nextEvalPhpSignificantTokenIndex($tokens, $n + 1);
+		if($open < 0 || ($tokens[$open] ?? null) !== '(') return '';
+		$arg = $this->nextEvalPhpSignificantTokenIndex($tokens, $open + 1);
+		if($arg < 0 || !isset($tokens[$arg])) return '';
+		if(is_array($tokens[$arg]) && $tokens[$arg][0] === T_CONSTANT_ENCAPSED_STRING) {
+			return $this->getEvalPhpConstantStringValue($tokens[$arg]);
+		}
+		if($tokens[$arg] !== '[') return '';
+		$method = $this->nextEvalPhpArrayStringValue($tokens, $arg + 1);
+		return $method;
+	}
+
+	/**
 	 * Get first string argument to a call_user_func style call.
 	 *
 	 * @param array $tokens
@@ -2264,11 +2427,50 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		$arg = $this->nextEvalPhpSignificantTokenIndex($tokens, $open + 1);
 		if($arg < 0 || !isset($tokens[$arg]) || !is_array($tokens[$arg])) return '';
 		if($tokens[$arg][0] !== T_CONSTANT_ENCAPSED_STRING) return '';
-		$value = trim((string) $tokens[$arg][1]);
+		return $this->getEvalPhpConstantStringValue($tokens[$arg]);
+	}
+
+	/**
+	 * Get unquoted value from a constant string token.
+	 *
+	 * @param array $token
+	 * @return string
+	 *
+	 */
+	protected function getEvalPhpConstantStringValue(array $token): string {
+		$value = trim((string) $token[1]);
 		if(strlen($value) < 2) return '';
 		$quote = $value[0];
 		if(($quote !== "'" && $quote !== '"') || substr($value, -1) !== $quote) return '';
 		return stripcslashes(substr($value, 1, -1));
+	}
+
+	/**
+	 * Get the last constant string value before the current callback array ends.
+	 *
+	 * @param array $tokens
+	 * @param int $start
+	 * @return string
+	 *
+	 */
+	protected function nextEvalPhpArrayStringValue(array $tokens, int $start): string {
+		$depth = 1;
+		$value = '';
+		for($n = $start; $n < count($tokens); $n++) {
+			$token = $tokens[$n];
+			if($token === '[') {
+				$depth++;
+				continue;
+			}
+			if($token === ']') {
+				$depth--;
+				if($depth === 0) return $value;
+				continue;
+			}
+			if($depth !== 1 || !is_array($token) || $token[0] !== T_CONSTANT_ENCAPSED_STRING) continue;
+			$value = $this->getEvalPhpConstantStringValue($token);
+		}
+		return '';
 	}
 
 	/**

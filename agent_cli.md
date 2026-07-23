@@ -29,11 +29,13 @@ All commands are run from the ProcessWire root directory (where `index.php` live
 
 | Command | Purpose |
 |---------|---------|
+| `php index.php --at-help` | Print AgentTools CLI help |
 | `php index.php --at-cli` | Opens the agent CLI for interactive API access |
-| `php index.php --at-eval [--readonly] 'CODE'` | Evaluate a PHP expression inline |
-| `echo 'CODE' \| php index.php --at-stdin [--readonly]` | Evaluate multi-line PHP code from stdin |
+| `php index.php --at-eval [--readonly] [--json] 'CODE'` | Evaluate a PHP expression inline |
+| `echo 'CODE' \| php index.php --at-stdin [--readonly] [--json]` | Evaluate multi-line PHP code from stdin |
+| `php index.php --at-status [--json]` | Print AgentTools and site status JSON (JSON is the default output) |
 | `php index.php --at-migrations-apply [--file=FILE\|--name=NAME] [--limit=N] [--dry-run] [--force]` | Apply pending migrations, optionally filtered |
-| `php index.php --at-migrations-list [--file=FILE\|--name=NAME]` | List migrations and their status |
+| `php index.php --at-migrations-list [--json] [--file=FILE\|--name=NAME]` | List migrations and their status |
 | `php index.php --at-migrations-test [--file=FILE\|--name=NAME] [--limit=N]` | Preview pending migrations without applying |
 | `php index.php --at-migrations-lint [--file=FILE\|--name=NAME]` | Check migration syntax and AgentTools conventions without applying |
 | `php index.php --at-migrations-rerun --file=FILE\|--name=NAME [--dry-run]` | Re-run one migration even if already applied |
@@ -45,9 +47,13 @@ All commands are run from the ProcessWire root directory (where `index.php` live
 | `php index.php --at-engineer-api-docs-list` | List available ProcessWire API.md documentation without calling an AI provider |
 | `php index.php --at-engineer-api-docs-get NAME` | Print a ProcessWire API.md documentation file without calling an AI provider |
 | `php index.php --at-engineer-api-docs-search TERM` | Search ProcessWire API.md documentation without calling an AI provider |
-| `php index.php --at-engineer-read-file PATH` | Read a local site file without calling an AI provider |
+| `php index.php --at-engineer-read-file PATH [--offset=N] [--limit=N]` | Read a local site file without calling an AI provider |
 | `php index.php --at-cron` | Process one pending AgentTools background job; intended for system cron |
 | `php index.php --at-mcp` | Run the local AgentTools MCP server over stdio |
+
+When arriving on an unfamiliar site, start with `php index.php --at-status`.
+It prints JSON status information by default; `--json` is accepted for
+explicitness but is not required.
 
 ### When to use `--at-eval` vs `--at-stdin`
 
@@ -81,7 +87,25 @@ PHP
 ~~~~~
 
 Read-only mode validates code before it runs and blocks common ProcessWire,
-database, and filesystem mutation calls.
+database, and filesystem mutation calls. It is a conservative guardrail rather
+than a complete PHP sandbox; avoid dynamic function/method dispatch in readonly
+snippets.
+
+Use `--json` when eval/stdin output will be consumed by another tool:
+
+~~~~~
+php index.php --at-eval --json 'return ["count" => $pages->count()];'
+cat <<'PHP' | php index.php --at-stdin --json
+return [
+    'pages' => $pages->count(),
+    'home' => $pages->get(1)->title,
+];
+PHP
+~~~~~
+
+Eval/stdin JSON output is an envelope with `ok`, captured `output`, a normalized
+`return` value, and `error`. ProcessWire objects are summarized by identity
+fields rather than serialized as full object graphs.
 
 ---
 
@@ -137,12 +161,15 @@ Several read-only helper commands are available without calling an AI provider:
 | `php index.php --at-engineer-api-docs-list` | Print available API docs as JSON with `name`, `description`, and `file` |
 | `php index.php --at-engineer-api-docs-get NAME` | Print the contents of an API.md file by name |
 | `php index.php --at-engineer-api-docs-search TERM` | Search API docs and print JSON matches with `name`, `file`, `line`, and `snippet` |
-| `php index.php --at-engineer-read-file PATH` | Print a file inside the ProcessWire root; paths outside the root are denied |
+| `php index.php --at-engineer-read-file PATH [--offset=N] [--limit=N]` | Print a file inside the ProcessWire root; paths outside the root are denied |
 | `php index.php --at-mcp` | Run the local AgentTools MCP server over stdio |
 
 Use these local helper commands when an external coding agent needs structured
 site context, ProcessWire API documentation, or a small local file without
-spending provider tokens.
+spending provider tokens. `--at-engineer-read-file` reads up to 100KB by
+default; use `--offset=N` and `--limit=N` to read a byte range from a larger
+file. Paths outside the ProcessWire root are denied, except the configured
+`wire/` path and symlinks under `site/modules/` are followed.
 
 ### MCP server
 
@@ -160,7 +187,7 @@ collisions when clients connect to multiple MCP servers:
 | `at_status` | Show AgentTools, ProcessWire, PHP, site path, generated files, and tool names |
 | `at_site_info` | Retrieve page tree, schema, or installed module info |
 | `at_api_docs` | List, retrieve, or search ProcessWire API.md documentation |
-| `at_read_file` | Read a file inside the ProcessWire installation |
+| `at_read_file` | Read a file inside the ProcessWire installation, with optional `offset` and `limit` for larger files |
 | `at_migrations_list` | List migrations and applied/pending status |
 | `at_migrations_lint` | Check migration syntax and conventions without executing files |
 | `at_eval_readonly` | Run read-only ProcessWire eval with mutation validation |
@@ -426,6 +453,7 @@ preview a smaller set, use the documented migration flags:
 | `--limit=N` | `apply`, `test` | Limit to the next N selected pending migrations |
 | `--dry-run` | `apply`, `rerun` | Preview selected migrations without applying them |
 | `--force` | `apply` | Re-run the selected migration even if it is already applied; requires `--file` or `--name` |
+| `--json` | `list` | Output the migration list as JSON |
 
 Examples:
 

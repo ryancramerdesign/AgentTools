@@ -190,7 +190,7 @@ if($page->id) {
 | Command | Purpose |
 |---------|---------|
 | `php index.php --at-migrations-apply` | Apply all pending |
-| `php index.php --at-migrations-list` | Show status of all |
+| `php index.php --at-migrations-list [--json]` | Show status of all |
 | `php index.php --at-migrations-test` | Preview without applying |
 | `php index.php --at-migrations-lint` | Check syntax and AgentTools conventions |
 | `php index.php --at-migrations-rerun --file=FILE` | Re-run one migration |
@@ -213,7 +213,8 @@ After applying, confirm the migration worked:
 php index.php --at-migrations-list
 ```
 
-Then spot-check the created state via CLI:
+Use `php index.php --at-migrations-list --json` when the result will be consumed
+by another tool. Then spot-check the created state via CLI:
 
 ```bash
 php index.php --at-eval 'echo $templates->get("event")->name . "\n";'
