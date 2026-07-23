@@ -38,6 +38,7 @@ class WireTest_AgentTools extends WireTest {
 		$this->testMigrationLint($at);
 		$this->testSchemaTemplateFields($at);
 		$this->testMcpMessageShapes($at);
+		$this->testOpenAIResponsesToolShapes($at);
 		$this->testStatusData($at);
 		$this->testScheduledTaskIntervals($at);
 		$this->testTraceJsonEncoding($at);
@@ -352,6 +353,52 @@ class WireTest_AgentTools extends WireTest {
 			'id' => 'heartbeat-1',
 			'result' => new \stdClass(),
 		])));
+	}
+
+	/**
+	 * Test OpenAI Responses API tool definition and tool-call message shapes.
+	 *
+	 * @param AgentTools $at
+	 *
+	 */
+	protected function testOpenAIResponsesToolShapes(AgentTools $at) {
+		$engineer = $at->engineer();
+		$chatTools = $engineer->getToolDefinitions(AgentToolsEngineer::providerOpenAI);
+		$responsesTools = $this->invokeProtected($engineer, 'buildOpenAIResponsesTools', [ $chatTools ]);
+		$this->check('Responses tools use top-level name', 'eval_php', $responsesTools[0]['name'] ?? '');
+		$this->check('Responses tools omit chat function wrapper', false, isset($responsesTools[0]['function']));
+
+		$response = [
+			'output' => [[
+				'type' => 'function_call',
+				'id' => 'fc_123',
+				'call_id' => 'call_123',
+				'name' => 'site_info',
+				'arguments' => '{"type":"pages"}',
+			]],
+		];
+		$calls = $this->invokeProtected($engineer, 'extractToolCalls', [ AgentToolsEngineer::providerOpenAI, $response ]);
+		$this->check('Responses function calls are extracted', 'site_info', $calls[0]['name'] ?? '');
+		$this->check('Responses function call id is retained', 'call_123', $calls[0]['call_id'] ?? '');
+		$this->check('Responses function call arguments decode', 'pages', $calls[0]['input']['type'] ?? '');
+
+		$messages = [];
+		$args = [ AgentToolsEngineer::providerOpenAI, &$messages, $response ];
+		$this->invokeProtected($engineer, 'appendAssistantMessage', $args);
+		$args = [ AgentToolsEngineer::providerOpenAI, &$messages, $calls[0], 'ok' ];
+		$this->invokeProtected($engineer, 'appendToolResult', $args);
+		$input = $this->invokeProtected($engineer, 'buildOpenAIResponsesInput', [ $messages ]);
+		$this->check('Responses input retains function call item', 'function_call', $input[0]['type'] ?? '');
+		$this->check('Responses input appends function_call_output item', 'function_call_output', $input[1]['type'] ?? '');
+		$this->check('Responses input output references call id', 'call_123', $input[1]['call_id'] ?? '');
+
+		$text = $engineer->extractText(AgentToolsEngineer::providerOpenAI, [
+			'output' => [[
+				'type' => 'message',
+				'content' => [[ 'type' => 'output_text', 'text' => 'done' ]],
+			]],
+		]);
+		$this->check('Responses output text is extracted', 'done', $text);
 	}
 
 	/**

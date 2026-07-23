@@ -1603,7 +1603,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	protected function sendOpenAIRequest(AgentToolsRequest $request): array {
 		$options = $request->options;
 		$endpoint = (string) $request->endpoint;
-		$path = (string) parse_url($endpoint, PHP_URL_PATH);
+		$path = rtrim((string) parse_url($endpoint, PHP_URL_PATH), '/');
 		$isResponses = str_ends_with($path, '/responses');
 		// If endpoint looks like a base URL (no recognized path suffix), append /chat/completions
 		if(!$isResponses && !str_ends_with($path, '/chat/completions') && !str_ends_with($path, '/messages')) {
@@ -1616,7 +1616,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 				'input' => $this->buildOpenAIResponsesInput($request->messages),
 			];
 			if($request->systemPrompt !== '') $payload['instructions'] = $request->systemPrompt;
-			if(!empty($request->tools)) $payload['tools'] = $request->tools;
+			if(!empty($request->tools)) $payload['tools'] = $this->buildOpenAIResponsesTools($request->tools);
 
 			// Merge caller-supplied OpenAI options, protecting core structural keys
 			if(!empty($options['openai'])) {
@@ -1651,6 +1651,32 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	}
 
 	/**
+	 * Convert OpenAI Chat Completions tool definitions into Responses API tool definitions.
+	 *
+	 * @param array $tools
+	 * @return array
+	 *
+	 */
+	protected function buildOpenAIResponsesTools(array $tools): array {
+		$responsesTools = [];
+		foreach($tools as $tool) {
+			if(!is_array($tool)) continue;
+			if(isset($tool['function']) && is_array($tool['function'])) {
+				$function = $tool['function'];
+				$responsesTools[] = [
+					'type' => 'function',
+					'name' => (string) ($function['name'] ?? ''),
+					'description' => (string) ($function['description'] ?? ''),
+					'parameters' => $function['parameters'] ?? ['type' => 'object', 'properties' => []],
+				];
+			} else if(($tool['type'] ?? '') === 'function' && isset($tool['name'])) {
+				$responsesTools[] = $tool;
+			}
+		}
+		return $responsesTools;
+	}
+
+	/**
 	 * Convert Chat Completions-style messages into Responses API input items
 	 *
 	 * @param array $messages
@@ -1661,10 +1687,21 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		$input = [];
 		foreach($messages as $message) {
 			if(!is_array($message)) continue;
+			if(isset($message['_openai_responses_item']) && is_array($message['_openai_responses_item'])) {
+				$input[] = $message['_openai_responses_item'];
+				continue;
+			}
 			$role = (string) ($message['role'] ?? 'user');
-			// Tool result messages use a different Responses API format (function_call_output)
-			// that is not yet implemented — skip them to avoid malformed payloads.
-			if($role === 'tool') continue;
+			if($role === 'tool') {
+				$callId = (string) ($message['tool_call_id'] ?? '');
+				if($callId === '') continue;
+				$input[] = [
+					'type' => 'function_call_output',
+					'call_id' => $callId,
+					'output' => (string) ($message['content'] ?? ''),
+				];
+				continue;
+			}
 			$content = $message['content'] ?? '';
 			if(!is_string($content)) {
 				$content = is_scalar($content) ? (string) $content : json_encode($content);
@@ -2583,6 +2620,16 @@ class AgentToolsEngineer extends AgentToolsHelper {
 					$calls[] = ['id' => $block['id'], 'name' => $block['name'], 'input' => $block['input']];
 				}
 			}
+		} else if(isset($response['output']) && is_array($response['output'])) {
+			foreach($response['output'] as $item) {
+				if(($item['type'] ?? '') !== 'function_call') continue;
+				$calls[] = [
+					'id' => (string) ($item['id'] ?? $item['call_id'] ?? ''),
+					'call_id' => (string) ($item['call_id'] ?? $item['id'] ?? ''),
+					'name' => (string) ($item['name'] ?? ''),
+					'input' => json_decode((string) ($item['arguments'] ?? '{}'), true) ?? [],
+				];
+			}
 		} else {
 			$choice = $response['choices'][0] ?? [];
 			if(($choice['finish_reason'] ?? '') !== 'tool_calls') return [];
@@ -2612,6 +2659,19 @@ class AgentToolsEngineer extends AgentToolsHelper {
 				if(($block['type'] ?? '') === 'text') $parts[] = $block['text'];
 			}
 			return implode("\n", $parts);
+		} else if(isset($response['output_text'])) {
+			return (string) $response['output_text'];
+		} else if(isset($response['output']) && is_array($response['output'])) {
+			$parts = [];
+			foreach($response['output'] as $item) {
+				if(($item['type'] ?? '') !== 'message') continue;
+				foreach($item['content'] ?? [] as $content) {
+					if(isset($content['text']) && in_array(($content['type'] ?? ''), ['output_text', 'text'], true)) {
+						$parts[] = (string) $content['text'];
+					}
+				}
+			}
+			return implode("\n", $parts);
 		} else {
 			return (string) ($response['choices'][0]['message']['content'] ?? '');
 		}
@@ -2628,6 +2688,16 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	protected function appendAssistantMessage(string $provider, array &$messages, array $response): void {
 		if($provider === self::providerAnthropic) {
 			$messages[] = ['role' => 'assistant', 'content' => $response['content']];
+		} else if(isset($response['output']) && is_array($response['output'])) {
+			foreach($response['output'] as $item) {
+				if(!is_array($item)) continue;
+				if(!in_array(($item['type'] ?? ''), ['function_call', 'reasoning'], true)) continue;
+				$messages[] = [
+					'role' => 'assistant',
+					'content' => '',
+					'_openai_responses_item' => $item,
+				];
+			}
 		} else {
 			$messages[] = $response['choices'][0]['message'];
 		}
@@ -2655,7 +2725,21 @@ class AgentToolsEngineer extends AgentToolsHelper {
 				$messages[] = ['role' => 'user', 'content' => [$resultBlock]];
 			}
 		} else {
-			$messages[] = ['role' => 'tool', 'tool_call_id' => $toolCall['id'], 'content' => $output];
+			$callId = (string) ($toolCall['call_id'] ?? '');
+			if($callId !== '') {
+				$messages[] = [
+					'role' => 'tool',
+					'tool_call_id' => $callId,
+					'content' => $output,
+					'_openai_responses_item' => [
+						'type' => 'function_call_output',
+						'call_id' => $callId,
+						'output' => $output,
+					],
+				];
+			} else {
+				$messages[] = ['role' => 'tool', 'tool_call_id' => $toolCall['id'], 'content' => $output];
+			}
 		}
 	}
 

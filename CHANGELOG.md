@@ -2,6 +2,12 @@
 
 ## Version 29
 
+### Engineer
+
+- Added OpenAI Responses API tool-call compatibility, including Responses-style
+  tool definitions, function call parsing, and `function_call_output`
+  continuation handling.
+
 ### CLI
 
 - Added `php index.php --at-test [--json]` and the `--at-selftest` alias for
