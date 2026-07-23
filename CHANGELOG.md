@@ -7,6 +7,8 @@
 - Added OpenAI Responses API tool-call compatibility, including Responses-style
   tool definitions, function call parsing, and `function_call_output`
   continuation handling.
+- Clarified the canonical `site/assets/at/migrations/` directory in Engineer
+  migration instructions and `save_migration` tool confirmations.
 
 ### CLI
 

@@ -36,6 +36,7 @@ class WireTest_AgentTools extends WireTest {
 		$this->testReadFileRanges($at);
 		$this->testReadFileSymlinks($at);
 		$this->testMigrationLint($at);
+		$this->testSaveMigrationReportedPath($at);
 		$this->testSchemaTemplateFields($at);
 		$this->testMcpMessageShapes($at);
 		$this->testOpenAIResponsesToolShapes($at);
@@ -223,6 +224,26 @@ class WireTest_AgentTools extends WireTest {
 		$this->check('Migration lint catches bad filename', true, in_array('Filename should match YYYYMMDDhhmmss_description.php.', $result['errors'], true));
 		$this->check('Migration lint catches missing namespace', true, in_array('File should begin with "<?php namespace ProcessWire;".', $result['errors'], true));
 		$this->check('Migration lint warns about missing getName()', true, in_array('Missing standard $name assignment with wire(\'at\')->migrations->getName(__FILE__).', $result['warnings'], true));
+	}
+
+	/**
+	 * Test save_migration reports the canonical AgentTools migrations path.
+	 *
+	 * @param AgentTools $at
+	 *
+	 */
+	protected function testSaveMigrationReportedPath(AgentTools $at) {
+		$engineer = $at->engineer();
+		$result = $this->invokeProtected($engineer, 'executeSaveMigration', [
+			"<?php namespace ProcessWire;\n\necho \"test migration\\n\";\n",
+			'agenttools_selftest_path',
+			'Self-test migration path report.',
+		]);
+		$this->check('save_migration reports AgentTools migrations path', true, strpos($result, 'Migration saved: site/assets/at/migrations/') === 0);
+		$filename = basename($result);
+		$file = $at->getFilesPath('migrations') . $filename;
+		$this->check('save_migration wrote reported file', true, is_file($file));
+		$this->tmpFiles[] = $file;
 	}
 
 	/**

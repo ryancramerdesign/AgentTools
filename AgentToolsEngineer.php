@@ -931,6 +931,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			"eval_php. This allows the user to review changes before they are applied. " .
 			"Do not say that you saved, created, modified, applied, or deleted something unless you " .
 			"actually used the appropriate tool and received a successful result. " .
+			"AgentTools migration files are saved in site/assets/at/migrations/. " .
 			"Migrations can contain any PHP including file operations — use save_migration to create or " .
 			"modify template files, config files, or other site assets that would otherwise require manual creation. " .
 			"When writing files in a migration, prefer \$files->filePutContents(\$path, \$content) over " .
@@ -1323,6 +1324,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 
 		$migrationDesc =
 			"Save a PHP migration file for the user to review and apply. Use for any changes to the site. " .
+			"Migration files are saved in site/assets/at/migrations/. " .
 			"The code must be a complete PHP file beginning with: <?php namespace ProcessWire;";
 
 		$evalParams = [
@@ -2598,7 +2600,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		}
 		if(file_put_contents($path, $code) !== false) {
 			$this->savedMigration = $path;
-			return "Migration saved: $filename";
+			return "Migration saved: site/assets/at/migrations/$filename";
 		}
 		return "ERROR: Failed to save migration file.";
 	}
