@@ -139,119 +139,813 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	 *  - `history` (array): Prior conversation as [ ['role'=>'user','content'=>'...'], ['role'=>'assistant','content'=>'...'], ... ]
 	 *  - `maxIterations` (int): Max tool-use rounds before stopping
 	 *  - `dryRun` (bool): Preview only; inspect and explain without making changes
+	 *  - `onInterrupt` (string): 'stop' (default) or 'resume' after an interrupted tool call
+	 *  - `maxInterruptions` (int): Consecutive interruption limit in resume mode (default: 3)
 	 * @return array [ 'response' => string, 'migration' => string|null, 'error' => string|null, 'history' => array ]
 	 *
 	 */
 	public function ask(string $request, array $options = []): array {
+		if(empty($options['apiKey'])) {
+			$primary = $this->at->getPrimaryAgent();
+			if($primary) $options['apiKey'] = (string) $primary->apiKey;
+		}
+		try {
+			$state = $this->initializeAskState($request, $options);
+		} catch(\Throwable $e) {
+			$state = $this->newAskState($request);
+			$state['status'] = 'error';
+			$state['error'] = $e->getMessage();
+		}
+		$result = $this->executeAskState($state, $options, false);
+		if($result['error'] !== null) $result['history'] = [];
+		return $result;
+	}
 
-		$this->savedMigration = null;
-		$this->lastTrace = [];
-		$result = ['response' => '', 'migration' => null, 'error' => null, 'history' => []];
-		$this->extendPhpTimeLimit($options);
+	/**
+	 * Start a resumable Engineer request without calling the provider yet.
+	 *
+	 * The returned session ID is passed to askStep(). API credentials are not
+	 * saved in session state; ad-hoc credentials must be supplied to each step.
+	 *
+	 * @param string $request
+	 * @param array $options See ask() options
+	 * @return array Resumable request state summary
+	 *
+	 */
+	public function startAskSession(string $request, array $options = []): array {
+		$this->pruneAskSessions();
+		$session = new AgentToolsEngineerSession($this->at);
+		$this->wire($session);
+		$staleAfter = $this->getSessionLockMaxAge([], $options);
+		if(!$session->lock($staleAfter)) {
+			return $this->askStepResult([], 'busy', $session->getId());
+		}
+		try {
+			try {
+				$state = $this->initializeAskState($request, $options);
+			} catch(\Throwable $e) {
+				$state = $this->newAskState($request);
+				$state['status'] = 'error';
+				$state['error'] = $e->getMessage();
+			}
+			$state['id'] = $session->getId();
+			$state['ownerUserId'] = (int) $this->wire()->user->id;
+			$this->pauseTraceInState($state);
+			$session->save($state);
+			return $this->askStepResult($state);
+		} finally {
+			$session->unlock();
+		}
+	}
 
-		if($this->at->get('engineer_suspicious') === 'all' && $this->at->isUserSuspicious()) {
-			$result['response'] = $this->_('Your access to the Engineer has been temporarily suspended due to a previous suspicious request.');
-			return $result;
+	/**
+	 * Run one provider/tool round for a resumable Engineer request.
+	 *
+	 * @param string $sessionId
+	 * @param array $options Runtime option overrides; apiKey may be supplied here
+	 * @return array Includes status, round, done, response, error and tokenUsage
+	 *
+	 */
+	public function askStep(string $sessionId, array $options = []): array {
+		$session = new AgentToolsEngineerSession($this->at, $sessionId);
+		$this->wire($session);
+		$state = $session->load();
+		if(!$state) {
+			return $this->askStepResult([
+				'error' => $this->_('AgentTools Engineer session not found.'),
+			], 'error', $sessionId);
+		}
+		if(!$this->canAccessAskSession($state)) {
+			return $this->askStepResult([
+				'error' => $this->_('You do not have access to this AgentTools Engineer session.'),
+			], 'error', $sessionId);
+		}
+		if(!$session->lock($this->getSessionLockMaxAge($state, $options))) {
+			return $this->askStepResult($state, 'busy', $sessionId);
 		}
 
 		try {
-			$primary = $this->at->getPrimaryAgent();
-			$provider = $options['provider'] ?? ($primary ? $primary->provider : self::providerAnthropic);
-			$apiKey = $options['apiKey'] ?? ($primary ? $primary->apiKey : '');
-			$model = $options['model'] ?? '';
-			$endpoint = $options['endpoint'] ?? '';
-
-			if(!$apiKey) throw new WireException($this->_('API key is not configured in AgentTools module settings.'));
-			$maxIterations = $this->getMaxIterations($options);
-			$this->currentTrace = $this->startTrace($request, $provider, $model, $endpoint, $maxIterations, $options);
-
-			// Build message history: prior pairs (text only) + current request
-			$history = $options['history'] ?? [];
-			$messages = [];
-			foreach($history as $entry) {
-				if(isset($entry['role']) && isset($entry['content'])) {
-					$messages[] = ['role' => $entry['role'], 'content' => (string) $entry['content']];
-				}
+			$state = $session->load();
+			if(!$state) throw new WireException($this->_('AgentTools Engineer session state could not be read.'));
+			if(!$this->canAccessAskSession($state)) {
+				throw new WireException($this->_('You do not have access to this AgentTools Engineer session.'));
 			}
-			$messages[] = ['role' => 'user', 'content' => $request];
-
-			$readOnly = isset($options['readOnly']) ? (bool) $options['readOnly'] : (bool) $this->at->get('engineer_readonly');
-			$dryRun = !empty($options['dryRun']);
-			$verbose = !empty($options['verbose']);
-			$systemPrompt = isset($options['systemPrompt']) ? $options['systemPrompt'] : $this->buildSystemPrompt($readOnly, $dryRun, $options);
-			$systemPrompt = $this->appendMemoryPrompt($systemPrompt, $options, $readOnly, $dryRun);
-			$systemPrompt = $this->appendAgentIdentity($systemPrompt, $provider, $model, $endpoint, $options);
-			if($dryRun && isset($options['systemPrompt'])) $systemPrompt = $this->appendDryRunInstructions($systemPrompt);
-			$systemPrompt = $this->appendIterationBudget($systemPrompt, $maxIterations);
-			if(array_key_exists('tools', $options)) {
-				$tools = $options['tools'];
-			} else {
-				$tools = $this->getToolDefinitions($provider, 'site', $readOnly, $dryRun);
-			}
-
-			$providerRequest = new AgentToolsRequest();
-			$this->wire($providerRequest);
-			$providerRequest->setArray([
-				'provider' => $provider,
-				'apiKey' => $apiKey,
-				'model' => $model,
-				'endpoint' => $endpoint,
-				'systemPrompt' => $systemPrompt,
-				'tools' => $tools,
-			]);
-
-			for($i = 0; $i < $maxIterations; $i++) {
-				$providerRequest->messages = $messages;
-				$response = $this->sendProviderRequest($providerRequest);
-				$toolCalls = $this->extractToolCalls($provider, $response);
-
-				if(empty($toolCalls)) {
-					$responseText = $this->extractText($provider, $response);
-					$result['response'] = $responseText;
-					$result['migration'] = $this->savedMigration;
-					// Return updated history: trim to maxHistoryPairs, append this exchange
-					$updatedHistory = array_merge($history, [
-						['role' => 'user', 'content' => $request],
-						['role' => 'assistant', 'content' => $responseText],
-					]);
-					$maxPairs = (int) $this->at->get('engineer_mem_qty') ?: $this->maxHistoryPairs;
-					$maxEntries = $maxPairs * 2;
-					if(count($updatedHistory) > $maxEntries) {
-						$updatedHistory = array_slice($updatedHistory, -$maxEntries);
-					}
-					$result['history'] = $updatedHistory;
-					$this->finishTrace($result, $options);
-					return $result;
-				}
-
-				$this->appendAssistantMessage($provider, $messages, $response);
-
-				foreach($toolCalls as $toolCall) {
-					if($verbose) fwrite(STDERR, "// tool: {$toolCall['name']}\n");
-					$toolStart = microtime(true);
-					try {
-						$output = $this->executeTool($toolCall['name'], $toolCall['input'], $options);
-						if($this->currentTrace) {
-							$this->at->getTraces()->addToolCall($this->currentTrace, $toolCall['name'], $toolCall['input'], $output, $toolStart);
-						}
-					} catch(\Throwable $e) {
-						if($this->currentTrace) {
-							$this->at->getTraces()->addToolCall($this->currentTrace, $toolCall['name'], $toolCall['input'], '', $toolStart, $e);
-						}
-						throw $e;
-					}
-					$this->appendToolResult($provider, $messages, $toolCall, $output);
-				}
-			}
-
-			$result['error'] = sprintf($this->_('Request exceeded maximum tool-use rounds (%d).'), $maxIterations);
-
+			$persist = function(array &$currentState) use($session): void {
+				$this->copyTraceToState($currentState);
+				$currentState['updated'] = time();
+				$session->save($currentState);
+			};
+			$this->executeAskState($state, $options, true, $persist);
+			return $this->askStepResult($state);
 		} catch(\Throwable $e) {
-			$result['error'] = $e->getMessage();
+			$state['status'] = 'error';
+			$state['error'] = $e->getMessage();
+			$state['updated'] = time();
+			try {
+				$session->save($state);
+			} catch(\Throwable $ignored) {
+			}
+			return $this->askStepResult($state);
+		} finally {
+			$session->unlock();
+		}
+	}
+
+	/**
+	 * Get saved state for a resumable Engineer request.
+	 *
+	 * @param string $sessionId
+	 * @return array<string,mixed>
+	 *
+	 */
+	public function getAskState(string $sessionId): array {
+		$session = new AgentToolsEngineerSession($this->at, $sessionId);
+		$this->wire($session);
+		$state = $session->load();
+		return $this->canAccessAskSession($state) ? $state : [];
+	}
+
+	/**
+	 * Remove a completed or abandoned resumable Engineer request.
+	 *
+	 * @param string $sessionId
+	 * @return bool
+	 *
+	 */
+	public function removeAskSession(string $sessionId): bool {
+		$session = new AgentToolsEngineerSession($this->at, $sessionId);
+		$this->wire($session);
+		$state = $session->load();
+		if($state && !$this->canAccessAskSession($state)) return false;
+		return $session->delete($this->getSessionLockMaxAge($state, []));
+	}
+
+	/**
+	 * Build initial state shared by blocking and resumable requests.
+	 *
+	 * @param string $request
+	 * @param array $options
+	 * @return array<string,mixed>
+	 * @throws WireException
+	 *
+	 */
+	protected function initializeAskState(string $request, array $options): array {
+		$this->savedMigration = null;
+		$this->currentTrace = null;
+		$this->lastTrace = [];
+		$this->extendPhpTimeLimit($options);
+		$state = $this->newAskState($request);
+
+		if($this->at->get('engineer_suspicious') === 'all' && $this->at->isUserSuspicious()) {
+			$state['status'] = 'done';
+			$state['response'] = $this->_('Your access to the Engineer has been temporarily suspended due to a previous suspicious request.');
+			$state['finished'] = time();
+			return $state;
 		}
 
-		$this->finishTrace($result, $options);
+		$primary = $this->at->getPrimaryAgent();
+		$agent = null;
+		if(!empty($options['agentId'])) $agent = $this->at->getAgents()->getById((string) $options['agentId']);
+		if(!$agent && (!empty($options['provider']) || !empty($options['model']) || !empty($options['endpoint']))) {
+			$agent = $this->findTraceAgent(
+				(string) ($options['provider'] ?? ''),
+				(string) ($options['model'] ?? ''),
+				(string) ($options['endpoint'] ?? ''),
+				$options
+			);
+		}
+		if(!$agent) $agent = $primary;
+
+		// Preserve ask() defaults: configured primary provider/key, provider default model/endpoint.
+		$provider = (string) ($options['provider'] ?? ($primary ? $primary->provider : self::providerAnthropic));
+		$model = (string) ($options['model'] ?? '');
+		$endpoint = (string) ($options['endpoint'] ?? '');
+		$apiKey = (string) ($options['apiKey'] ?? ($primary ? $primary->apiKey : ''));
+		if($apiKey === '') throw new WireException($this->_('API key is not configured in AgentTools module settings.'));
+
+		if($agent) {
+			if(empty($options['agentId'])) $options['agentId'] = $agent->id;
+			if(empty($options['agentLabel'])) $options['agentLabel'] = $agent->get('label|model');
+			if(empty($options['agentName'])) $options['agentName'] = $agent->agentName;
+		}
+		$maxIterations = $this->getMaxIterations($options);
+		$history = is_array($options['history'] ?? null) ? $options['history'] : [];
+		$messages = [];
+		foreach($history as $entry) {
+			if(isset($entry['role']) && isset($entry['content'])) {
+				$messages[] = ['role' => $entry['role'], 'content' => (string) $entry['content']];
+			}
+		}
+		$messages[] = ['role' => 'user', 'content' => $request];
+
+		$readOnly = isset($options['readOnly']) ? (bool) $options['readOnly'] : (bool) $this->at->get('engineer_readonly');
+		$dryRun = !empty($options['dryRun']);
+		$systemPrompt = isset($options['systemPrompt']) ? (string) $options['systemPrompt'] : $this->buildSystemPrompt($readOnly, $dryRun, $options);
+		$systemPrompt = $this->appendMemoryPrompt($systemPrompt, $options, $readOnly, $dryRun);
+		$systemPrompt = $this->appendAgentIdentity($systemPrompt, $provider, $model, $endpoint, $options);
+		if($dryRun && isset($options['systemPrompt'])) $systemPrompt = $this->appendDryRunInstructions($systemPrompt);
+		$systemPrompt = $this->appendIterationBudget($systemPrompt, $maxIterations);
+		$tools = array_key_exists('tools', $options) ? $options['tools'] : $this->getToolDefinitions($provider, 'site', $readOnly, $dryRun);
+		if(!is_array($tools)) $tools = [];
+
+		$state['provider'] = $provider;
+		$state['model'] = $model;
+		$state['endpoint'] = $endpoint;
+		$state['agentId'] = (string) ($options['agentId'] ?? '');
+		$state['maxIterations'] = $maxIterations;
+		$state['history'] = $history;
+		$state['messages'] = $messages;
+		$state['systemPrompt'] = $systemPrompt;
+		$state['tools'] = $tools;
+		$state['options'] = $this->getPersistableAskOptions($options);
+
+		$this->currentTrace = $this->startTrace($request, $provider, $model, $endpoint, $maxIterations, $options);
+		$this->copyTraceToState($state);
+		return $state;
+	}
+
+	/**
+	 * Create default Engineer request state.
+	 *
+	 * @param string $request
+	 * @return array<string,mixed>
+	 *
+	 */
+	protected function newAskState(string $request): array {
+		$now = time();
+		return [
+			'id' => '',
+			'ownerUserId' => 0,
+			'status' => 'ready',
+			'created' => $now,
+			'updated' => $now,
+			'finished' => 0,
+			'request' => $request,
+			'provider' => '',
+			'model' => '',
+			'endpoint' => '',
+			'agentId' => '',
+			'round' => 0,
+			'maxIterations' => 0,
+			'tokenUsage' => [
+				'requests' => 0,
+				'input' => 0,
+				'output' => 0,
+				'total' => 0,
+				'cacheRead' => 0,
+				'cacheWrite' => 0,
+			],
+			'options' => [],
+			'history' => [],
+			'messages' => [],
+			'systemPrompt' => '',
+			'tools' => [],
+			'pendingToolCalls' => [],
+			'nextToolCall' => 0,
+			'activeTool' => null,
+			'interruptions' => 0,
+			'savedMigration' => '',
+			'response' => '',
+			'error' => '',
+			'trace' => [],
+		];
+	}
+
+	/**
+	 * Execute one round or the complete blocking request using shared logic.
+	 *
+	 * @param array<string,mixed> $state Modified in place
+	 * @param array $options Runtime option overrides
+	 * @param bool $singleRound Stop after one provider/tool round
+	 * @param callable|null $persist Called after durable progress
+	 * @return array Engineer result
+	 *
+	 */
+	protected function executeAskState(array &$state, array $options, bool $singleRound, ?callable $persist = null): array {
+		$runtimeOptions = $this->getRuntimeAskOptions($state, $options);
+		$this->extendPhpTimeLimit($runtimeOptions);
+		$this->savedMigration = !empty($state['savedMigration']) ? (string) $state['savedMigration'] : null;
+		$this->restoreTraceFromState($state);
+
+		try {
+			$this->recoverInterruptedToolCalls($state, $runtimeOptions, $persist);
+			if(!in_array((string) ($state['status'] ?? ''), ['done', 'error', 'interrupted'], true)) {
+				$roundLimit = $singleRound ? 1 : max(1, (int) ($state['maxIterations'] ?? self::defaultMaxIterations));
+				for($n = 0; $n < $roundLimit; $n++) {
+					if((int) $state['round'] >= (int) $state['maxIterations'] && empty($state['pendingToolCalls'])) {
+						$state['status'] = 'error';
+						$state['error'] = sprintf($this->_('Request exceeded maximum tool-use rounds (%d).'), (int) $state['maxIterations']);
+						break;
+					}
+					$status = $this->runAskRound($state, $runtimeOptions, $persist);
+					if($status !== 'continue') break;
+					if($singleRound) break;
+				}
+			}
+		} catch(\Throwable $e) {
+			$state['status'] = 'error';
+			$state['error'] = $e->getMessage();
+		}
+
+		$state['savedMigration'] = (string) ($this->savedMigration ?: '');
+		$state['updated'] = time();
+		if(in_array((string) $state['status'], ['done', 'error', 'interrupted'], true)) {
+			$state['finished'] = $state['finished'] ?: time();
+			$result = $this->askStateResult($state);
+			$this->finishTrace($result, $runtimeOptions);
+			if(isset($result['trace'])) $state['trace'] = $result['trace'];
+			if(isset($result['traceError'])) $state['traceError'] = $result['traceError'];
+		} else {
+			$state['status'] = 'continue';
+			$this->pauseTraceInState($state);
+		}
+		if($persist) $persist($state);
+		return $this->askStateResult($state);
+	}
+
+	/**
+	 * Run one provider call and all tool calls returned by it.
+	 *
+	 * @param array<string,mixed> $state Modified in place
+	 * @param array $options Runtime options
+	 * @param callable|null $persist
+	 * @return string continue, done, or error
+	 * @throws WireException
+	 *
+	 */
+	protected function runAskRound(array &$state, array $options, ?callable $persist = null): string {
+		if(!empty($state['pendingToolCalls'])) {
+			$this->executePendingToolCalls($state, $options, $persist);
+			return $this->afterToolRound($state);
+		}
+
+		$apiKey = $this->getRuntimeApiKey($state, $options);
+		if($apiKey === '') {
+			throw new WireException($this->_('API key is not available for this Engineer session. Supply apiKey to askStep() or use a configured agentId.'));
+		}
+		$providerRequest = new AgentToolsRequest();
+		$this->wire($providerRequest);
+		$providerRequest->setArray([
+			'provider' => (string) $state['provider'],
+			'apiKey' => $apiKey,
+			'model' => (string) $state['model'],
+			'endpoint' => (string) $state['endpoint'],
+			'systemPrompt' => (string) $state['systemPrompt'],
+			'messages' => (array) $state['messages'],
+			'tools' => (array) $state['tools'],
+			'options' => $this->getProviderRequestOptions($options),
+		]);
+
+		$state['status'] = 'running';
+		$this->persistAskProgress($state, $persist);
+		$response = $this->sendProviderRequest($providerRequest);
+		$state['round'] = (int) $state['round'] + 1;
+		$this->addResponseTokenUsage($state, (string) $state['provider'], $response);
+		$toolCalls = $this->extractToolCalls((string) $state['provider'], $response);
+		if(empty($toolCalls)) {
+			$state['interruptions'] = 0;
+			$this->completeAskState($state, $this->extractText((string) $state['provider'], $response));
+			return 'done';
+		}
+
+		$messages = (array) $state['messages'];
+		$this->appendAssistantMessage((string) $state['provider'], $messages, $response);
+		$state['messages'] = $messages;
+		$state['pendingToolCalls'] = array_values($toolCalls);
+		$state['nextToolCall'] = 0;
+		$this->persistAskProgress($state, $persist);
+		$this->executePendingToolCalls($state, $options, $persist);
+		return $this->afterToolRound($state);
+	}
+
+	/**
+	 * Execute and checkpoint tool calls for the current provider round.
+	 *
+	 * @param array<string,mixed> $state Modified in place
+	 * @param array $options
+	 * @param callable|null $persist
+	 * @throws \Throwable
+	 *
+	 */
+	protected function executePendingToolCalls(array &$state, array $options, ?callable $persist): void {
+		$toolCalls = (array) $state['pendingToolCalls'];
+		$start = max(0, (int) ($state['nextToolCall'] ?? 0));
+		for($index = $start; $index < count($toolCalls); $index++) {
+			$toolCall = $toolCalls[$index];
+			$state['activeTool'] = [
+				'id' => (string) ($toolCall['id'] ?? ''),
+				'name' => (string) ($toolCall['name'] ?? ''),
+				'index' => $index,
+				'started' => time(),
+			];
+			$this->persistAskProgress($state, $persist);
+			if(!empty($options['verbose'])) fwrite(STDERR, "// tool: {$toolCall['name']}\n");
+			$toolStart = microtime(true);
+			try {
+				$output = $this->executeTool((string) $toolCall['name'], (array) $toolCall['input'], $options);
+				if($this->currentTrace) {
+					$this->at->getTraces()->addToolCall($this->currentTrace, (string) $toolCall['name'], (array) $toolCall['input'], $output, $toolStart);
+				}
+			} catch(\Throwable $e) {
+				if($this->currentTrace) {
+					$this->at->getTraces()->addToolCall($this->currentTrace, (string) $toolCall['name'], (array) $toolCall['input'], '', $toolStart, $e);
+				}
+				throw $e;
+			}
+			$messages = (array) $state['messages'];
+			$this->appendToolResult((string) $state['provider'], $messages, $toolCall, $output);
+			$state['messages'] = $messages;
+			$state['nextToolCall'] = $index + 1;
+			$state['activeTool'] = null;
+			$state['savedMigration'] = (string) ($this->savedMigration ?: '');
+			$this->persistAskProgress($state, $persist);
+		}
+		$state['pendingToolCalls'] = [];
+		$state['nextToolCall'] = 0;
+		$state['interruptions'] = 0;
+		$this->persistAskProgress($state, $persist);
+	}
+
+	/**
+	 * Resolve a checkpoint left while a tool call was active.
+	 *
+	 * Resume mode records protocol-complete results for the unknown and skipped
+	 * calls, then lets the provider inspect state and decide what to do next.
+	 *
+	 * @param array<string,mixed> $state Modified in place
+	 * @param array $options
+	 * @param callable|null $persist
+	 * @return bool True when an interrupted checkpoint was handled
+	 *
+	 */
+	protected function recoverInterruptedToolCalls(array &$state, array $options, ?callable $persist): bool {
+		if(in_array((string) ($state['status'] ?? ''), ['done', 'error', 'interrupted'], true) || empty($state['activeTool'])) return false;
+		$name = (string) ($state['activeTool']['name'] ?? 'unknown');
+		if(($options['onInterrupt'] ?? 'stop') !== 'resume') {
+			$state['status'] = 'interrupted';
+			$state['error'] = sprintf(
+				$this->_('The previous request ended while tool "%s" was running. It will not be repeated automatically because it may already have changed the site.'),
+				$name
+			);
+			return true;
+		}
+
+		$state['interruptions'] = (int) ($state['interruptions'] ?? 0) + 1;
+		$maxInterruptions = max(1, min(10, (int) ($options['maxInterruptions'] ?? 3)));
+		if($state['interruptions'] > $maxInterruptions) {
+			$state['status'] = 'interrupted';
+			$state['error'] = sprintf($this->_('Engineer session stopped after %d interrupted tool calls.'), $maxInterruptions);
+			return true;
+		}
+
+		$toolCalls = array_values((array) ($state['pendingToolCalls'] ?? []));
+		$index = max(0, (int) ($state['activeTool']['index'] ?? $state['nextToolCall'] ?? 0));
+		$messages = (array) $state['messages'];
+		for($n = $index; $n < count($toolCalls); $n++) {
+			$output = $n === $index
+				? $this->_('This tool call was interrupted and its outcome is unknown. Inspect the current state before retrying or taking further action.')
+				: $this->_('This tool call was skipped because an earlier tool call was interrupted. It was not executed.');
+			$this->appendToolResult((string) $state['provider'], $messages, $toolCalls[$n], $output);
+		}
+		$state['messages'] = $messages;
+		$state['pendingToolCalls'] = [];
+		$state['nextToolCall'] = 0;
+		$state['activeTool'] = null;
+		$state['status'] = 'continue';
+		$state['error'] = '';
+		$this->persistAskProgress($state, $persist);
+		return true;
+	}
+
+	/**
+	 * Determine status after a tool-use round.
+	 *
+	 * @param array<string,mixed> $state
+	 * @return string
+	 *
+	 */
+	protected function afterToolRound(array &$state): string {
+		if((int) $state['round'] >= (int) $state['maxIterations']) {
+			$state['status'] = 'error';
+			$state['error'] = sprintf($this->_('Request exceeded maximum tool-use rounds (%d).'), (int) $state['maxIterations']);
+			return 'error';
+		}
+		$state['status'] = 'continue';
+		return 'continue';
+	}
+
+	/**
+	 * Complete a request and build trimmed conversation history.
+	 *
+	 * @param array<string,mixed> $state Modified in place
+	 * @param string $responseText
+	 *
+	 */
+	protected function completeAskState(array &$state, string $responseText): void {
+		$updatedHistory = array_merge((array) $state['history'], [
+			['role' => 'user', 'content' => (string) $state['request']],
+			['role' => 'assistant', 'content' => $responseText],
+		]);
+		$maxPairs = (int) $this->at->get('engineer_mem_qty') ?: $this->maxHistoryPairs;
+		$maxEntries = $maxPairs * 2;
+		if(count($updatedHistory) > $maxEntries) $updatedHistory = array_slice($updatedHistory, -$maxEntries);
+		$state['response'] = $responseText;
+		$state['savedMigration'] = (string) ($this->savedMigration ?: '');
+		$state['history'] = $updatedHistory;
+		$state['status'] = 'done';
+		$state['finished'] = time();
+	}
+
+	/**
+	 * Persist a checkpoint after provider or tool progress.
+	 *
+	 * @param array<string,mixed> $state Modified in place
+	 * @param callable|null $persist
+	 *
+	 */
+	protected function persistAskProgress(array &$state, ?callable $persist): void {
+		if(!$persist) return;
+		$state['updated'] = time();
+		$persist($state);
+	}
+
+	/**
+	 * Accumulate normalized token usage returned by a provider.
+	 *
+	 * @param array<string,mixed> $state Modified in place
+	 * @param string $provider
+	 * @param array $response
+	 *
+	 */
+	protected function addResponseTokenUsage(array &$state, string $provider, array $response): void {
+		$usage = is_array($response['usage'] ?? null) ? $response['usage'] : [];
+		$input = $provider === self::providerAnthropic ? (int) ($usage['input_tokens'] ?? 0) : (int) ($usage['prompt_tokens'] ?? $usage['input_tokens'] ?? 0);
+		$output = $provider === self::providerAnthropic ? (int) ($usage['output_tokens'] ?? 0) : (int) ($usage['completion_tokens'] ?? $usage['output_tokens'] ?? 0);
+		$cacheRead = (int) ($usage['cache_read_input_tokens'] ?? $usage['prompt_tokens_details']['cached_tokens'] ?? $usage['input_tokens_details']['cached_tokens'] ?? 0);
+		$cacheWrite = (int) ($usage['cache_creation_input_tokens'] ?? 0);
+		$current = array_merge($this->newAskState('')['tokenUsage'], (array) ($state['tokenUsage'] ?? []));
+		$current['requests']++;
+		$current['input'] += $input;
+		$current['output'] += $output;
+		$total = (int) ($usage['total_tokens'] ?? ($input + $output));
+		if($provider === self::providerAnthropic && !isset($usage['total_tokens'])) $total += $cacheRead + $cacheWrite;
+		$current['total'] += $total;
+		$current['cacheRead'] += $cacheRead;
+		$current['cacheWrite'] += $cacheWrite;
+		$state['tokenUsage'] = $current;
+	}
+
+	/**
+	 * Restore runtime-only options and ProcessWire objects.
+	 *
+	 * @param array<string,mixed> $state
+	 * @param array $overrides
+	 * @return array
+	 *
+	 */
+	protected function getRuntimeAskOptions(array $state, array $overrides): array {
+		$options = array_merge((array) ($state['options'] ?? []), $overrides);
+		if(isset($options['pageEngineerField']) && is_string($options['pageEngineerField'])) {
+			$field = $this->wire()->fields->get($options['pageEngineerField']);
+			if($field && $field->id) $options['pageEngineerField'] = $field;
+		}
+		return $options;
+	}
+
+	/**
+	 * Resolve an API key without ever reading it from saved state.
+	 *
+	 * @param array<string,mixed> $state
+	 * @param array $options
+	 * @return string
+	 *
+	 */
+	protected function getRuntimeApiKey(array $state, array $options): string {
+		if(!empty($options['apiKey'])) return (string) $options['apiKey'];
+		$agentId = (string) ($state['agentId'] ?? '');
+		if($agentId === '') $agentId = (string) ($options['agentId'] ?? '');
+		if($agentId !== '') {
+			$agent = $this->at->getAgents()->getById($agentId);
+			if($agent) return (string) $agent->apiKey;
+		}
+		$agent = $this->findTraceAgent(
+			(string) ($state['provider'] ?? ''),
+			(string) ($state['model'] ?? ''),
+			(string) ($state['endpoint'] ?? ''),
+			$options
+		);
+		return $agent ? (string) $agent->apiKey : '';
+	}
+
+	/**
+	 * Limit options sent to provider adapters to their documented namespaces.
+	 *
+	 * @param array $options
+	 * @return array
+	 *
+	 */
+	protected function getProviderRequestOptions(array $options): array {
+		$result = [];
+		foreach(['timeout', 'anthropic', 'openai'] as $key) {
+			if(array_key_exists($key, $options)) $result[$key] = $options[$key];
+		}
 		return $result;
+	}
+
+	/**
+	 * Make ask options safe and JSON-serializable for session storage.
+	 *
+	 * @param array $options
+	 * @return array
+	 *
+	 */
+	protected function getPersistableAskOptions(array $options): array {
+		unset($options['apiKey'], $options['history'], $options['systemPrompt'], $options['tools']);
+		if(isset($options['pageEngineerField']) && $options['pageEngineerField'] instanceof Field) {
+			$options['pageEngineerField'] = (string) $options['pageEngineerField']->name;
+		}
+		$valid = true;
+		$value = $this->getPersistableAskValue($options, $valid);
+		return $valid && is_array($value) ? $value : [];
+	}
+
+	/**
+	 * Recursively normalize a session option value.
+	 *
+	 * @param mixed $value
+	 * @param bool $valid
+	 * @return mixed
+	 *
+	 */
+	protected function getPersistableAskValue($value, bool &$valid) {
+		if($value === null || is_scalar($value)) return $value;
+		if(!is_array($value)) {
+			$valid = false;
+			return null;
+		}
+		$result = [];
+		foreach($value as $key => $item) {
+			$credentialKey = strtolower(str_replace(['-', '_'], '', (string) $key));
+			if(in_array($credentialKey, ['apikey', 'xapikey', 'authorization'], true)) continue;
+			$itemValid = true;
+			$normalized = $this->getPersistableAskValue($item, $itemValid);
+			if($itemValid) $result[$key] = $normalized;
+		}
+		return $result;
+	}
+
+	/**
+	 * Restore a paused trace from session state.
+	 *
+	 * @param array<string,mixed> $state
+	 *
+	 */
+	protected function restoreTraceFromState(array $state): void {
+		$this->currentTrace = null;
+		$trace = is_array($state['trace'] ?? null) ? $state['trace'] : [];
+		if($trace && ($trace['status'] ?? 'running') === 'running') {
+			$this->currentTrace = $this->at->getTraces()->resumeTrace($trace);
+		}
+	}
+
+	/**
+	 * Copy the active trace into state without stopping its timer.
+	 *
+	 * @param array<string,mixed> $state Modified in place
+	 *
+	 */
+	protected function copyTraceToState(array &$state): void {
+		if($this->currentTrace) $state['trace'] = $this->currentTrace->toArray();
+	}
+
+	/**
+	 * Pause and copy the active trace for the next request.
+	 *
+	 * @param array<string,mixed> $state Modified in place
+	 *
+	 */
+	protected function pauseTraceInState(array &$state): void {
+		if(!$this->currentTrace) return;
+		$this->at->getTraces()->pauseTrace($this->currentTrace);
+		$this->copyTraceToState($state);
+		$this->currentTrace = null;
+	}
+
+	/**
+	 * Get request timeout plus the stale-lock safety buffer.
+	 *
+	 * @param array<string,mixed> $state
+	 * @param array $options
+	 * @return int
+	 *
+	 */
+	protected function getSessionLockMaxAge(array $state, array $options): int {
+		$stored = (array) ($state['options'] ?? []);
+		$timeout = (int) ($options['timeout'] ?? $stored['timeout'] ?? $this->getRequestTimeout());
+		if($timeout < 1) $timeout = $this->getRequestTimeout();
+		return $timeout + 60;
+	}
+
+	/**
+	 * Can the current request access the given resumable session?
+	 *
+	 * CLI requests are trusted because they already have filesystem and
+	 * ProcessWire bootstrap access. Browser requests must use the owner account.
+	 *
+	 * @param array<string,mixed> $state
+	 * @param int|null $userId Current user override for testing
+	 * @param bool|null $cli CLI mode override for testing
+	 * @return bool
+	 *
+	 */
+	protected function canAccessAskSession(array $state, ?int $userId = null, ?bool $cli = null): bool {
+		if($cli === null) $cli = PHP_SAPI === 'cli';
+		if($cli) return true;
+		if(!$state) return false;
+		$ownerUserId = (int) ($state['ownerUserId'] ?? 0);
+		$guestUserId = (int) $this->wire()->config->guestUserPageID;
+		if($ownerUserId < 1 || $ownerUserId === $guestUserId) return false;
+		if($userId === null) $userId = (int) $this->wire()->user->id;
+		return $ownerUserId === $userId;
+	}
+
+	/**
+	 * Opportunistically remove abandoned resumable sessions.
+	 *
+	 * @param int $maxAge Maximum idle age in seconds
+	 * @param int $maxScan Maximum session directories to inspect per request
+	 * @return int Number removed
+	 *
+	 */
+	protected function pruneAskSessions(int $maxAge = 604800, int $maxScan = 100): int {
+		$basePath = $this->at->getFilesPath('engineer-sessions');
+		if(!is_dir($basePath)) return 0;
+		$removed = 0;
+		$paths = glob($basePath . '*', GLOB_ONLYDIR) ?: [];
+		usort($paths, function(string $a, string $b): int {
+			return ((int) @filemtime($a)) <=> ((int) @filemtime($b));
+		});
+		foreach(array_slice($paths, 0, max(1, $maxScan)) as $path) {
+			$stateFile = rtrim($path, '/') . '/state.json';
+			clearstatcache(true, $stateFile);
+			$modified = @filemtime($stateFile);
+			if(!$modified) {
+				clearstatcache(true, $path);
+				$modified = @filemtime($path);
+			}
+			if(!$modified || $modified >= time() - $maxAge) continue;
+			try {
+				$session = new AgentToolsEngineerSession($this->at, basename($path));
+				$this->wire($session);
+				$state = $session->load();
+				if($session->delete($this->getSessionLockMaxAge($state, []))) $removed++;
+			} catch(\Throwable $e) {
+				// Cleanup is best-effort and must not prevent a new request.
+			}
+		}
+		return $removed;
+	}
+
+	/**
+	 * Convert internal state to the traditional ask() result.
+	 *
+	 * @param array<string,mixed> $state
+	 * @return array
+	 *
+	 */
+	protected function askStateResult(array $state): array {
+		$result = [
+			'response' => (string) ($state['response'] ?? ''),
+			'migration' => !empty($state['savedMigration']) ? (string) $state['savedMigration'] : null,
+			'error' => !empty($state['error']) ? (string) $state['error'] : null,
+			'history' => is_array($state['history'] ?? null) ? $state['history'] : [],
+			'tokenUsage' => is_array($state['tokenUsage'] ?? null) ? $state['tokenUsage'] : [],
+		];
+		if(!empty($state['trace']) && is_array($state['trace'])) $result['trace'] = $state['trace'];
+		if(!empty($state['traceError'])) $result['traceError'] = (string) $state['traceError'];
+		return $result;
+	}
+
+	/**
+	 * Build the public result for startAskSession() and askStep().
+	 *
+	 * @param array<string,mixed> $state
+	 * @param string $status Optional status override
+	 * @param string $sessionId Optional ID when state is unavailable
+	 * @return array
+	 *
+	 */
+	protected function askStepResult(array $state, string $status = '', string $sessionId = ''): array {
+		if($status === '') $status = (string) ($state['status'] ?? 'error');
+		if($sessionId === '') $sessionId = (string) ($state['id'] ?? '');
+		$result = $this->askStateResult($state);
+		return array_merge([
+			'sessionId' => $sessionId,
+			'ownerUserId' => (int) ($state['ownerUserId'] ?? 0),
+			'status' => $status,
+			'round' => (int) ($state['round'] ?? 0),
+			'done' => in_array($status, ['done', 'error', 'interrupted'], true),
+		], $result);
 	}
 
 	/**

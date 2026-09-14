@@ -51,6 +51,36 @@ class AgentToolsTraces extends Wire {
 	}
 
 	/**
+	 * Restore a trace that was paused between requests.
+	 *
+	 * @param array<string,mixed> $data Saved trace data.
+	 * @return AgentToolsTrace
+	 *
+	 */
+	public function resumeTrace(array $data): AgentToolsTrace {
+		$trace = new AgentToolsTrace($data);
+		$this->wire($trace);
+		$this->startTimes[$trace->id] = microtime(true);
+		return $trace;
+	}
+
+	/**
+	 * Pause active timing so a trace can be saved between requests.
+	 *
+	 * @param AgentToolsTrace $trace
+	 * @return AgentToolsTrace
+	 *
+	 */
+	public function pauseTrace(AgentToolsTrace $trace): AgentToolsTrace {
+		if(isset($this->startTimes[$trace->id])) {
+			$elapsed = (microtime(true) - $this->startTimes[$trace->id]) * 1000;
+			$trace->durationMs = $trace->durationMs + max(0, (int) round($elapsed));
+			unset($this->startTimes[$trace->id]);
+		}
+		return $trace;
+	}
+
+	/**
 	 * Record a completed tool call in a trace.
 	 *
 	 * @param AgentToolsTrace $trace
@@ -88,9 +118,7 @@ class AgentToolsTraces extends Wire {
 	 */
 	public function finish(AgentToolsTrace $trace, array $result = []): AgentToolsTrace {
 		$trace->finished = time();
-		$started = $this->startTimes[$trace->id] ?? (float) $trace->started;
-		$trace->durationMs = max(0, (int) round((microtime(true) - $started) * 1000));
-		unset($this->startTimes[$trace->id]);
+		$this->pauseTrace($trace);
 		$error = (string) ($result['error'] ?? '');
 		$response = (string) ($result['response'] ?? '');
 		$trace->status = $error === '' ? 'success' : 'error';

@@ -1316,6 +1316,7 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 include_once(__DIR__ . '/AgentToolsAgent.php');
 include_once(__DIR__ . '/AgentToolsAgents.php');
 include_once(__DIR__ . '/AgentToolsRequest.php');
+include_once(__DIR__ . '/AgentToolsEngineerSession.php');
 include_once(__DIR__ . '/AgentToolsTask.php');
 include_once(__DIR__ . '/AgentToolsTasks.php');
 include_once(__DIR__ . '/AgentToolsScheduledTask.php');

@@ -40,6 +40,7 @@ class WireTest_AgentTools extends WireTest {
 		$this->testSchemaTemplateFields($at);
 		$this->testMcpMessageShapes($at);
 		$this->testOpenAIResponsesToolShapes($at);
+		$this->testEngineerStepMode($at);
 		$this->testStatusData($at);
 		$this->testScheduledTaskIntervals($at);
 		$this->testTraceJsonEncoding($at);
@@ -420,6 +421,337 @@ class WireTest_AgentTools extends WireTest {
 			]],
 		]);
 		$this->check('Responses output text is extracted', 'done', $text);
+	}
+
+	/**
+	 * Test resumable Engineer rounds, state checkpoints, usage, and locking.
+	 *
+	 * @param AgentTools $at
+	 *
+	 */
+	protected function testEngineerStepMode(AgentTools $at) {
+		$engineer = $at->engineer();
+		$responses = [
+			[
+				'stop_reason' => 'tool_use',
+				'content' => [[
+					'type' => 'tool_use',
+					'id' => 'tool_test_1',
+					'name' => 'test_checkpoint',
+					'input' => [ 'value' => 123 ],
+				]],
+				'usage' => [ 'input_tokens' => 10, 'output_tokens' => 5 ],
+			],
+			[
+				'stop_reason' => 'end_turn',
+				'content' => [[ 'type' => 'text', 'text' => 'step mode done' ]],
+				'usage' => [ 'input_tokens' => 8, 'output_tokens' => 3 ],
+			],
+		];
+		$hookId = $engineer->addHookBefore('sendProviderRequest', function(HookEvent $event) use(&$responses) {
+			$response = array_shift($responses);
+			if($response instanceof \Throwable) throw $response;
+			$event->return = $response;
+			$event->replace = true;
+		});
+
+		$sessionId = '';
+		$interruptedId = '';
+		$resumedId = '';
+		$openAIResumedId = '';
+		$staleDeleteId = '';
+		$responsesSessionId = '';
+		try {
+			$started = $engineer->startAskSession('Test resumable rounds', [
+				'provider' => AgentToolsEngineer::providerAnthropic,
+				'apiKey' => 'test-only-key',
+				'model' => 'test-model',
+				'tools' => [],
+				'maxIterations' => 4,
+			]);
+			$sessionId = $started['sessionId'];
+			$this->check('Engineer step session starts ready', 'ready', $started['status']);
+			$this->check('Engineer step session starts before provider call', 0, $started['round']);
+			$this->check('Engineer step session exposes owner user ID', (int) $this->wire()->user->id, $started['ownerUserId']);
+
+			$state = $engineer->getAskState($sessionId);
+			$this->check('Engineer step state excludes API key', false, isset($state['options']['apiKey']));
+
+			$first = $engineer->askStep($sessionId, [ 'apiKey' => 'test-only-key' ]);
+			$this->check('Engineer first step requests another round', 'continue', $first['status']);
+			$this->check('Engineer first step runs one provider round', 1, $first['round']);
+			$this->check('Engineer first step records token usage', 15, $first['tokenUsage']['total']);
+
+			$state = $engineer->getAskState($sessionId);
+			$this->check('Engineer step checkpoints tool result', true, count($state['messages']) >= 3);
+			$this->check('Engineer step clears completed active tool', null, $state['activeTool']);
+
+			$store = new AgentToolsEngineerSession($at, $sessionId);
+			$this->wire($store);
+			$locked = $store->lock(360);
+			$this->check('Engineer session test obtains lock', true, $locked);
+			$lockFile = $this->invokeProtected($store, 'getLockFile');
+			touch($lockFile, time() - 600);
+			$store->save($store->load());
+			clearstatcache(true, $lockFile);
+			$this->check('Engineer checkpoint refreshes owned lock', true, filemtime($lockFile) >= time() - 2);
+			$competitor = new AgentToolsEngineerSession($at, $sessionId);
+			$this->wire($competitor);
+			$this->check('Engineer refreshed lock cannot be reclaimed', false, $competitor->lock(60));
+			$busy = $engineer->askStep($sessionId, [ 'apiKey' => 'test-only-key' ]);
+			$this->check('Engineer concurrent step reports busy', 'busy', $busy['status']);
+			$store->unlock();
+
+			$second = $engineer->askStep($sessionId, [ 'apiKey' => 'test-only-key' ]);
+			$this->check('Engineer second step completes', 'done', $second['status']);
+			$this->check('Engineer second step returns response', 'step mode done', $second['response']);
+			$this->check('Engineer step accumulates token usage', 26, $second['tokenUsage']['total']);
+			$this->check('Engineer completed step returns history', 2, count($second['history']));
+
+			$responses = [
+				[
+					'stop_reason' => 'tool_use',
+					'content' => [[
+						'type' => 'tool_use',
+						'id' => 'tool_test_2',
+						'name' => 'test_checkpoint',
+						'input' => [],
+					]],
+				],
+				[
+					'stop_reason' => 'end_turn',
+					'content' => [[ 'type' => 'text', 'text' => 'blocking mode done' ]],
+				],
+			];
+			$blocking = $engineer->ask('Test blocking rounds', [
+				'provider' => AgentToolsEngineer::providerAnthropic,
+				'apiKey' => 'test-only-key',
+				'model' => 'test-model',
+				'tools' => [],
+				'maxIterations' => 4,
+			]);
+			$this->check('Engineer blocking ask still completes all rounds', 'blocking mode done', $blocking['response']);
+			$this->check('Engineer blocking ask still returns no error', null, $blocking['error']);
+
+			$interrupted = $engineer->startAskSession('Test interrupted tool guard', [
+				'provider' => AgentToolsEngineer::providerAnthropic,
+				'apiKey' => 'test-only-key',
+				'model' => 'test-model',
+				'tools' => [],
+			]);
+			$interruptedId = $interrupted['sessionId'];
+			$store = new AgentToolsEngineerSession($at, $interruptedId);
+			$this->wire($store);
+			$store->lock(360);
+			$state = $store->load();
+			$state['status'] = 'running';
+			$state['activeTool'] = [ 'id' => 'tool_interrupted', 'name' => 'save_migration', 'index' => 0 ];
+			$store->save($state);
+			$store->unlock();
+			$interrupted = $engineer->askStep($interruptedId, [ 'apiKey' => 'test-only-key' ]);
+			$this->check('Engineer interrupted tool is not repeated', 'interrupted', $interrupted['status']);
+			$this->check('Engineer interrupted tool ends resumable request', true, $interrupted['done']);
+
+			$staleDelete = $engineer->startAskSession('Test stale lock deletion', [
+				'provider' => AgentToolsEngineer::providerAnthropic,
+				'apiKey' => 'test-only-key',
+				'model' => 'test-model',
+				'tools' => [],
+			]);
+			$staleDeleteId = $staleDelete['sessionId'];
+			$store = new AgentToolsEngineerSession($at, $staleDeleteId);
+			$this->wire($store);
+			$store->lock(60);
+			$lockFile = $this->invokeProtected($store, 'getLockFile');
+			touch($lockFile, time() - 120);
+			$cleanupStore = new AgentToolsEngineerSession($at, $staleDeleteId);
+			$this->wire($cleanupStore);
+			$this->check('Engineer abandoned session allows stale lock deletion', true, $cleanupStore->delete(60));
+			$store->unlock();
+			$staleDeleteId = '';
+
+			$responses = [[
+				'stop_reason' => 'end_turn',
+				'content' => [[ 'type' => 'text', 'text' => 'resumed after interruption' ]],
+			]];
+			$resumed = $engineer->startAskSession('Test interrupted tool resume', [
+				'provider' => AgentToolsEngineer::providerAnthropic,
+				'apiKey' => 'test-only-key',
+				'model' => 'test-model',
+				'tools' => [],
+				'onInterrupt' => 'resume',
+			]);
+			$resumedId = $resumed['sessionId'];
+			$store = new AgentToolsEngineerSession($at, $resumedId);
+			$this->wire($store);
+			$store->lock(360);
+			$state = $store->load();
+			$calls = [];
+			foreach([1, 2, 3] as $n) {
+				$calls[] = [ 'id' => "tool_resume_$n", 'name' => 'test_checkpoint', 'input' => [] ];
+			}
+			$state['messages'][] = [ 'role' => 'assistant', 'content' => array_map(function(array $call) {
+				return [
+					'type' => 'tool_use',
+					'id' => $call['id'],
+					'name' => $call['name'],
+					'input' => $call['input'],
+				];
+			}, $calls) ];
+			$state['status'] = 'running';
+			$state['pendingToolCalls'] = $calls;
+			$state['nextToolCall'] = 0;
+			$state['activeTool'] = [ 'id' => 'tool_resume_1', 'name' => 'test_checkpoint', 'index' => 0 ];
+			$store->save($state);
+			$store->unlock();
+			$capturedRequest = null;
+			$captureHook = $engineer->addHookBefore('sendProviderRequest', function(HookEvent $event) use(&$capturedRequest) {
+				$capturedRequest = $event->arguments(0);
+			});
+			$resumed = $engineer->askStep($resumedId, [ 'apiKey' => 'test-only-key' ]);
+			$engineer->removeHook($captureHook);
+			$this->check('Engineer resume mode continues after interrupted tool', 'done', $resumed['status']);
+			$this->check('Engineer resume mode returns provider response', 'resumed after interruption', $resumed['response']);
+			$capturedMessages = $capturedRequest instanceof AgentToolsRequest ? $capturedRequest->messages : [];
+			$lastMessage = end($capturedMessages);
+			$blocks = is_array($lastMessage['content'] ?? null) ? $lastMessage['content'] : [];
+			$this->check('Engineer resume mode accounts for every pending tool call', 3, count($blocks));
+			$this->check('Engineer resume mode marks active tool outcome unknown', true, strpos($blocks[0]['content'] ?? '', 'outcome is unknown') !== false);
+			$this->check('Engineer resume mode marks later tool calls skipped', true, strpos($blocks[1]['content'] ?? '', 'was not executed') !== false);
+
+			$responses = [[
+				'choices' => [[ 'message' => [ 'role' => 'assistant', 'content' => 'OpenAI resumed after interruption' ] ]],
+			]];
+			$openAIResumed = $engineer->startAskSession('Test OpenAI interrupted tool resume', [
+				'provider' => AgentToolsEngineer::providerOpenAI,
+				'apiKey' => 'test-only-key',
+				'model' => 'test-model',
+				'endpoint' => 'https://example.test/v1/chat/completions',
+				'tools' => [],
+				'onInterrupt' => 'resume',
+			]);
+			$openAIResumedId = $openAIResumed['sessionId'];
+			$store = new AgentToolsEngineerSession($at, $openAIResumedId);
+			$this->wire($store);
+			$store->lock(360);
+			$state = $store->load();
+			$calls = [];
+			$toolCalls = [];
+			foreach([1, 2, 3] as $n) {
+				$id = "tool_openai_resume_$n";
+				$calls[] = [ 'id' => $id, 'name' => 'test_checkpoint', 'input' => [] ];
+				$toolCalls[] = [
+					'id' => $id,
+					'type' => 'function',
+					'function' => [ 'name' => 'test_checkpoint', 'arguments' => '{}' ],
+				];
+			}
+			$state['messages'][] = [ 'role' => 'assistant', 'content' => '', 'tool_calls' => $toolCalls ];
+			$state['status'] = 'running';
+			$state['pendingToolCalls'] = $calls;
+			$state['nextToolCall'] = 0;
+			$state['activeTool'] = [ 'id' => 'tool_openai_resume_1', 'name' => 'test_checkpoint', 'index' => 0 ];
+			$store->save($state);
+			$store->unlock();
+			$capturedRequest = null;
+			$captureHook = $engineer->addHookBefore('sendProviderRequest', function(HookEvent $event) use(&$capturedRequest) {
+				$capturedRequest = $event->arguments(0);
+			});
+			$openAIResumed = $engineer->askStep($openAIResumedId, [ 'apiKey' => 'test-only-key' ]);
+			$engineer->removeHook($captureHook);
+			$this->check('OpenAI Chat Engineer resume mode continues', 'done', $openAIResumed['status']);
+			$this->check('OpenAI Chat Engineer resume returns provider response', 'OpenAI resumed after interruption', $openAIResumed['response']);
+			$capturedMessages = $capturedRequest instanceof AgentToolsRequest ? $capturedRequest->messages : [];
+			$toolResults = array_values(array_filter($capturedMessages, function(array $message): bool {
+				return ($message['role'] ?? '') === 'tool';
+			}));
+			$this->check('OpenAI Chat Engineer resume accounts for every pending call', 3, count($toolResults));
+			$this->check('OpenAI Chat Engineer resume marks active outcome unknown', true, strpos($toolResults[0]['content'] ?? '', 'outcome is unknown') !== false);
+			$this->check('OpenAI Chat Engineer resume marks later calls skipped', true, strpos($toolResults[1]['content'] ?? '', 'was not executed') !== false);
+
+			$responses = [
+				[
+					'output' => [[
+						'type' => 'function_call',
+						'id' => 'fc_step_1',
+						'call_id' => 'call_step_1',
+						'name' => 'test_checkpoint',
+						'arguments' => '{}',
+					]],
+					'usage' => [ 'input_tokens' => 4, 'output_tokens' => 2, 'total_tokens' => 6 ],
+				],
+				[
+					'output' => [[
+						'type' => 'message',
+						'content' => [[ 'type' => 'output_text', 'text' => 'responses step done' ]],
+					]],
+					'usage' => [ 'input_tokens' => 3, 'output_tokens' => 1, 'total_tokens' => 4 ],
+				],
+			];
+			$responsesStarted = $engineer->startAskSession('Test Responses resumable rounds', [
+				'provider' => AgentToolsEngineer::providerOpenAI,
+				'apiKey' => 'test-only-key',
+				'model' => 'test-model',
+				'endpoint' => 'https://api.openai.com/v1/responses',
+				'tools' => [],
+			]);
+			$responsesSessionId = $responsesStarted['sessionId'];
+			$responsesFirst = $engineer->askStep($responsesSessionId, [ 'apiKey' => 'test-only-key' ]);
+			$responsesSecond = $engineer->askStep($responsesSessionId, [ 'apiKey' => 'test-only-key' ]);
+			$this->check('Responses Engineer first step continues', 'continue', $responsesFirst['status']);
+			$this->check('Responses Engineer second step completes', 'responses step done', $responsesSecond['response']);
+			$this->check('Responses Engineer step accumulates usage', 10, $responsesSecond['tokenUsage']['total']);
+
+			$primary = $at->getPrimaryAgent();
+			$capturedApiKey = '';
+			$responses = [[
+				'content' => [[ 'type' => 'text', 'text' => 'primary key done' ]],
+				'output_text' => 'primary key done',
+				'choices' => [[ 'message' => [ 'content' => 'primary key done' ] ]],
+			]];
+			$keyHook = $engineer->addHookBefore('sendProviderRequest', function(HookEvent $event) use(&$capturedApiKey) {
+				$request = $event->arguments(0);
+				$capturedApiKey = $request instanceof AgentToolsRequest ? (string) $request->apiKey : '';
+			});
+			$blocking = $engineer->ask('Test blocking primary API key', [ 'tools' => [], 'maxIterations' => 1 ]);
+			$engineer->removeHook($keyHook);
+			$this->check('Engineer blocking ask preserves primary API key resolution', true, $primary && hash_equals((string) $primary->apiKey, $capturedApiKey));
+			$this->check('Engineer blocking primary key request completes', null, $blocking['error']);
+
+			$responses = [ new WireException('Expected blocking request failure') ];
+			$blockingError = $engineer->ask('Test blocking error history', [
+				'apiKey' => 'test-only-key',
+				'history' => [[ 'role' => 'user', 'content' => 'Earlier message' ]],
+				'tools' => [],
+			]);
+			$this->check('Engineer blocking ask reports provider error', 'Expected blocking request failure', $blockingError['error']);
+			$this->check('Engineer blocking ask clears history on error', [], $blockingError['history']);
+
+			$guestUserId = (int) $this->wire()->config->guestUserPageID;
+			$this->check('Engineer web session rejects missing owner', false, $this->invokeProtected($engineer, 'canAccessAskSession', [[ 'ownerUserId' => 0 ], 123, false]));
+			$this->check('Engineer web session rejects guest owner', false, $this->invokeProtected($engineer, 'canAccessAskSession', [[ 'ownerUserId' => $guestUserId ], $guestUserId, false]));
+			$this->check('Engineer web session accepts matching owner', true, $this->invokeProtected($engineer, 'canAccessAskSession', [[ 'ownerUserId' => 123 ], 123, false]));
+
+			$sessionRoot = $at->getFilesPath('engineer-sessions');
+			$freshOrphan = $sessionRoot . 'orphan-fresh-' . bin2hex(random_bytes(4));
+			$staleOrphan = $sessionRoot . 'orphan-stale-' . bin2hex(random_bytes(4));
+			mkdir($freshOrphan);
+			mkdir($staleOrphan);
+			$this->tmpDirs[] = $freshOrphan;
+			$this->tmpDirs[] = $staleOrphan;
+			touch($staleOrphan, time() - 120);
+			$this->invokeProtected($engineer, 'pruneAskSessions', [60, 1]);
+			$this->check('Engineer cleanup removes oldest state-less session', false, is_dir($staleOrphan));
+			$this->check('Engineer cleanup leaves fresh state-less session', true, is_dir($freshOrphan));
+		} finally {
+			$engineer->removeHook($hookId);
+			if($sessionId !== '') $engineer->removeAskSession($sessionId);
+			if($interruptedId !== '') $engineer->removeAskSession($interruptedId);
+			if($resumedId !== '') $engineer->removeAskSession($resumedId);
+			if($openAIResumedId !== '') $engineer->removeAskSession($openAIResumedId);
+			if($staleDeleteId !== '') $engineer->removeAskSession($staleDeleteId);
+			if($responsesSessionId !== '') $engineer->removeAskSession($responsesSessionId);
+		}
 	}
 
 	/**
