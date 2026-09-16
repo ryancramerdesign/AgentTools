@@ -139,6 +139,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	 *  - `history` (array): Prior conversation as [ ['role'=>'user','content'=>'...'], ['role'=>'assistant','content'=>'...'], ... ]
 	 *  - `maxIterations` (int): Max tool-use rounds before stopping
 	 *  - `dryRun` (bool): Preview only; inspect and explain without making changes
+	 *  - `readOnlyEval` (bool): Make eval_php read-only without making the whole request preview-only
 	 *  - `onInterrupt` (string): 'stop' (default) or 'resume' after an interrupted tool call
 	 *  - `maxInterruptions` (int): Consecutive interruption limit in resume mode (default: 3)
 	 * @return array [ 'response' => string, 'migration' => string|null, 'error' => string|null, 'history' => array ]
@@ -295,6 +296,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		$this->lastTrace = [];
 		$this->extendPhpTimeLimit($options);
 		$state = $this->newAskState($request);
+		$state['id'] = $this->newProviderSessionId();
 
 		if($this->at->get('engineer_suspicious') === 'all' && $this->at->isUserSuspicious()) {
 			$state['status'] = 'done';
@@ -340,12 +342,13 @@ class AgentToolsEngineer extends AgentToolsHelper {
 
 		$readOnly = isset($options['readOnly']) ? (bool) $options['readOnly'] : (bool) $this->at->get('engineer_readonly');
 		$dryRun = !empty($options['dryRun']);
+		$readOnlyEval = !empty($options['readOnlyEval']);
 		$systemPrompt = isset($options['systemPrompt']) ? (string) $options['systemPrompt'] : $this->buildSystemPrompt($readOnly, $dryRun, $options);
 		$systemPrompt = $this->appendMemoryPrompt($systemPrompt, $options, $readOnly, $dryRun);
 		$systemPrompt = $this->appendAgentIdentity($systemPrompt, $provider, $model, $endpoint, $options);
 		if($dryRun && isset($options['systemPrompt'])) $systemPrompt = $this->appendDryRunInstructions($systemPrompt);
 		$systemPrompt = $this->appendIterationBudget($systemPrompt, $maxIterations);
-		$tools = array_key_exists('tools', $options) ? $options['tools'] : $this->getToolDefinitions($provider, 'site', $readOnly, $dryRun);
+		$tools = array_key_exists('tools', $options) ? $options['tools'] : $this->getToolDefinitions($provider, 'site', $readOnly, $dryRun, $readOnlyEval);
 		if(!is_array($tools)) $tools = [];
 
 		$state['provider'] = $provider;
@@ -490,6 +493,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			'apiKey' => $apiKey,
 			'model' => (string) $state['model'],
 			'endpoint' => (string) $state['endpoint'],
+			'sessionId' => (string) ($state['id'] ?? ''),
 			'systemPrompt' => (string) $state['systemPrompt'],
 			'messages' => (array) $state['messages'],
 			'tools' => (array) $state['tools'],
@@ -543,6 +547,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			$toolStart = microtime(true);
 			try {
 				$output = $this->executeTool((string) $toolCall['name'], (array) $toolCall['input'], $options);
+				$output = $this->redactToolOutput($output);
 				if($this->currentTrace) {
 					$this->at->getTraces()->addToolCall($this->currentTrace, (string) $toolCall['name'], (array) $toolCall['input'], $output, $toolStart);
 				}
@@ -1998,7 +2003,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	 * @return array
 	 *
 	 */
-	public function getToolDefinitions(string $provider, string $context = 'site', bool $readOnly = false, bool $dryRun = false): array {
+	public function getToolDefinitions(string $provider, string $context = 'site', bool $readOnly = false, bool $dryRun = false, bool $readOnlyEval = false): array {
 
 		$apiVars = $this->getEvalPhpVars(false);
 		$includeDesc = $this->allowEvalPhpIncludeRequire() ?
@@ -2014,6 +2019,9 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			$evalDesc .= " Preview-only mode is enabled: use this tool only for read-only inspection. " .
 				"Do not call save, delete, clone, move, publish, unpublish, file write, module config, " .
 				"or other mutation APIs.";
+		} else if($readOnlyEval) {
+			$evalDesc .= " This eval_php tool is read-only: do not call mutation APIs such as save, delete, " .
+				"clone, move, publish, unpublish, file writes, or module configuration writes.";
 		}
 
 		$migrationDesc =
@@ -2066,6 +2074,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			"Read the contents of a file within this ProcessWire installation. " .
 			"Accepts paths relative to the site root (e.g. 'site/templates/home.php') or absolute paths. " .
 			"Reads up to $maxReadFileLength bytes by default. Use offset and limit to read a portion of a larger file. " .
+			"Sensitive configuration, environment, credential, and site/assets files are denied. " .
 			"Paths outside the ProcessWire root are denied, except the configured wire path and symlinks under site/modules/ are followed. " .
 			"Other symlinks are not read.";
 
@@ -2193,6 +2202,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	 *
 	 */
 	public function ___sendProviderRequest(AgentToolsRequest $request): array {
+		if($request->sessionId === '') $request->sessionId = $this->newProviderSessionId();
 		if($request->provider === self::providerAnthropic) {
 			if(!$request->model) $request->model = self::defaultAnthropicModel;
 			return $this->sendAnthropicRequest($request);
@@ -2249,6 +2259,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		$cache = ['type' => 'ephemeral', 'ttl' => '1h'];
 		$options = $request->options;
 		$tools = $request->tools;
+		$endpoint = $request->endpoint ?: 'https://api.anthropic.com/v1/messages';
 
 		// System prompt as a content block array so we can attach cache_control
 		// Omit entirely if empty — Anthropic rejects empty text blocks
@@ -2277,14 +2288,17 @@ class AgentToolsEngineer extends AgentToolsHelper {
 
 		$timeout = isset($options['timeout']) ? (int) $options['timeout'] : $this->getRequestTimeout();
 
+		$headers = [
+			'x-api-key: ' . $request->apiKey,
+			'anthropic-version: 2023-06-01',
+			'content-type: application/json',
+		];
+		$headers = array_merge($headers, $this->getProviderSessionHeaders($request, $endpoint));
+
 		return $this->curlPost(
-			$request->endpoint ?: 'https://api.anthropic.com/v1/messages',
+			$endpoint,
 			$payload,
-			[
-				'x-api-key: ' . $request->apiKey,
-				'anthropic-version: 2023-06-01',
-				'content-type: application/json',
-			],
+			$headers,
 			$timeout
 		);
 	}
@@ -2335,15 +2349,50 @@ class AgentToolsEngineer extends AgentToolsHelper {
 
 		$timeout = isset($options['timeout']) ? (int) $options['timeout'] : $this->getRequestTimeout();
 
+		$headers = [
+			'Authorization: Bearer ' . $request->apiKey,
+			'content-type: application/json',
+		];
+		$headers = array_merge($headers, $this->getProviderSessionHeaders($request, $endpoint));
+
 		return $this->curlPost(
 			$endpoint,
 			$payload,
-			[
-				'Authorization: Bearer ' . $request->apiKey,
-				'content-type: application/json',
-			],
+			$headers,
 			$timeout
 		);
+	}
+
+	/**
+	 * Get provider-specific session headers for an endpoint.
+	 *
+	 * OpenCode requires a stable x-opencode-session header for each conversation.
+	 * No custom header is sent to other providers.
+	 *
+	 * @param AgentToolsRequest $request
+	 * @param string $endpoint Effective provider endpoint URL
+	 * @return array
+	 *
+	 */
+	protected function getProviderSessionHeaders(AgentToolsRequest $request, string $endpoint): array {
+		$host = strtolower((string) parse_url($endpoint, PHP_URL_HOST));
+		if($host !== 'opencode.ai' && !str_ends_with($host, '.opencode.ai')) return [];
+		$sessionId = preg_replace('/[^A-Za-z0-9_-]+/', '', (string) $request->sessionId);
+		if($sessionId === '') {
+			$sessionId = $this->newProviderSessionId();
+			$request->sessionId = $sessionId;
+		}
+		return [ 'x-opencode-session: ses_' . $sessionId ];
+	}
+
+	/**
+	 * Generate a provider conversation/session ID.
+	 *
+	 * @return string
+	 *
+	 */
+	protected function newProviderSessionId(): string {
+		return bin2hex(random_bytes(16));
 	}
 
 	/**
@@ -2426,8 +2475,16 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	protected function executeTool(string $name, array $input, array $options = []): string {
 		$this->loginEngineer();
 		try {
+			if(isset($options['toolHandler']) && is_callable($options['toolHandler'])) {
+				$result = $options['toolHandler']($name, $input, $options);
+				if($result !== null) {
+					if(is_string($result)) return $result;
+					$json = json_encode($result, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
+					return $json === false ? (string) $result : $json;
+				}
+			}
 			if($name === 'eval_php') {
-				return $this->executeEvalPhp((string) ($input['code'] ?? ''), !empty($options['dryRun']));
+				return $this->executeEvalPhp((string) ($input['code'] ?? ''), !empty($options['dryRun']) || !empty($options['readOnlyEval']));
 			} else if($name === 'save_migration') {
 				return $this->executeSaveMigration(
 					(string) ($input['code'] ?? ''),
@@ -2450,6 +2507,9 @@ class AgentToolsEngineer extends AgentToolsHelper {
 				$realPath = realpath($path);
 				if($realPath === false || !is_file($realPath)) return "File not found: $path";
 				if(!is_readable($realPath)) return "File not readable: $path";
+				if($this->isSensitiveReadFile($path, $realPath, $root)) {
+					return "Access denied: sensitive files are not available to AI tools.";
+				}
 
 				$insideRoot = strpos($realPath . '/', rtrim($rootReal, '/') . '/') === 0;
 				$isModulePath = strpos($path, $root . 'site/modules/') === 0;
@@ -2533,6 +2593,55 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		} finally {
 			$this->logoutEngineer();
 		}
+	}
+
+	/**
+	 * Is a requested file too sensitive to send to an AI provider?
+	 *
+	 * @param string $path Requested absolute path
+	 * @param string $realPath Resolved absolute path
+	 * @param string $root ProcessWire root with trailing slash
+	 * @return bool
+	 *
+	 */
+	protected function isSensitiveReadFile(string $path, string $realPath, string $root): bool {
+		$paths = [str_replace('\\', '/', $path), str_replace('\\', '/', $realPath)];
+		$root = rtrim(str_replace('\\', '/', $root), '/') . '/';
+		foreach($paths as $check) {
+			$relative = strpos($check, $root) === 0 ? substr($check, strlen($root)) : ltrim($check, '/');
+			if(preg_match('!^site/config[^/]*\.php$!i', $relative)) return true;
+			if($relative === 'site/assets' || strpos($relative, 'site/assets/') === 0) return true;
+			$basename = basename($relative);
+			if(preg_match('/^\.env(?:[._-].*)?$/i', $basename)) return true;
+			if(preg_match('!^[^.][^/]*\.env(?:[._-].*)?$!i', $basename)) return true;
+			if(in_array(strtolower($basename), ['.htpasswd', '.npmrc', 'auth.json'], true)) return true;
+		}
+		return false;
+	}
+
+	/**
+	 * Redact configured credentials before tool output enters provider history.
+	 *
+	 * @param string $output
+	 * @return string
+	 *
+	 */
+	protected function redactToolOutput(string $output): string {
+		$secrets = [];
+		$config = $this->wire()->config;
+		foreach(['dbPass', 'userAuthSalt', 'tableSalt'] as $name) {
+			$value = (string) $config->get($name);
+			if(strlen($value) >= 8) $secrets[$value] = strlen($value);
+		}
+		$apiKey = (string) $this->at->get('engineer_api_key');
+		if(strlen($apiKey) >= 8) $secrets[$apiKey] = strlen($apiKey);
+		foreach($this->at->getAgents() as $agent) {
+			/** @var AgentToolsAgent $agent */
+			$value = (string) $agent->apiKey;
+			if(strlen($value) >= 8) $secrets[$value] = strlen($value);
+		}
+		arsort($secrets, SORT_NUMERIC);
+		return $secrets ? str_replace(array_keys($secrets), '[redacted]', $output) : $output;
 	}
 
 	/**

@@ -14,6 +14,7 @@
  * @property AgentToolsTasks $tasks
  * @property AgentToolsJobs $jobs
  * @property AgentToolsTraces $traces
+ * @property AgentToolsSiteBuilder $siteBuilder
  *
  * @property string $engineer_provider
  * @property string $engineer_api_key
@@ -43,6 +44,7 @@
  * @method AgentToolsJobs jobs()
  * @method AgentToolsTraces traces()
  * @method AgentToolsSitemap sitemap()
+ * @method AgentToolsSiteBuilder siteBuilder()
  *
  */
 class AgentTools extends WireData implements Module, ConfigurableModule {
@@ -81,6 +83,7 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 		'mcp' => null,
 		'jobs' => null,
 		'skills' => null,
+		'siteBuilder' => null,
 	];
 
 	/**
@@ -1317,6 +1320,7 @@ include_once(__DIR__ . '/AgentToolsAgent.php');
 include_once(__DIR__ . '/AgentToolsAgents.php');
 include_once(__DIR__ . '/AgentToolsRequest.php');
 include_once(__DIR__ . '/AgentToolsEngineerSession.php');
+include_once(__DIR__ . '/AgentToolsSiteBuilderSession.php');
 include_once(__DIR__ . '/AgentToolsTask.php');
 include_once(__DIR__ . '/AgentToolsTasks.php');
 include_once(__DIR__ . '/AgentToolsScheduledTask.php');

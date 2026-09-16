@@ -40,10 +40,675 @@ class WireTest_AgentTools extends WireTest {
 		$this->testSchemaTemplateFields($at);
 		$this->testMcpMessageShapes($at);
 		$this->testOpenAIResponsesToolShapes($at);
+		$this->testOpenCodeSessionHeaders($at);
 		$this->testEngineerStepMode($at);
+		$this->testSiteBuilder($at);
+		$this->testSiteBuilderAdditiveTemplateUpdate($at);
 		$this->testStatusData($at);
 		$this->testScheduledTaskIntervals($at);
 		$this->testTraceJsonEncoding($at);
+	}
+
+	/**
+	 * Test OpenCode provider session headers without making network requests.
+	 *
+	 * @param AgentTools $at
+	 *
+	 */
+	protected function testOpenCodeSessionHeaders(AgentTools $at) {
+		$transport = new class($at) extends AgentToolsEngineer {
+			public $lastUrl = '';
+			public $lastHeaders = [];
+
+			protected function curlPost(string $url, array $payload, array $headers, int $timeout = 120): array {
+				$this->lastUrl = $url;
+				$this->lastHeaders = $headers;
+				return [];
+			}
+		};
+		$this->wire($transport);
+
+		$send = function(string $provider, string $endpoint, string $sessionId = '') use($transport): AgentToolsRequest {
+			$request = new AgentToolsRequest();
+			$this->wire($request);
+			$request->setArray([
+				'provider' => $provider,
+				'apiKey' => 'test-only-key',
+				'model' => 'test-model',
+				'endpoint' => $endpoint,
+				'sessionId' => $sessionId,
+				'messages' => [['role' => 'user', 'content' => 'Test']],
+			]);
+			$transport->sendProviderRequest($request);
+			return $request;
+		};
+		$hasOpenCodeHeader = function(array $headers): bool {
+			foreach($headers as $header) {
+				if(stripos($header, 'x-opencode-session:') === 0) return true;
+			}
+			return false;
+		};
+
+		$send(AgentToolsEngineer::providerOpenAI, 'https://api.opencode.ai/v1/chat/completions', 'chat.round/1');
+		$this->check('OpenCode Chat request sends session header', true, in_array('x-opencode-session: ses_chatround1', $transport->lastHeaders, true));
+		$send(AgentToolsEngineer::providerAnthropic, 'https://gateway.opencode.ai/v1/messages', 'anthropic session');
+		$this->check('OpenCode Anthropic request sends session header', true, in_array('x-opencode-session: ses_anthropicsession', $transport->lastHeaders, true));
+
+		$nonOpenCodeEndpoints = [
+			[AgentToolsEngineer::providerAnthropic, ''],
+			[AgentToolsEngineer::providerAnthropic, 'https://api.anthropic.com/v1/messages'],
+			[AgentToolsEngineer::providerOpenAI, 'https://api.openai.com/v1/chat/completions'],
+			[AgentToolsEngineer::providerOpenAI, 'https://notopencode.ai/v1/chat/completions'],
+			[AgentToolsEngineer::providerOpenAI, 'https://opencode.ai.example.com/v1/chat/completions'],
+			[AgentToolsEngineer::providerOpenAI, 'https://api.openai.com/v1/chat/completions?next=opencode.ai'],
+		];
+		foreach($nonOpenCodeEndpoints as $n => $case) {
+			$send($case[0], $case[1], 'outside');
+			$this->check("Non-OpenCode endpoint $n omits session header", false, $hasOpenCodeHeader($transport->lastHeaders));
+		}
+
+		$request = $send(AgentToolsEngineer::providerOpenAI, 'https://opencode.ai/v1/chat/completions');
+		$firstHeader = end($transport->lastHeaders);
+		$this->check('OpenCode one-off request generates session ID', true, (bool) preg_match('/^[a-f0-9]{32}$/', (string) $request->sessionId));
+		$this->check('OpenCode generated session header has expected format', true, (bool) preg_match('/^x-opencode-session: ses_[a-f0-9]{32}$/', (string) $firstHeader));
+		$transport->sendProviderRequest($request);
+		$this->check('OpenCode one-off request reuses generated session ID', $firstHeader, end($transport->lastHeaders));
+	}
+
+	/**
+	 * Test Site Builder plan rules, deterministic tools, verification, and rollback.
+	 *
+	 * @param AgentTools $at
+	 *
+	 */
+	protected function testSiteBuilder(AgentTools $at) {
+		$builder = $at->siteBuilder();
+		$plans = $this->invokeProtected($builder, 'plans');
+		$profileFile = $this->wire()->config->paths->site . 'AGENTS.md';
+		$createdProfileFile = false;
+		$profileNotes = is_file($profileFile) ? (string) file_get_contents($profileFile) : 'AgentTools Site Builder profile-note test.';
+		if(!is_file($profileFile)) {
+			$this->wire()->files->filePutContents($profileFile, $profileNotes);
+			$createdProfileFile = true;
+		}
+		try {
+			$snapshot = $plans->getSiteSnapshot();
+			$fieldNames = array_column($snapshot['fields'], 'name');
+			$templateNames = array_column($snapshot['templates'], 'name');
+			$pageNames = array_column($snapshot['pages'], 'name');
+			$systemFieldFound = false;
+			foreach($fieldNames as $name) {
+				$field = $this->wire()->fields->get($name);
+				if($field && $field->flags & Field::flagSystem) $systemFieldFound = true;
+			}
+			$systemTemplateFound = false;
+			foreach($templateNames as $name) {
+				$template = $this->wire()->templates->get($name);
+				if($template && $template->flags & Template::flagSystem) $systemTemplateFound = true;
+			}
+			$this->check('Site Builder snapshot excludes system fields', false, $systemFieldFound);
+			$this->check('Site Builder snapshot exposes reusable title core field', true, in_array('title', array_column($snapshot['coreFields'], 'name'), true));
+			$this->check('Site Builder snapshot excludes system templates', false, $systemTemplateFound);
+			$this->check('Site Builder snapshot excludes admin page', false, in_array((string) $this->wire()->pages->get((int) $this->wire()->config->adminRootPageID)->name, $pageNames, true));
+			$this->check('Site Builder snapshot includes template file paths', true, in_array('site/templates/home.php', $snapshot['files'], true));
+			$this->check('Site Builder snapshot includes profile notes', $profileNotes, $snapshot['profileNotes']);
+			$templateErrors = [];
+			$templateValidationArgs = [[
+				'home' => [
+					'name' => 'home', 'disposition' => 'reuse', 'dataOnly' => false, 'singleton' => false,
+					'fields' => [], 'allowedParents' => null, 'allowedChildren' => null, 'settings' => [],
+				],
+			], [], [], &$templateErrors];
+			$this->invokeProtected($plans, 'validateTemplates', $templateValidationArgs);
+			$this->check('Site Builder allows unchanged existing template file to be omitted', [], $templateErrors);
+			$templateErrors = [];
+			$templateValidationArgs = [[
+				'at-new-template-without-file' => [
+					'name' => 'at-new-template-without-file', 'disposition' => 'create', 'dataOnly' => false, 'singleton' => false,
+					'fields' => [], 'allowedParents' => null, 'allowedChildren' => null, 'settings' => [],
+				],
+			], [], [], &$templateErrors];
+			$this->invokeProtected($plans, 'validateTemplates', $templateValidationArgs);
+			$this->check('Site Builder still requires file for new front-end template', true, in_array('Front-end template at-new-template-without-file must have one role=template file in the plan or an existing template file.', $templateErrors, true));
+			$planRequest = $this->invokeProtected($builder, 'getPlanRequest', [[
+				'description' => 'Build a small test site.',
+				'options' => ['designDirection' => 'editorial', 'cssApproach' => 'agenttools-base', 'javascript' => 'vanilla', 'preset' => ''],
+				'revisionRequest' => '',
+			]]);
+			$this->check('Site Builder planning request includes current-site snapshot', true, strpos($planRequest, 'CURRENT SITE SNAPSHOT:') !== false);
+			$this->check('Site Builder planning request includes AGENTS profile guidance', true, strpos($planRequest, $profileNotes) !== false);
+		} finally {
+			if($createdProfileFile) $this->wire()->files->unlink($profileFile);
+		}
+		$suffix = substr(sha1((string) microtime(true) . random_int(1, PHP_INT_MAX)), 0, 8);
+		$fieldName = 'at_builder_' . $suffix;
+		$templateName = 'at-builder-' . $suffix;
+		$pageName = $templateName;
+		$filePath = 'site/templates/' . $templateName . '.php';
+		$file = $this->wire()->config->paths->root . $filePath;
+		$sessionId = '';
+		$engineerSessionId = '';
+		$buildPromptSessionId = '';
+		$buildRunSessionId = '';
+		$restartedBuildSessionId = '';
+		$uninstalledFieldtypeSessionId = '';
+		$plannerHookId = null;
+		$buildToolHookId = null;
+		$restartHookId = null;
+		$plan = [
+			'schemaVersion' => 1,
+			'title' => 'AgentTools Site Builder test',
+			'summary' => 'Disposable deterministic builder fixture.',
+			'assumptions' => [],
+			'features' => [],
+			'design' => [],
+			'fields' => [
+				[
+					'name' => 'title', 'disposition' => 'reuse', 'type' => 'FieldtypePageTitle',
+					'label' => 'Title', 'summary' => 'Existing title.', 'settings' => [],
+				],
+				[
+					'name' => $fieldName, 'disposition' => 'create', 'type' => 'FieldtypeText',
+					'label' => 'Builder test', 'summary' => 'Disposable test field.', 'settings' => [],
+				],
+			],
+			'templates' => [[
+				'name' => $templateName,
+				'disposition' => 'create',
+				'label' => 'Builder test',
+				'summary' => 'Disposable test template.',
+				'dataOnly' => false,
+				'singleton' => false,
+				'fields' => [
+					['name' => 'title', 'required' => true, 'columnWidth' => 100, 'settings' => []],
+					['name' => $fieldName, 'required' => false, 'columnWidth' => 100, 'settings' => []],
+				],
+				'allowedParents' => ['home'],
+				'allowedChildren' => [],
+				'settings' => [],
+			]],
+			'pages' => [
+				[
+					'key' => 'home', 'disposition' => 'reuse', 'parent' => null,
+					'name' => 'home', 'template' => 'home', 'status' => 'published', 'values' => [],
+				],
+				[
+					'key' => 'fixture',
+					'disposition' => 'create',
+					'parent' => 'home',
+					'name' => $pageName,
+					'template' => $templateName,
+					'status' => 'unpublished',
+					'values' => ['title' => 'Builder fixture', $fieldName => 'Builder value'],
+				],
+			],
+			'files' => [[
+				'path' => $filePath,
+				'role' => 'template',
+				'disposition' => 'create',
+				'template' => $templateName,
+				'summary' => 'Disposable template file.',
+			]],
+			'modules' => [],
+			'verification' => [
+				'routes' => [['page' => 'fixture', 'expectedStatus' => 200]],
+				'adminPages' => [['template' => $templateName, 'page' => 'fixture']],
+				'checks' => [],
+			],
+			'openQuestions' => [],
+		];
+
+		try {
+			$budgetState = [
+				'options' => ['planRoundLimit' => 1, 'planTokenLimit' => 1000],
+				'phaseRounds' => ['plan' => 1],
+				'phaseTokenUsage' => ['plan' => ['total' => 0]],
+			];
+			$budgetArgs = [&$budgetState, AgentToolsSiteBuilder::phasePlan];
+			$this->check('Site Builder enforces planning budget', true, $this->invokeProtected($builder, 'isBudgetReached', $budgetArgs));
+			$this->check('Site Builder planning budget pauses the session', 'paused', $budgetState['status']);
+			$this->check('Site Builder accepts deterministic fixture plan', [], $builder->validatePlan($plan));
+			$uninstalledType = '';
+			$uninstalledFieldtype = null;
+			foreach(array_keys($this->wire()->modules->getInstallable()) as $moduleName) {
+				if(strpos($moduleName, 'Fieldtype') !== 0 || $this->wire()->modules->isInstalled($moduleName)) continue;
+				$candidate = $this->wire()->modules->getModule($moduleName, ['noInstall' => true, 'noThrow' => true]);
+				if($candidate instanceof Fieldtype) {
+					$uninstalledType = $moduleName;
+					$uninstalledFieldtype = $candidate;
+					break;
+				}
+			}
+			if($uninstalledType !== '' && $uninstalledFieldtype instanceof Fieldtype) {
+				$uninstalledFieldName = $fieldName . '_uninstalled';
+				$uninstalledPlan = $plan;
+				$uninstalledPlan['fields'][] = [
+					'name' => $uninstalledFieldName,
+					'disposition' => 'create',
+					'type' => $uninstalledType,
+					'label' => 'Uninstalled Fieldtype test',
+					'summary' => 'Verify validation never installs Fieldtypes.',
+					'settings' => [],
+				];
+				$unlistedErrors = $builder->validatePlan($uninstalledPlan);
+				$expectedError = "Field $uninstalledFieldName uses uninstalled type $uninstalledType; add it to modules[] with disposition create.";
+				$this->check('Site Builder requires uninstalled Fieldtype in modules plan', true, in_array($expectedError, $unlistedErrors, true));
+				$this->check('Site Builder validation does not install unlisted Fieldtype', false, $this->wire()->modules->isInstalled($uninstalledType));
+
+				$moduleFile = (new \ReflectionClass($uninstalledFieldtype))->getFileName();
+				$source = $moduleFile && strpos($moduleFile, $this->wire()->config->paths->wire) === 0 ? 'core' : 'site';
+				$uninstalledPlan['modules'][] = ['name' => $uninstalledType, 'source' => $source, 'disposition' => 'create'];
+				$this->check('Site Builder accepts approved uninstalled Fieldtype', [], $builder->validatePlan($uninstalledPlan));
+				$this->check('Site Builder validation does not install approved Fieldtype', false, $this->wire()->modules->isInstalled($uninstalledType));
+
+				$uninstalledStore = new AgentToolsSiteBuilderSession($at);
+				$this->wire($uninstalledStore);
+				$uninstalledFieldtypeSessionId = $uninstalledStore->getId();
+				if(!$uninstalledStore->lock(360)) throw new WireException('Unable to lock uninstalled Fieldtype test session.');
+				$uninstalledStore->save(['plan' => $uninstalledPlan]);
+				$uninstalledTools = new AgentToolsSiteBuilderTools($at, $uninstalledStore, $plans);
+				$this->wire($uninstalledTools);
+				$uninstalledResult = $uninstalledTools->execute('create_fields', ['names' => [$uninstalledFieldName]]);
+				$uninstalledStore->unlock();
+				$this->check('Site Builder field tool requires module installation first', false, $uninstalledResult['ok']);
+				$this->check('Site Builder field tool identifies install_modules prerequisite', true, strpos((string) $uninstalledResult['error'], 'Run install_modules first') !== false);
+				$this->check('Site Builder field tool does not install Fieldtype', false, $this->wire()->modules->isInstalled($uninstalledType));
+			}
+			$planWithoutVerification = $plan;
+			unset($planWithoutVerification['verification']);
+			$normalizedPlan = $plans->normalize($planWithoutVerification);
+			$routeKeys = array_column($normalizedPlan['verification']['routes'], 'page');
+			$adminTemplates = array_column($normalizedPlan['verification']['adminPages'], 'template');
+			$this->check('Site Builder accepts plan with derived verification', [], $builder->validatePlan($planWithoutVerification));
+			$this->check('Site Builder derives routes for every front-end page', ['home', 'fixture'], $routeKeys);
+			$this->check('Site Builder derives representative admin template checks', [$templateName], $adminTemplates);
+			$derivedOnly = $plans->normalize([
+				'templates' => [
+					['name' => 'front', 'dataOnly' => false],
+					['name' => 'data', 'dataOnly' => true],
+				],
+				'pages' => [
+					['key' => 'front-page', 'template' => 'front'],
+					['key' => 'data-page', 'template' => 'data'],
+				],
+			]);
+			$this->check('Site Builder omits data-only pages from derived routes', ['front-page'], array_column($derivedOnly['verification']['routes'], 'page'));
+			$this->check('Site Builder derives admin checks for data-only templates', ['front', 'data'], array_column($derivedOnly['verification']['adminPages'], 'template'));
+
+			$failureSession = new AgentToolsSiteBuilderSession($at);
+			$this->wire($failureSession);
+			try {
+				$this->check('Site Builder failure-log session obtains lock', true, $failureSession->lock(360));
+				$failureState = ['phase' => AgentToolsSiteBuilder::phasePlan, 'planAttempts' => 0, 'planErrors' => []];
+				$failureArgs = [$failureSession, &$failureState, ['schemaVersion' => 1], ['Expected plan error'], '{"schemaVersion":1}'];
+				$this->invokeProtected($builder, 'recordPlanFailure', $failureArgs);
+				$attemptFile = $failureSession->getPath() . 'plan-attempt-1.json';
+				$attemptData = json_decode((string) file_get_contents($attemptFile), true);
+				$failureLog = $failureSession->loadLog();
+				$failureEntry = end($failureLog);
+				$this->check('Site Builder records failed plan attempt number', 1, $failureState['planAttempts']);
+				$this->check('Site Builder preserves invalid plan attempt', ['schemaVersion' => 1], $attemptData['plan']);
+				$this->check('Site Builder logs failed plan validation errors', ['Expected plan error'], $failureEntry['errors']);
+				$this->check('Site Builder failure log references preserved plan', 'plan-attempt-1.json', $failureEntry['planFile']);
+			} finally {
+				$failureSession->unlock();
+				$this->wire()->files->rmdir($failureSession->getPath(), true);
+			}
+
+			$badPlan = $plan;
+			$badPlan['templates'][0]['singleton'] = true;
+			$badPlan['templates'][0]['allowedParents'] = [];
+			$badErrors = $builder->validatePlan($badPlan);
+			$this->check('Site Builder rejects singleton with no allowed parents', true, in_array("Template $templateName cannot combine singleton=true with allowedParents=[].", $badErrors, true));
+			$badPlan = $plan;
+			$badPlan['templates'][0]['fields'][1]['settings']['notAFieldSetting'] = true;
+			$badErrors = $builder->validatePlan($badPlan);
+			$this->check('Site Builder rejects unknown field context setting', true, in_array("Unknown context setting notAFieldSetting for template $templateName field $fieldName (FieldtypeText).", $badErrors, true));
+			$titleProperties = $this->invokeProtected($plans, 'getFieldProperties', [$this->wire()->modules->get('FieldtypePageTitle')]);
+			$textareaProperties = $this->invokeProtected($plans, 'getFieldProperties', [$this->wire()->modules->get('FieldtypeTextarea')]);
+			$this->check('Site Builder accepts inherited PageTitle textformatters setting', true, isset($titleProperties['textformatters']));
+			$this->check('Site Builder accepts inherited Textarea textformatters setting', true, isset($textareaProperties['textformatters']));
+			$textformatterPlan = $plan;
+			$textformatterPlan['fields'][] = [
+				'name' => $fieldName . '_title', 'disposition' => 'create', 'type' => 'FieldtypePageTitle',
+				'label' => 'Secondary title', 'summary' => 'Planned title field.',
+				'settings' => ['textformatters' => []],
+			];
+			$textformatterPlan['fields'][] = [
+				'name' => $fieldName . '_textarea', 'disposition' => 'create', 'type' => 'FieldtypeTextarea',
+				'label' => 'Body', 'summary' => 'Planned textarea.',
+				'settings' => ['textformatters' => []],
+			];
+			$textformatterErrors = $builder->validatePlan($textformatterPlan);
+			$this->check('Site Builder validator allows PageTitle and Textarea textformatters', false, strpos(implode("\n", $textformatterErrors), 'Unknown setting textformatters') !== false);
+			$badPlan = $plan;
+			$badPlan['pages'][1]['parent'] = null;
+			$badErrors = $builder->validatePlan($badPlan);
+			$this->check('Site Builder rejects new root page', true, in_array('Root page fixture cannot use disposition create.', $badErrors, true));
+			$badPlan = $plan;
+			$badPlan['templates'][0]['removeFields'] = [$fieldName];
+			$badErrors = $builder->validatePlan($badPlan);
+			$this->check('Site Builder rejects template field removal', true, in_array("Template $templateName cannot remove fields in Site Builder version 1.", $badErrors, true));
+			$this->check('Site Builder allows exact site ready hook file', true, $this->invokeProtected($plans, 'isAllowedFilePath', ['site/ready.php']));
+			$this->check('Site Builder allows exact site init hook file', true, $this->invokeProtected($plans, 'isAllowedFilePath', ['site/init.php']));
+			$this->check('Site Builder still denies site config file', false, $this->invokeProtected($plans, 'isAllowedFilePath', ['site/config.php']));
+
+			$engineer = $at->engineer();
+			$plannerHookId = $engineer->addHookBefore('sendProviderRequest', function(HookEvent $event) use($plan) {
+				$request = $event->arguments(0);
+				$json = json_encode($plan, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+				if($request instanceof AgentToolsRequest && $request->provider === AgentToolsEngineer::providerAnthropic) {
+					$response = [
+						'stop_reason' => 'end_turn',
+						'content' => [[ 'type' => 'text', 'text' => $json ]],
+						'usage' => [ 'input_tokens' => 10, 'output_tokens' => 20 ],
+					];
+				} else if($request instanceof AgentToolsRequest && str_ends_with((string) parse_url($request->endpoint, PHP_URL_PATH), '/responses')) {
+					$response = [
+						'output' => [[ 'type' => 'message', 'content' => [[ 'type' => 'output_text', 'text' => $json ]] ]],
+						'usage' => [ 'input_tokens' => 10, 'output_tokens' => 20, 'total_tokens' => 30 ],
+					];
+				} else {
+					$response = [
+						'choices' => [[ 'message' => [ 'role' => 'assistant', 'content' => $json ] ]],
+						'usage' => [ 'prompt_tokens' => 10, 'completion_tokens' => 20, 'total_tokens' => 30 ],
+					];
+				}
+				$event->return = $response;
+				$event->replace = true;
+			});
+
+			$started = $builder->start('Create a disposable Site Builder test fixture.');
+			$sessionId = (string) $started['id'];
+			$this->check('Site Builder starts in plan phase without provider call', 'plan', $started['phase']);
+			$this->check('Site Builder start reports zero rounds', 0, $started['round']);
+			$planned = $builder->step($sessionId);
+			$state = $builder->getState($sessionId);
+			$engineerSessionId = (string) ($state['engineerSessionId'] ?? '');
+			$engineer->removeHook($plannerHookId);
+			$plannerHookId = null;
+			$this->check('Site Builder planning performs one provider round', 1, $planned['round']);
+			$this->check('Site Builder validated plan awaits approval', 'awaiting-approval', $planned['status']);
+			$this->check('Site Builder stores provider plan', $templateName, $builder->getPlan($sessionId)['templates'][0]['name']);
+			$approved = $builder->approvePlan($sessionId);
+			$this->check('Site Builder approval enters build phase', AgentToolsSiteBuilder::phaseBuild, $approved['phase']);
+			$buildState = $builder->getState($sessionId);
+			$buildOptions = $this->invokeProtected($builder, 'getAskOptions', [$buildState, AgentToolsSiteBuilder::phaseBuild]);
+			$this->check('Site Builder makes only eval_php read-only during build', true, $buildOptions['readOnlyEval']);
+			$this->check('Site Builder does not enable full preview mode during build', false, !empty($buildOptions['dryRun']));
+			$buildAgent = $at->getAgents()->getById((string) $buildState['options']['agentId']);
+			$this->check('Site Builder resolves configured agent provider', (string) $buildAgent->provider, $buildOptions['provider']);
+			$this->check('Site Builder resolves configured agent model', (string) $buildAgent->model, $buildOptions['model']);
+			$this->check('Site Builder resolves configured agent endpoint', (string) $buildAgent->endpointUrl, $buildOptions['endpoint']);
+			$buildPrompt = $engineer->startAskSession('Inspect the approved Site Builder build request.', $buildOptions);
+			$buildPromptSessionId = (string) $buildPrompt['sessionId'];
+			$buildAskState = $engineer->getAskState($buildPromptSessionId);
+			$this->check('Site Builder final build prompt omits preview-only instructions', false, strpos((string) $buildAskState['systemPrompt'], 'Preview-only mode is enabled') !== false);
+
+			$buildToolCalls = 0;
+			$firstFailedRound = [];
+			$buildToolHookId = $engineer->addHookBefore('sendProviderRequest', function(HookEvent $event) use(&$buildToolCalls) {
+				$request = $event->arguments(0);
+				$buildToolCalls++;
+				$id = 'site_builder_bad_' . $buildToolCalls;
+				$input = ['pages' => [['key' => 'fixture', 'content' => ['title' => 'Generated title']]]];
+				if($request instanceof AgentToolsRequest && $request->provider === AgentToolsEngineer::providerAnthropic) {
+					$response = [
+						'stop_reason' => 'tool_use',
+						'content' => [[ 'type' => 'tool_use', 'id' => $id, 'name' => 'create_pages', 'input' => $input ]],
+						'usage' => [ 'input_tokens' => 10, 'output_tokens' => 5 ],
+					];
+				} else if($request instanceof AgentToolsRequest && str_ends_with((string) parse_url($request->endpoint, PHP_URL_PATH), '/responses')) {
+					$response = [
+						'output' => [[ 'type' => 'function_call', 'id' => $id, 'call_id' => $id, 'name' => 'create_pages', 'arguments' => json_encode($input) ]],
+						'usage' => [ 'input_tokens' => 10, 'output_tokens' => 5, 'total_tokens' => 15 ],
+					];
+				} else {
+					$response = [
+						'choices' => [[
+							'finish_reason' => 'tool_calls',
+							'message' => [ 'role' => 'assistant', 'content' => '', 'tool_calls' => [[
+								'id' => $id,
+								'type' => 'function',
+								'function' => [ 'name' => 'create_pages', 'arguments' => json_encode($input) ],
+							]] ],
+						]],
+						'usage' => [ 'prompt_tokens' => 10, 'completion_tokens' => 5, 'total_tokens' => 15 ],
+					];
+				}
+				$event->return = $response;
+				$event->replace = true;
+			});
+			for($n = 1; $n <= AgentToolsSiteBuilder::maxConsecutiveToolFailures; $n++) {
+				$failedRound = $builder->step($sessionId);
+				if($n === 1) $firstFailedRound = $failedRound;
+			}
+			$engineer->removeHook($buildToolHookId);
+			$buildToolHookId = null;
+			$failedState = $builder->getState($sessionId);
+			$buildRunSessionId = (string) ($failedState['engineerSessionId'] ?? '');
+			$this->check('Site Builder correctable tool error keeps round resumable', 'continue', $firstFailedRound['status']);
+			$this->check('Site Builder failed page call makes no page changes', 0, (int) $this->wire()->pages->get("parent=1, name=$pageName, include=all")->id);
+			$this->check('Site Builder pauses after consecutive tool failures', 'paused', $failedState['status']);
+			$this->check('Site Builder records consecutive tool failure limit', AgentToolsSiteBuilder::maxConsecutiveToolFailures, $failedState['consecutiveToolFailures']);
+			$resumed = $builder->resume($sessionId);
+			$this->check('Site Builder resume resets consecutive tool failures', 0, $builder->getState($sessionId)['consecutiveToolFailures']);
+
+			$terminalStore = new AgentToolsEngineerSession($at, $buildRunSessionId);
+			$this->wire($terminalStore);
+			$this->check('Site Builder terminal Engineer test obtains lock', true, $terminalStore->lock(360));
+			$terminalState = $terminalStore->load();
+			$terminalState['status'] = 'error';
+			$terminalState['error'] = 'Simulated terminal build error.';
+			$terminalStore->save($terminalState);
+			$terminalStore->unlock();
+			$builder->resume($sessionId);
+			$this->check('Site Builder resume clears terminal Engineer session', '', $builder->getState($sessionId)['engineerSessionId']);
+			$restartCalls = 0;
+			$restartHookId = $engineer->addHookBefore('sendProviderRequest', function(HookEvent $event) use(&$restartCalls, &$restartedBuildSessionId) {
+				$request = $event->arguments(0);
+				$restartCalls++;
+				if($request instanceof AgentToolsRequest) $restartedBuildSessionId = (string) $request->sessionId;
+				if($request instanceof AgentToolsRequest && $request->provider === AgentToolsEngineer::providerAnthropic) {
+					$response = ['stop_reason' => 'end_turn', 'content' => [[ 'type' => 'text', 'text' => 'Ready to continue.' ]]];
+				} else if($request instanceof AgentToolsRequest && str_ends_with((string) parse_url($request->endpoint, PHP_URL_PATH), '/responses')) {
+					$response = ['output' => [[ 'type' => 'message', 'content' => [[ 'type' => 'output_text', 'text' => 'Ready to continue.' ]] ]]];
+				} else {
+					$response = ['choices' => [[ 'message' => [ 'role' => 'assistant', 'content' => 'Ready to continue.' ] ]]];
+				}
+				$event->return = $response;
+				$event->replace = true;
+			});
+			$restarted = $builder->step($sessionId);
+			$engineer->removeHook($restartHookId);
+			$restartHookId = null;
+			$this->check('Site Builder step after terminal error calls provider with new session', 1, $restartCalls);
+			$this->check('Site Builder step after terminal error remains resumable', 'continue', $restarted['status']);
+
+			$buildStore = new AgentToolsSiteBuilderSession($at, $sessionId);
+			$this->wire($buildStore);
+			$this->check('Site Builder session test obtains lock', true, $buildStore->lock(360));
+			$buildLockFile = $this->invokeProtected($buildStore, 'getLockFile');
+			touch($buildLockFile, time() - 600);
+			$buildStore->saveManifest($buildStore->loadManifest());
+			clearstatcache(true, $buildLockFile);
+			$this->check('Site Builder manifest save refreshes lock', true, filemtime($buildLockFile) >= time() - 2);
+			touch($buildLockFile, time() - 600);
+			$buildStore->appendLog(['type' => 'test', 'message' => 'Lock refresh test.']);
+			clearstatcache(true, $buildLockFile);
+			$this->check('Site Builder log append refreshes lock', true, filemtime($buildLockFile) >= time() - 2);
+			$buildStore->unlock();
+
+			$badFieldsResult = $builder->executeBuildTool($sessionId, 'create_fields', ['names' => [$fieldName, 'not-in-approved-plan']]);
+			$this->check('Site Builder rejects invalid field batch without throwing', false, $badFieldsResult['ok']);
+			$uncreatedField = $this->wire()->fields->get($fieldName);
+			$this->check('Site Builder validates full field call before mutation', 0, $uncreatedField ? (int) $uncreatedField->id : 0);
+			$fieldsResult = $builder->executeBuildTool($sessionId, 'create_fields', ['names' => [$fieldName]]);
+			$this->check('Site Builder creates approved field', 'created', $fieldsResult['fields'][$fieldName]);
+			$templatesResult = $builder->executeBuildTool($sessionId, 'create_templates', ['names' => [$templateName]]);
+			$this->check('Site Builder creates approved template', 'created', $templatesResult['templates'][$templateName]);
+			$badPagesResult = $builder->executeBuildTool($sessionId, 'create_pages', ['pages' => [['key' => 'fixture', 'content' => ['title' => 'Generated title']]]]);
+			$this->check('Site Builder returns correctable page validation error', false, $badPagesResult['ok']);
+			$this->check('Site Builder page validation names unapproved generated field', true, strpos((string) $badPagesResult['error'], 'Generated content field title') !== false);
+			$badPagesResult = $builder->executeBuildTool($sessionId, 'create_pages', ['pages' => [['key' => 'fixture'], ['key' => 'not-in-approved-plan']]]);
+			$this->check('Site Builder rejects invalid page batch without throwing', false, $badPagesResult['ok']);
+			$this->check('Site Builder validates full page call before mutation', 0, (int) $this->wire()->pages->get("parent=1, name=$pageName, include=all")->id);
+			$pagesResult = $builder->executeBuildTool($sessionId, 'create_pages', ['pages' => [['key' => 'fixture']]]);
+			$this->check('Site Builder creates approved page', 'created', $pagesResult['pages']['fixture']);
+			$fileResult = $builder->executeBuildTool($sessionId, 'write_file', [
+				'path' => $filePath,
+				'content' => '<?php namespace ProcessWire; ?><h1><?= $page->title ?></h1>',
+			]);
+			$this->check('Site Builder writes approved PHP file', true, $fileResult['ok']);
+			$this->check('Site Builder PHP lint succeeds', 'ok', $fileResult['lint']);
+
+			$front = $builder->executeBuildTool($sessionId, 'fetch_page', ['page' => 'fixture', 'kind' => 'front']);
+			$this->check('Site Builder verifies front-end page render' . (!empty($front['error']) ? ': ' . $front['error'] : ''), true, $front['ok']);
+			$admin = $builder->executeBuildTool($sessionId, 'fetch_page', ['page' => 'fixture', 'kind' => 'admin']);
+			$this->check('Site Builder verifies admin page Inputfields', true, $admin['ok']);
+
+			$manifest = $builder->getManifest($sessionId);
+			$this->check('Site Builder manifest records created field', $fieldName, $manifest['fields'][0]['key']);
+			$this->check('Site Builder manifest records both verification checks', 2, count($manifest['verification']));
+
+			$warningResult = $builder->executeBuildTool($sessionId, 'write_file', [
+				'path' => $filePath,
+				'content' => "<?php namespace ProcessWire; trigger_error('AgentTools Site Builder warning test', E_USER_WARNING); ?><h1><?= \$page->title ?></h1>",
+			]);
+			$this->check('Site Builder rewrites a completed file when content changes', 'rewritten', $warningResult['result']);
+			$this->check('Site Builder file rewrite clears stale verification', 0, count($builder->getManifest($sessionId)['verification']));
+			$frontWarning = $builder->executeBuildTool($sessionId, 'fetch_page', ['page' => 'fixture', 'kind' => 'front']);
+			$this->check('Site Builder front verification catches site warnings', false, $frontWarning['ok']);
+
+			$fixedResult = $builder->executeBuildTool($sessionId, 'write_file', [
+				'path' => $filePath,
+				'content' => '<?php namespace ProcessWire; ?><h1><?= $page->title ?></h1><p>Corrected</p>',
+			]);
+			$this->check('Site Builder verification can correct a completed file', 'rewritten', $fixedResult['result']);
+			$front = $builder->executeBuildTool($sessionId, 'fetch_page', ['page' => 'fixture', 'kind' => 'front']);
+			$admin = $builder->executeBuildTool($sessionId, 'fetch_page', ['page' => 'fixture', 'kind' => 'admin']);
+			$this->check('Site Builder verifies corrected front-end page', true, $front['ok']);
+			$this->check('Site Builder admin verification renders Inputfields', true, $admin['ok'] && $admin['bytes'] > 0);
+			$unchangedResult = $builder->executeBuildTool($sessionId, 'write_file', [
+				'path' => $filePath,
+				'content' => '<?php namespace ProcessWire; ?><h1><?= $page->title ?></h1><p>Corrected</p>',
+			]);
+			$this->check('Site Builder skips a completed file with identical content', 'unchanged', $unchangedResult['result']);
+			$this->check('Site Builder identical file leaves verification current', 2, count($builder->getManifest($sessionId)['verification']));
+
+			$rollback = $builder->startOver($sessionId);
+			$this->check('Site Builder Start over succeeds', true, $rollback['rollback']['ok']);
+			$this->check('Site Builder Start over removes page', 0, (int) $this->wire()->pages->get("parent=1, name=$pageName, include=all")->id);
+			$removedTemplate = $this->wire()->templates->get($templateName);
+			$removedField = $this->wire()->fields->get($fieldName);
+			$this->check('Site Builder Start over removes template', 0, $removedTemplate ? (int) $removedTemplate->id : 0);
+			$this->check('Site Builder Start over removes field', 0, $removedField ? (int) $removedField->id : 0);
+			$this->check('Site Builder Start over removes file', false, is_file($file));
+			$resetManifest = $builder->getManifest($sessionId);
+			$this->check('Site Builder Start over resets manifest resources', 0, count($resetManifest['fields']) + count($resetManifest['templates']) + count($resetManifest['pages']) + count($resetManifest['files']));
+			$this->check('Site Builder Start over keeps rollback history', 1, count($resetManifest['rollbackHistory']));
+			$this->check('Site Builder Start over clears page IDs', [], $builder->getState($sessionId)['pageIds']);
+			$describeStep = $builder->step($sessionId);
+			$this->check('Site Builder describe phase step returns normally', '', $describeStep['error']);
+			$this->check('Site Builder describe phase remains reset', 'reset', $describeStep['status']);
+		} finally {
+			if($plannerHookId !== null) $at->engineer()->removeHook($plannerHookId);
+			if($buildToolHookId !== null) $at->engineer()->removeHook($buildToolHookId);
+			if($restartHookId !== null) $at->engineer()->removeHook($restartHookId);
+			if($engineerSessionId !== '') $at->engineer()->removeAskSession($engineerSessionId);
+			if($buildPromptSessionId !== '') $at->engineer()->removeAskSession($buildPromptSessionId);
+			if($buildRunSessionId !== '') $at->engineer()->removeAskSession($buildRunSessionId);
+			if($restartedBuildSessionId !== '') $at->engineer()->removeAskSession($restartedBuildSessionId);
+			if($uninstalledFieldtypeSessionId !== '') $this->wire()->files->rmdir($at->getFilesPath('builds') . $uninstalledFieldtypeSessionId, true);
+			$page = $this->wire()->pages->get("parent=1, name=$pageName, include=all");
+			if($page && $page->id) $this->wire()->pages->delete($page, true);
+			$template = $this->wire()->templates->get($templateName);
+			if($template && $template->id && !$template->getNumPages()) $this->wire()->templates->delete($template);
+			$field = $this->wire()->fields->get($fieldName);
+			if($field && $field->id && !$field->numFieldgroups()) $this->wire()->fields->delete($field);
+			if(is_file($file)) unlink($file);
+			if($sessionId !== '') $this->wire()->files->rmdir($at->getFilesPath('builds') . $sessionId, true);
+		}
+	}
+
+	/**
+	 * Test that template updates never remove fields omitted by the plan.
+	 *
+	 * @param AgentTools $at
+	 *
+	 */
+	protected function testSiteBuilderAdditiveTemplateUpdate(AgentTools $at) {
+		$builder = $at->siteBuilder();
+		$suffix = substr(sha1((string) microtime(true) . random_int(1, PHP_INT_MAX)), 0, 8);
+		$templateName = 'at-builder-update-' . $suffix;
+		$pageName = $templateName;
+		$sessionId = '';
+		$template = null;
+		$page = null;
+		try {
+			$template = $this->wire()->templates->add($templateName);
+			$template->fieldgroup->add($this->wire()->fields->get('title'));
+			$template->fieldgroup->add($this->wire()->fields->get('body'));
+			$template->fieldgroup->save();
+			$template->save();
+			$page = $this->wire(new Page());
+			$page->template = $template;
+			$page->parent = 1;
+			$page->name = $pageName;
+			$page->title = 'Additive template fixture';
+			$page->body = '<p>Preserve this value.</p>';
+			$page->addStatus(Page::statusUnpublished);
+			$page->save();
+
+			$plan = [
+				'schemaVersion' => 1,
+				'title' => 'Additive template update test',
+				'summary' => 'Preserve an omitted existing field.',
+				'assumptions' => [], 'features' => [], 'design' => [],
+				'fields' => [[
+					'name' => 'title', 'disposition' => 'reuse', 'type' => 'FieldtypePageTitle',
+					'label' => 'Title', 'summary' => 'Existing title.', 'settings' => [],
+				]],
+				'templates' => [[
+					'name' => $templateName, 'disposition' => 'update', 'label' => 'Additive fixture',
+					'summary' => 'Keep body when only title is planned.', 'dataOnly' => true,
+					'singleton' => false,
+					'fields' => [['name' => 'title', 'required' => true, 'columnWidth' => 100, 'settings' => []]],
+					'allowedParents' => ['home'], 'allowedChildren' => [], 'settings' => [],
+				]],
+				'pages' => [
+					['key' => 'home', 'disposition' => 'reuse', 'parent' => null, 'name' => 'home', 'template' => 'home', 'status' => 'published', 'values' => []],
+					['key' => 'fixture', 'disposition' => 'reuse', 'parent' => 'home', 'name' => $pageName, 'template' => $templateName, 'status' => 'unpublished', 'values' => []],
+				],
+				'files' => [], 'modules' => [],
+				'verification' => ['routes' => [], 'adminPages' => [['template' => $templateName, 'page' => 'fixture']], 'checks' => []],
+				'openQuestions' => [],
+			];
+			$this->check('Site Builder accepts additive update fixture plan', [], $builder->validatePlan($plan));
+			$started = $builder->start('Test additive template updates.');
+			$sessionId = (string) $started['id'];
+			$store = new AgentToolsSiteBuilderSession($at, $sessionId);
+			$this->wire($store);
+			if(!$store->lock(360)) throw new WireException('Unable to lock additive Site Builder test session.');
+			$state = $store->load();
+			$state['plan'] = $plan;
+			$state['status'] = 'awaiting-approval';
+			$store->save($state);
+			$store->unlock();
+			$builder->approvePlan($sessionId);
+			$result = $builder->executeBuildTool($sessionId, 'create_templates', ['names' => [$templateName]]);
+			$this->check('Site Builder updates approved existing template', 'updated', $result['templates'][$templateName]);
+			$template = $this->wire()->templates->get($templateName);
+			$this->check('Site Builder additive update preserves omitted body field', true, $template->fieldgroup->hasField('body'));
+			$page = $this->wire()->pages->get((int) $page->id);
+			$this->check('Site Builder additive update preserves omitted field data', '<p>Preserve this value.</p>', (string) $page->body);
+			$builder->startOver($sessionId);
+		} finally {
+			if($page && $page->id) $this->wire()->pages->delete($page, true);
+			$template = $this->wire()->templates->get($templateName);
+			if($template && $template->id && !$template->getNumPages()) $this->wire()->templates->delete($template);
+			if($sessionId !== '') $this->wire()->files->rmdir($at->getFilesPath('builds') . $sessionId, true);
+		}
 	}
 
 	/**
@@ -143,7 +808,7 @@ class WireTest_AgentTools extends WireTest {
 	 *
 	 */
 	protected function testReadFileRanges(AgentTools $at) {
-		$file = $this->wire()->config->paths->assets . 'at-read-file-test.txt';
+		$file = $this->wire()->config->paths->templates . 'at-read-file-test.txt';
 		$this->writeTempFile($file, '0123456789abcdefghijklmnopqrstuvwxyz');
 
 		$result = $at->engineer->executeLocalTool('read_file', [ 'path' => $file ]);
@@ -160,6 +825,19 @@ class WireTest_AgentTools extends WireTest {
 
 		$result = $at->engineer->executeLocalTool('read_file', [ 'path' => 'wire/core/Functions.php', 'offset' => 0, 'limit' => 5 ]);
 		$this->check('read_file allows configured wire path', '<?php', $result);
+
+		$result = $at->engineer->executeLocalTool('read_file', [ 'path' => 'site/config.php' ]);
+		$this->check('read_file denies site configuration', 'Access denied: sensitive files are not available to AI tools.', $result);
+
+		$envFile = $this->wire()->config->paths->templates . '.env.agenttools-test';
+		$this->writeTempFile($envFile, 'SECRET=test');
+		$result = $at->engineer->executeLocalTool('read_file', [ 'path' => $envFile ]);
+		$this->check('read_file denies environment files', 'Access denied: sensitive files are not available to AI tools.', $result);
+
+		$assetFile = $this->wire()->config->paths->assets . 'at-read-file-test.txt';
+		$this->writeTempFile($assetFile, 'private asset');
+		$result = $at->engineer->executeLocalTool('read_file', [ 'path' => $assetFile ]);
+		$this->check('read_file denies site assets', 'Access denied: sensitive files are not available to AI tools.', $result);
 	}
 
 	/**
@@ -182,9 +860,9 @@ class WireTest_AgentTools extends WireTest {
 		$result = $at->engineer->executeLocalTool('read_file', [ 'path' => $moduleLink ]);
 		$this->check('read_file allows site/modules symlinks', 'outside-module', $result);
 
-		$targetFile = $this->wire()->config->paths->assets . 'at-read-file-target.txt';
+		$targetFile = $this->wire()->config->paths->classes . 'at-read-file-target.txt';
 		$this->writeTempFile($targetFile, 'target');
-		$assetLink = $this->wire()->config->paths->assets . 'at-read-file-link.txt';
+		$assetLink = $this->wire()->config->paths->templates . 'at-read-file-link.txt';
 		if(!@symlink($targetFile, $assetLink)) return;
 		$this->tmpFiles[] = $assetLink;
 
@@ -448,7 +1126,11 @@ class WireTest_AgentTools extends WireTest {
 				'usage' => [ 'input_tokens' => 8, 'output_tokens' => 3 ],
 			],
 		];
-		$hookId = $engineer->addHookBefore('sendProviderRequest', function(HookEvent $event) use(&$responses) {
+		$lastProviderRequest = null;
+		$providerSessionIds = [];
+		$hookId = $engineer->addHookBefore('sendProviderRequest', function(HookEvent $event) use(&$responses, &$lastProviderRequest, &$providerSessionIds) {
+			$lastProviderRequest = $event->arguments(0);
+			$providerSessionIds[] = $lastProviderRequest instanceof AgentToolsRequest ? (string) $lastProviderRequest->sessionId : '';
 			$response = array_shift($responses);
 			if($response instanceof \Throwable) throw $response;
 			$event->return = $response;
@@ -456,6 +1138,7 @@ class WireTest_AgentTools extends WireTest {
 		});
 
 		$sessionId = '';
+		$otherSessionId = '';
 		$interruptedId = '';
 		$resumedId = '';
 		$openAIResumedId = '';
@@ -481,6 +1164,7 @@ class WireTest_AgentTools extends WireTest {
 			$this->check('Engineer first step requests another round', 'continue', $first['status']);
 			$this->check('Engineer first step runs one provider round', 1, $first['round']);
 			$this->check('Engineer first step records token usage', 15, $first['tokenUsage']['total']);
+			$this->check('Engineer step request uses Engineer session ID', $sessionId, $providerSessionIds[0]);
 
 			$state = $engineer->getAskState($sessionId);
 			$this->check('Engineer step checkpoints tool result', true, count($state['messages']) >= 3);
@@ -507,6 +1191,24 @@ class WireTest_AgentTools extends WireTest {
 			$this->check('Engineer second step returns response', 'step mode done', $second['response']);
 			$this->check('Engineer step accumulates token usage', 26, $second['tokenUsage']['total']);
 			$this->check('Engineer completed step returns history', 2, count($second['history']));
+			$this->check('Engineer step request reuses session ID', $providerSessionIds[0], $providerSessionIds[1]);
+
+			$responses = [[
+				'stop_reason' => 'end_turn',
+				'content' => [[ 'type' => 'text', 'text' => 'other step mode done' ]],
+			]];
+			$otherStarted = $engineer->startAskSession('Test distinct resumable session', [
+				'provider' => AgentToolsEngineer::providerAnthropic,
+				'apiKey' => 'test-only-key',
+				'model' => 'test-model',
+				'tools' => [],
+			]);
+			$otherSessionId = $otherStarted['sessionId'];
+			$otherRequestStart = count($providerSessionIds);
+			$otherStep = $engineer->askStep($otherSessionId, [ 'apiKey' => 'test-only-key' ]);
+			$this->check('Other Engineer step session completes', 'done', $otherStep['status']);
+			$this->check('Other Engineer step request uses its session ID', $otherSessionId, $providerSessionIds[$otherRequestStart]);
+			$this->check('Different Engineer step sessions use different IDs', false, $providerSessionIds[0] === $providerSessionIds[$otherRequestStart]);
 
 			$responses = [
 				[
@@ -523,6 +1225,7 @@ class WireTest_AgentTools extends WireTest {
 					'content' => [[ 'type' => 'text', 'text' => 'blocking mode done' ]],
 				],
 			];
+			$blockingRequestStart = count($providerSessionIds);
 			$blocking = $engineer->ask('Test blocking rounds', [
 				'provider' => AgentToolsEngineer::providerAnthropic,
 				'apiKey' => 'test-only-key',
@@ -532,6 +1235,49 @@ class WireTest_AgentTools extends WireTest {
 			]);
 			$this->check('Engineer blocking ask still completes all rounds', 'blocking mode done', $blocking['response']);
 			$this->check('Engineer blocking ask still returns no error', null, $blocking['error']);
+			$this->check('Engineer blocking ask reuses session ID', $providerSessionIds[$blockingRequestStart], $providerSessionIds[$blockingRequestStart + 1]);
+			$this->check('Blocking and step conversations use different session IDs', false, $providerSessionIds[0] === $providerSessionIds[$blockingRequestStart]);
+
+			$handledTool = [];
+			$responses = [
+				[
+					'stop_reason' => 'tool_use',
+					'content' => [[
+						'type' => 'tool_use',
+						'id' => 'tool_custom_handler',
+						'name' => 'site_builder_test',
+						'input' => [ 'value' => 456 ],
+					]],
+				],
+				[
+					'stop_reason' => 'end_turn',
+					'content' => [[ 'type' => 'text', 'text' => 'custom tool done' ]],
+				],
+			];
+			$secret = 'agenttools-test-secret-value';
+			$previousDbPass = $this->wire()->config->dbPass;
+			$this->wire()->config->dbPass = $secret;
+			try {
+				$customTool = $engineer->ask('Test runtime custom tool handler', [
+					'provider' => AgentToolsEngineer::providerAnthropic,
+					'apiKey' => 'test-only-key',
+					'model' => 'test-model',
+					'tools' => [],
+					'maxIterations' => 4,
+					'toolHandler' => function(string $name, array $input) use(&$handledTool, $secret): array {
+						$handledTool = [ 'name' => $name, 'input' => $input ];
+						return [ 'ok' => true, 'value' => $secret ];
+					},
+				]);
+			} finally {
+				$this->wire()->config->dbPass = $previousDbPass;
+			}
+			$this->check('Engineer runtime custom tool handler is called', 'site_builder_test', $handledTool['name'] ?? '');
+			$this->check('Engineer runtime custom tool handler receives input', 456, $handledTool['input']['value'] ?? 0);
+			$this->check('Engineer runtime custom tool handler completes request', 'custom tool done', $customTool['response']);
+			$providerMessages = $lastProviderRequest instanceof AgentToolsRequest ? json_encode($lastProviderRequest->messages) : '';
+			$this->check('Engineer redacts known secrets before provider history', true, strpos((string) $providerMessages, '[redacted]') !== false);
+			$this->check('Engineer provider history excludes known secret values', false, strpos((string) $providerMessages, $secret) !== false);
 
 			$interrupted = $engineer->startAskSession('Test interrupted tool guard', [
 				'provider' => AgentToolsEngineer::providerAnthropic,
@@ -746,6 +1492,7 @@ class WireTest_AgentTools extends WireTest {
 		} finally {
 			$engineer->removeHook($hookId);
 			if($sessionId !== '') $engineer->removeAskSession($sessionId);
+			if($otherSessionId !== '') $engineer->removeAskSession($otherSessionId);
 			if($interruptedId !== '') $engineer->removeAskSession($interruptedId);
 			if($resumedId !== '') $engineer->removeAskSession($resumedId);
 			if($openAIResumedId !== '') $engineer->removeAskSession($openAIResumedId);

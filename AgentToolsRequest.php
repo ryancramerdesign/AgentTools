@@ -30,6 +30,7 @@
  * @property string $apiKey API key for the provider
  * @property string $model Model ID to use
  * @property string $endpoint Base endpoint URL (OpenAI-compatible providers only)
+ * @property string $sessionId Stable provider conversation/session ID
  * @property string $systemPrompt System prompt, or empty string for none
  * @property array $messages Array of message objects: [['role' => 'user'|'assistant', 'content' => '...'], ...]
  * @property array $tools Tool definitions in provider format
@@ -56,6 +57,7 @@ class AgentToolsRequest extends WireData {
 			'apiKey' => '',
 			'model' => '',
 			'endpoint' => '',
+			'sessionId' => '',
 			'systemPrompt' => '',
 			'messages' => [],
 			'tools' => [],
