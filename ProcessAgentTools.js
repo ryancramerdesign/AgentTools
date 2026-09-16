@@ -52,7 +52,7 @@ function initAgentsForm() {
 
 	$inputfields.sortable({
 		items: '> .at-agent-item:not(.at-agent-new)',
-		handle: '.fa-arrows',
+		handle: '.InputfieldHeaderIcon',
 		axis: 'y',
 		start: function(e, ui) {
 			ui.item.addClass('InputfieldIsHighlight at-sorting');
