@@ -134,6 +134,9 @@ class AgentToolsSiteBuilderTools extends Wire {
 			$fieldtypes[$name] = $fieldtype;
 			$field = $this->wire()->fields->get($name);
 			$existing = $this->findManifestItem('fields', $name);
+			if($field && $field->id && ($field->flags & Field::flagSystem) && $disposition !== 'reuse') {
+				$this->invalid("System field $name must use disposition reuse.");
+			}
 			if($disposition === 'reuse' && (!$field || !$field->id)) $this->invalid("Reused field $name no longer exists.");
 			if($disposition === 'create' && $field && $field->id && !$existing) $this->invalid("Field $name already exists but the plan says create.");
 			if($disposition === 'update' && (!$field || !$field->id)) $this->invalid("Field $name no longer exists for update.");
@@ -419,7 +422,15 @@ class AgentToolsSiteBuilderTools extends Wire {
 					'hash' => $contentHash,
 				]);
 			}
-			return ['ok' => true, 'path' => $path, 'result' => 'unchanged', 'bytes' => strlen($content), 'hash' => $contentHash, 'lint' => 'ok'];
+			return [
+				'ok' => true,
+				'path' => $path,
+				'result' => 'unchanged',
+				'message' => "File $path already has this exact content. It is complete; do not rewrite it unless verification reports a problem.",
+				'bytes' => strlen($content),
+				'hash' => $contentHash,
+				'lint' => 'ok',
+			];
 		}
 		if($disposition === 'create' && is_file($file) && !$existing) $this->invalid("File $path already exists but the plan says create.");
 		if($disposition === 'update' && !is_file($file) && !$existing) $this->invalid("File $path no longer exists for update.");

@@ -142,6 +142,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	 *  - `readOnlyEval` (bool): Make eval_php read-only without making the whole request preview-only
 	 *  - `onInterrupt` (string): 'stop' (default) or 'resume' after an interrupted tool call
 	 *  - `maxInterruptions` (int): Consecutive interruption limit in resume mode (default: 3)
+	 *  - `cacheInitialMessage` (bool): Add an Anthropic cache breakpoint to the first user message
 	 * @return array [ 'response' => string, 'migration' => string|null, 'error' => string|null, 'history' => array ]
 	 *
 	 */
@@ -751,7 +752,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	 */
 	protected function getProviderRequestOptions(array $options): array {
 		$result = [];
-		foreach(['timeout', 'anthropic', 'openai'] as $key) {
+		foreach(['timeout', 'anthropic', 'openai', 'cacheInitialMessage'] as $key) {
 			if(array_key_exists($key, $options)) $result[$key] = $options[$key];
 		}
 		return $result;
@@ -2259,6 +2260,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		$cache = ['type' => 'ephemeral', 'ttl' => '1h'];
 		$options = $request->options;
 		$tools = $request->tools;
+		$messages = $request->messages;
 		$endpoint = $request->endpoint ?: 'https://api.anthropic.com/v1/messages';
 
 		// System prompt as a content block array so we can attach cache_control
@@ -2271,11 +2273,14 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		if(!empty($tools)) {
 			$tools[count($tools) - 1]['cache_control'] = $cache;
 		}
+		if(!empty($options['cacheInitialMessage'])) {
+			$messages = $this->cacheAnthropicInitialMessage($messages, $cache);
+		}
 
 		$payload = [
 			'model' => $request->model,
 			'max_tokens' => self::maxTokens,
-			'messages' => $request->messages,
+			'messages' => $messages,
 		];
 		if(!empty($systemBlocks)) $payload['system'] = $systemBlocks;
 		if(!empty($tools)) $payload['tools'] = $tools;
@@ -2301,6 +2306,38 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			$headers,
 			$timeout
 		);
+	}
+
+	/**
+	 * Add a cache breakpoint to the first non-empty user message.
+	 *
+	 * @param array $messages
+	 * @param array $cache
+	 * @return array
+	 *
+	 */
+	protected function cacheAnthropicInitialMessage(array $messages, array $cache): array {
+		foreach($messages as $index => $message) {
+			if(($message['role'] ?? '') !== 'user') continue;
+			$content = $message['content'] ?? '';
+			if(is_string($content)) {
+				if($content === '') continue;
+				$messages[$index]['content'] = [[
+					'type' => 'text',
+					'text' => $content,
+					'cache_control' => $cache,
+				]];
+				break;
+			}
+			if(!is_array($content)) continue;
+			for($n = count($content) - 1; $n >= 0; $n--) {
+				if(!is_array($content[$n]) || ($content[$n]['type'] ?? '') !== 'text' || empty($content[$n]['text'])) continue;
+				$content[$n]['cache_control'] = $cache;
+				$messages[$index]['content'] = $content;
+				break 2;
+			}
+		}
+		return $messages;
 	}
 
 	/**

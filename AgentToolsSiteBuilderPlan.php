@@ -75,16 +75,27 @@ class AgentToolsSiteBuilderPlan extends Wire {
 	 * @return array<string,mixed>
 	 *
 	 */
-	public function normalize(array $plan): array {
+	public function normalize(array $plan, array &$warnings = []): array {
 		$plannedFields = [];
-		foreach((array) ($plan['fields'] ?? []) as $field) {
-			if(is_array($field) && !empty($field['name'])) $plannedFields[(string) $field['name']] = true;
+		foreach((array) ($plan['fields'] ?? []) as $index => $field) {
+			if(!is_array($field) || empty($field['name'])) continue;
+			$field = $this->normalizeFieldSettings($field, $warnings);
+			$plan['fields'][$index] = $field;
+			$plannedFields[(string) $field['name']] = $field;
 		}
 		foreach((array) ($plan['templates'] ?? []) as $index => $template) {
-			if(!is_array($template) || ($template['disposition'] ?? '') !== 'reuse') continue;
-			$template['fields'] = array_values(array_filter((array) ($template['fields'] ?? []), function($field) use($plannedFields) {
-				return is_array($field) && isset($plannedFields[(string) ($field['name'] ?? '')]);
-			}));
+			if(!is_array($template)) continue;
+			if(($template['disposition'] ?? '') === 'reuse') {
+				$template['fields'] = array_values(array_filter((array) ($template['fields'] ?? []), function($field) use($plannedFields) {
+					return is_array($field) && isset($plannedFields[(string) ($field['name'] ?? '')]);
+				}));
+			}
+			foreach((array) ($template['fields'] ?? []) as $fieldIndex => $templateField) {
+				if(!is_array($templateField)) continue;
+				$fieldName = (string) ($templateField['name'] ?? '');
+				if($fieldName === '' || !isset($plannedFields[$fieldName])) continue;
+				$template['fields'][$fieldIndex] = $this->normalizeFieldContextSettings($templateField, $plannedFields[$fieldName], $warnings);
+			}
 			$plan['templates'][$index] = $template;
 		}
 		$knownFileRoles = [
@@ -137,6 +148,7 @@ class AgentToolsSiteBuilderPlan extends Wire {
 			'adminPages' => array_values($adminPages),
 			'checks' => array_values($checks),
 		];
+		$warnings = array_values(array_unique($warnings));
 		return $plan;
 	}
 
@@ -152,11 +164,15 @@ class AgentToolsSiteBuilderPlan extends Wire {
 
 Each field has name, disposition (create/reuse/update), type, label, summary, and settings. Each template has name, disposition, label, summary, dataOnly, singleton, fields[], allowedParents, allowedChildren, and settings. Each template field has name, required, columnWidth, and settings. Each page has key, disposition, parent (page key or null), name, template, status, values, and optional contentBrief. Each file has path, role, disposition, summary, optional template, and optional methods. Modules are explicit objects with name, source, and disposition. Verification contains routes[], adminPages[], and checks[].
 
-	Use the current-site snapshot supplied with the request. Anything present in the snapshot must use reuse or update; use create only for new resources. For reused fields, copy the type and relevant settings exactly from the snapshot. The snapshot's fields list excludes system fields; its coreFields list contains reusable core fields needed by ordinary site templates.
+	Use the current-site snapshot supplied with the request. Anything present in the snapshot must use reuse or update; use create only for new resources. For reused fields, copy the type and relevant settings exactly from the snapshot. The snapshot's fields list excludes system fields. Its coreFields list contains all existing ProcessWire system fields marked system=true. A system field may be added to a planned template with disposition reuse, its exact type, and its relevant snapshot settings; it must never use create or update.
 
 	Use stable field/template names and page keys, never database IDs. Disposition create requires absence, reuse means no changes, and update means modify an existing resource. A reuse page cannot have values or contentBrief. Page names need only be unique among siblings. Every template field must reference fields[]. For reused templates, list only fields used by planned pages; do not copy every existing assignment from the snapshot, because omitted assignments remain untouched. Every new front-end template needs exactly one role=template file; an existing template may rely on its existing file when that file will not change. Data-only templates do not need template files. File paths are limited to site/templates/, site/classes/, site/modules/, and the exact files site/ready.php and site/init.php. File roles are init, main, template, pageClass, stylesheet, script, module, ready, siteInit, admin, or include. Files allow only create or update; omit existing files that will not be written.
 
+	A plan with a visual design must include a role=stylesheet file. When profileNotes names a primary stylesheet such as site/templates/styles/main.css, include that exact file with create or update as appropriate so all planned styling work is approved before the build begins.
+
 allowedParents and allowedChildren are the only family controls. null preserves defaults; [] means none. Never put noParents, noChildren, parentTemplates, or childTemplates in settings. singleton=true means noParents=-1 and cannot be combined with allowedParents=[]. Template updates are additive in version 1: omit removeFields and never remove an existing field from a template. Rich text uses InputfieldTinyMCE with contentType>=1. Do not use CKEditor. File/image fields require outputFormat=2 for a single value or outputFormat=1 for an array, and maxFiles must agree. Prefer singular field names for single values and plural names for multiple values.
+
+	The homepage and its home template already exist. When changing them, use disposition update. For the home template use singleton=false and allowedParents=null so its existing root-only family setting is preserved.
 
 Hooks shared by front end and admin belong in site/ready.php or site/init.php; front-end-only hooks in site/templates/_init.php; admin-only hooks in site/templates/admin.php. Do not generate a module solely to hold hooks. Generated templates use markup regions with _init.php prepended and _main.php appended. With usePageClasses enabled, follow ProcessWire template-name Page-class conventions. Image uploads are outside version 1. When profileNotes documents an image helper, plan to render every image through that helper and design around the image area it returns, including placeholders; the layout must still work when placeholders are disabled and the helper returns nothing. Without a documented image helper, avoid warnings and broken image markup and make layouts look complete without an image. Omit empty optional values rather than casting them into visible placeholders such as 0.
 
@@ -209,7 +225,8 @@ PROMPT;
 				if($value !== null && $value !== '' && $value !== []) $entry['settings'][$name] = $value;
 			}
 			if($field->flags & Field::flagSystem) {
-				if($field->name === 'title') $coreFields[] = $entry;
+				$entry['system'] = true;
+				$coreFields[] = $entry;
 				continue;
 			}
 			$fields[] = $entry;
@@ -357,6 +374,9 @@ PROMPT;
 			if(($settings['inputfieldClass'] ?? '') === 'InputfieldCKEditor') $errors[] = "Field $name must use InputfieldTinyMCE rather than CKEditor.";
 
 			$existing = $this->wire()->fields->get($name);
+			if($existing && $existing->id && ($existing->flags & Field::flagSystem) && $disposition !== 'reuse') {
+				$errors[] = "System field $name must use disposition reuse.";
+			}
 			if($disposition === 'create' && $existing && $existing->id) $errors[] = "Field $name is marked create but already exists.";
 			if(($disposition === 'reuse' || $disposition === 'update') && (!$existing || !$existing->id)) $errors[] = "Field $name is marked $disposition but does not exist.";
 			if($existing && $existing->id && ($disposition === 'reuse' || $disposition === 'update')) {
@@ -611,6 +631,36 @@ PROMPT;
 		} catch(\Throwable $e) {
 		}
 		return $properties;
+	}
+
+	/** @param array<string,mixed> $field @param string[] $warnings @return array<string,mixed> */
+	protected function normalizeFieldSettings(array $field, array &$warnings): array {
+		$name = (string) ($field['name'] ?? '');
+		$typeName = $this->normalizeFieldtypeName((string) ($field['type'] ?? ''));
+		$fieldtype = $typeName === '' ? null : $this->wire()->modules->getModule($typeName, ['noInstall' => true, 'noThrow' => true]);
+		if(!$fieldtype instanceof Fieldtype || !is_array($field['settings'] ?? null)) return $field;
+		$allowed = $this->getFieldProperties($fieldtype);
+		foreach(array_keys($field['settings']) as $property) {
+			if(isset($allowed[$property])) continue;
+			unset($field['settings'][$property]);
+			$warnings[] = "Dropped unknown setting $property from field $name ($typeName).";
+		}
+		return $field;
+	}
+
+	/** @param array<string,mixed> $context @param array<string,mixed> $field @param string[] $warnings @return array<string,mixed> */
+	protected function normalizeFieldContextSettings(array $context, array $field, array &$warnings): array {
+		$fieldName = (string) ($field['name'] ?? '');
+		$typeName = $this->normalizeFieldtypeName((string) ($field['type'] ?? ''));
+		$fieldtype = $typeName === '' ? null : $this->wire()->modules->getModule($typeName, ['noInstall' => true, 'noThrow' => true]);
+		if(!$fieldtype instanceof Fieldtype || !is_array($context['settings'] ?? null)) return $context;
+		$allowed = $this->getFieldProperties($fieldtype);
+		foreach(array_keys($context['settings']) as $property) {
+			if(isset($allowed[$property])) continue;
+			unset($context['settings'][$property]);
+			$warnings[] = "Dropped unknown context setting $property from template field $fieldName ($typeName).";
+		}
+		return $context;
 	}
 
 	/** @return array<string,bool> */

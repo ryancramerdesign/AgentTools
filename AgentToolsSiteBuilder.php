@@ -68,6 +68,7 @@ class AgentToolsSiteBuilder extends AgentToolsHelper {
 				'plan' => [],
 				'planApproved' => false,
 				'planErrors' => [],
+				'planWarnings' => [],
 				'planAttempts' => 0,
 				'revisionRequest' => '',
 				'engineerSessionId' => '',
@@ -166,10 +167,13 @@ class AgentToolsSiteBuilder extends AgentToolsHelper {
 		return $this->updateLocked($id, function(AgentToolsSiteBuilderSession $session, array &$state) use($request): void {
 			if(empty($state['plan'])) throw new WireException($this->_('There is no Site Builder plan to revise yet.'));
 			$hadErrors = !empty($state['planErrors']);
-			$plan = $this->plans()->normalize((array) $state['plan']);
+			$warnings = [];
+			$plan = $this->plans()->normalize((array) $state['plan'], $warnings);
 			$errors = $this->plans()->validate($plan);
 			$state['plan'] = $plan;
 			$state['planErrors'] = $errors;
+			$state['planWarnings'] = $warnings;
+			foreach($warnings as $warning) $this->log($session, $state, $warning, 'warning');
 			if($request === '' && !$hadErrors) throw new WireException($this->_('Please describe the requested plan revision.'));
 			if($request === '' && !$errors) {
 				$state['status'] = 'awaiting-approval';
@@ -405,28 +409,31 @@ class AgentToolsSiteBuilder extends AgentToolsHelper {
 			$this->isBudgetReached($state, self::phasePlan);
 			return;
 		}
-			try {
-				$plan = $this->plans()->decode((string) $result['response']);
-				$plan = $this->plans()->normalize($plan);
-				$errors = $this->plans()->validate($plan);
+		$warnings = [];
+		try {
+			$plan = $this->plans()->decode((string) $result['response']);
+			$plan = $this->plans()->normalize($plan, $warnings);
+			$errors = $this->plans()->validate($plan);
 		} catch(\Throwable $e) {
 			$plan = [];
 			$errors = [$e->getMessage()];
+		}
+		$state['planWarnings'] = $warnings;
+		foreach($warnings as $warning) $this->addMessage($session, $state, $warning, 'warning');
+		if($errors) {
+			$this->recordPlanFailure($session, $state, $plan, $errors, (string) $result['response']);
+			$state['revisionRequest'] = "Correct the previous plan. Validation errors:\n- " . implode("\n- ", $errors);
+			if($plan) $state['plan'] = $plan;
+			$state['engineerSessionId'] = '';
+			$state['engineerRound'] = 0;
+			$state['engineerTokenUsage'] = $this->emptyTokenUsage();
+			if($state['planAttempts'] >= 3) {
+				$state['status'] = 'paused';
+				$state['error'] = $this->_('Planning paused after three invalid plans. The user may revise or resume it.');
+				$this->addMessage($session, $state, $state['error'], 'warning');
+				return;
 			}
-			if($errors) {
-				$this->recordPlanFailure($session, $state, $plan, $errors, (string) $result['response']);
-				$state['revisionRequest'] = "Correct the previous plan. Validation errors:\n- " . implode("\n- ", $errors);
-				if($plan) $state['plan'] = $plan;
-				$state['engineerSessionId'] = '';
-				$state['engineerRound'] = 0;
-				$state['engineerTokenUsage'] = $this->emptyTokenUsage();
-				if($state['planAttempts'] >= 3) {
-					$state['status'] = 'paused';
-					$state['error'] = $this->_('Planning paused after three invalid plans. The user may revise or resume it.');
-					$this->addMessage($session, $state, $state['error'], 'warning');
-					return;
-				}
-				$state['status'] = 'continue';
+			$state['status'] = 'continue';
 			if($this->isBudgetReached($state, self::phasePlan)) return;
 			$this->addMessage($session, $state, $this->_('The plan needs correction; another planning round is ready.'), 'warning');
 			return;
@@ -469,6 +476,10 @@ class AgentToolsSiteBuilder extends AgentToolsHelper {
 			return;
 		}
 		$this->accountAskResult($state, $result);
+		if($this->isBuildComplete($state, $session->loadManifest())) {
+			$this->enterVerifyPhase($session, $state);
+			return;
+		}
 		if(($state['status'] ?? '') === 'paused') return;
 		if(!empty($result['error'])) throw new WireException((string) $result['error']);
 		if(empty($result['done'])) {
@@ -517,6 +528,10 @@ class AgentToolsSiteBuilder extends AgentToolsHelper {
 			return;
 		}
 		$this->accountAskResult($state, $result);
+		if($this->isVerificationComplete($state, $session->loadManifest())) {
+			$this->completeBuild($session, $state);
+			return;
+		}
 		if(($state['status'] ?? '') === 'paused') return;
 		if(!empty($result['error'])) throw new WireException((string) $result['error']);
 		if(empty($result['done'])) {
@@ -564,6 +579,7 @@ class AgentToolsSiteBuilder extends AgentToolsHelper {
 			'maxIterations' => (int) $options[$phase . 'RoundLimit'],
 			'timeout' => (int) $this->at->get('engineer_request_timeout'),
 			'traceType' => 'site-builder-' . $phase,
+			'cacheInitialMessage' => $provider === AgentToolsEngineer::providerAnthropic,
 		];
 		if($phase === self::phasePlan && $provider === AgentToolsEngineer::providerAnthropic) {
 			$result['anthropic'] = ['max_tokens' => self::planMaxTokens];
@@ -681,9 +697,10 @@ class AgentToolsSiteBuilder extends AgentToolsHelper {
 	}
 
 	protected function getBuildRequest(array $state, array $manifest): string {
-		return "Carry out the approved Site Builder plan incrementally. Inspect the manifest summary, perform only missing work, report useful progress, and do not stop until every approved resource is complete.\n\nPLAN:\n" .
+		return "Carry out the approved Site Builder plan incrementally. Inspect the manifest summary, perform only missing work, report useful progress, and do not stop until every approved resource is complete. Every manifest item with status complete is already done; do not repeat its tool call.\n\nPLAN:\n" .
 			json_encode($state['plan'], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) .
-			"\n\nCURRENT MANIFEST:\n" . json_encode($manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+			"\n\nCURRENT MANIFEST:\n" . json_encode($manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) .
+			$this->getCompletedFileInstructions($manifest);
 	}
 
 	protected function getVerifyRequest(array $state, array $manifest): string {
@@ -700,8 +717,23 @@ Never use eval_php to create or modify planned fields, templates, pages, files, 
 
 	Generated templates use ProcessWire markup regions with _init.php prepended and _main.php appended. Rich text uses TinyMCE. Template updates are additive: preserve all existing fields and data, adding or reconfiguring only fields named in the approved plan. Hooks shared by front end and admin go in site/ready.php or site/init.php; front-end-only hooks go in site/templates/_init.php; admin-only hooks go in site/templates/admin.php. Do not create a module just to hold hooks. Follow Page-class naming conventions. When the supplied site profile documents an image helper, render every image through that helper and design around the image area it returns, including placeholders; the layout must still work when placeholders are disabled and the helper returns nothing. Without a documented image helper, avoid warnings and broken image markup and make layouts look complete without an image. Omit empty optional values rather than casting them into visible placeholders such as 0. Prefer the approved CSS approach and vanilla JavaScript unless the plan says otherwise.
 
+A manifest item with status complete is already done. Never repeat create_fields, create_templates, create_pages, install_modules, or write_file for a complete item during the build phase. An unchanged write_file result confirms the file is already correct; do not submit it again. Completed files may be rewritten only during verification when a verification result identifies a problem.
+
 Before a final response, compare your work with the complete plan. If anything remains, call tools rather than merely describing what should happen. Keep prose and progress reports concise.
 PROMPT;
+	}
+
+	/** @param array<string,mixed> $manifest */
+	protected function getCompletedFileInstructions(array $manifest): string {
+		$lines = [];
+		foreach((array) ($manifest['files'] ?? []) as $item) {
+			if(!is_array($item) || ($item['status'] ?? '') !== 'complete') continue;
+			$path = (string) ($item['key'] ?? '');
+			if($path === '') continue;
+			$bytes = (int) ($item['bytes'] ?? 0);
+			$lines[] = "- $path: written, $bytes bytes; do not rewrite unless verification reports a problem.";
+		}
+		return $lines ? "\n\nCOMPLETED FILES:\n" . implode("\n", $lines) : '';
 	}
 
 	protected function getVerifySystemPrompt(array $state): string {

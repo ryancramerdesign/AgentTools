@@ -266,6 +266,7 @@ class ProcessAgentToolsSiteBuilder extends ProcessAgentToolsHelper {
 		$form = $this->newForm();
 		$plan = (array) ($state['plan'] ?? []);
 		$planErrors = array_values((array) ($state['planErrors'] ?? []));
+		$planWarnings = array_values((array) ($state['planWarnings'] ?? []));
 		if($planErrors) {
 			$f = $form->InputfieldMarkup;
 			$f->label = $this->_('Plan requires correction');
@@ -273,6 +274,15 @@ class ProcessAgentToolsSiteBuilder extends ProcessAgentToolsHelper {
 			$f->value = '<p class="uk-alert uk-alert-warning">' . $this->wire()->sanitizer->entities($this->_('These validation errors must be corrected before the site can be built.')) . '</p>' .
 				'<ul class="uk-list uk-list-bullet">';
 			foreach($planErrors as $item) $f->value .= '<li>' . $this->wire()->sanitizer->entities((string) $item) . '</li>';
+			$f->value .= '</ul>';
+			$form->add($f);
+		}
+		if($planWarnings) {
+			$f = $form->InputfieldMarkup;
+			$f->label = $this->_('Plan adjustments');
+			$f->icon = 'info-circle';
+			$f->value = '<p class="uk-alert uk-alert-warning">' . $this->wire()->sanitizer->entities($this->_('Unsupported settings were omitted so the plan can continue safely.')) . '</p><ul class="uk-list uk-list-bullet">';
+			foreach($planWarnings as $item) $f->value .= '<li>' . $this->wire()->sanitizer->entities((string) $item) . '</li>';
 			$f->value .= '</ul>';
 			$form->add($f);
 		}

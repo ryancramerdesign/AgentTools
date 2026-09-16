@@ -134,9 +134,21 @@ class WireTest_AgentTools extends WireTest {
 		try {
 			$snapshot = $plans->getSiteSnapshot();
 			$fieldNames = array_column($snapshot['fields'], 'name');
+			$coreFields = array_column($snapshot['coreFields'], null, 'name');
 			$templateNames = array_column($snapshot['templates'], 'name');
 			$pageNames = array_column($snapshot['pages'], 'name');
 			$systemFieldFound = false;
+			$systemFieldNames = [];
+			$coreSystemFieldsMarked = true;
+			foreach($this->wire()->fields as $field) {
+				if($field->flags & Field::flagSystem) $systemFieldNames[] = (string) $field->name;
+			}
+			foreach($coreFields as $field) {
+				if(empty($field['system'])) $coreSystemFieldsMarked = false;
+			}
+			sort($systemFieldNames, SORT_STRING);
+			$coreFieldNames = array_keys($coreFields);
+			sort($coreFieldNames, SORT_STRING);
 			foreach($fieldNames as $name) {
 				$field = $this->wire()->fields->get($name);
 				if($field && $field->flags & Field::flagSystem) $systemFieldFound = true;
@@ -147,7 +159,9 @@ class WireTest_AgentTools extends WireTest {
 				if($template && $template->flags & Template::flagSystem) $systemTemplateFound = true;
 			}
 			$this->check('Site Builder snapshot excludes system fields', false, $systemFieldFound);
-			$this->check('Site Builder snapshot exposes reusable title core field', true, in_array('title', array_column($snapshot['coreFields'], 'name'), true));
+			$this->check('Site Builder snapshot exposes all system fields separately', $systemFieldNames, $coreFieldNames);
+			$this->check('Site Builder snapshot marks all core fields as system fields', true, $coreSystemFieldsMarked);
+			$this->check('Site Builder snapshot exposes reusable title core field', true, isset($coreFields['title']));
 			$this->check('Site Builder snapshot excludes system templates', false, $systemTemplateFound);
 			$this->check('Site Builder snapshot excludes admin page', false, in_array((string) $this->wire()->pages->get((int) $this->wire()->config->adminRootPageID)->name, $pageNames, true));
 			$this->check('Site Builder snapshot includes template file paths', true, in_array('site/templates/home.php', $snapshot['files'], true));
@@ -177,6 +191,25 @@ class WireTest_AgentTools extends WireTest {
 			]]);
 			$this->check('Site Builder planning request includes current-site snapshot', true, strpos($planRequest, 'CURRENT SITE SNAPSHOT:') !== false);
 			$this->check('Site Builder planning request includes AGENTS profile guidance', true, strpos($planRequest, $profileNotes) !== false);
+			$this->check('Site Builder planning prompt explains system fields', true, strpos($plans->getSystemPrompt(), 'must never use create or update') !== false);
+			$this->check('Site Builder planning prompt preserves homepage family settings', true, strpos($plans->getSystemPrompt(), 'For the home template use singleton=false and allowedParents=null') !== false);
+			$this->check('Site Builder planning prompt requires planned stylesheet work', true, strpos($plans->getSystemPrompt(), 'must include a role=stylesheet file') !== false);
+			$email = $this->wire()->fields->get('email');
+			if($email && $email->id && ($email->flags & Field::flagSystem)) {
+				$emailType = $email->type ? $email->type->className() : '';
+				$systemErrors = [];
+				$systemArgs = [['email' => [
+					'name' => 'email', 'disposition' => 'update', 'type' => $emailType, 'settings' => [],
+				]], &$systemErrors, []];
+				$this->invokeProtected($plans, 'validateFields', $systemArgs);
+				$this->check('Site Builder rejects system field updates', true, in_array('System field email must use disposition reuse.', $systemErrors, true));
+				$systemErrors = [];
+				$systemArgs = [['email' => [
+					'name' => 'email', 'disposition' => 'reuse', 'type' => $emailType, 'settings' => [],
+				]], &$systemErrors, []];
+				$this->invokeProtected($plans, 'validateFields', $systemArgs);
+				$this->check('Site Builder accepts system field reuse', [], $systemErrors);
+			}
 		} finally {
 			if($createdProfileFile) $this->wire()->files->unlink($profileFile);
 		}
@@ -260,7 +293,13 @@ class WireTest_AgentTools extends WireTest {
 
 		try {
 			$normalizationFixture = [
-				'fields' => [['name' => 'title']],
+				'fields' => [
+					['name' => 'title'],
+					[
+						'name' => 'project_year', 'type' => 'FieldtypeInteger',
+						'settings' => ['inputfieldClass' => 'InputfieldInteger'],
+					],
+				],
 				'templates' => [[
 					'name' => 'basic-page',
 					'disposition' => 'reuse',
@@ -269,9 +308,12 @@ class WireTest_AgentTools extends WireTest {
 				'pages' => [],
 				'files' => [['path' => 'site/templates/_main.php', 'role' => 'markup-region']],
 			];
-			$normalizedFixture = $plans->normalize($normalizationFixture);
+			$normalizationWarnings = [];
+			$normalizedFixture = $plans->normalize($normalizationFixture, $normalizationWarnings);
 			$this->check('Site Builder normalization removes unrelated reused-template fields', ['title'], array_column($normalizedFixture['templates'][0]['fields'], 'name'));
 			$this->check('Site Builder normalization assigns known ProcessWire file roles', 'main', $normalizedFixture['files'][0]['role']);
+			$this->check('Site Builder normalization drops undocumented field settings', false, isset($normalizedFixture['fields'][1]['settings']['inputfieldClass']));
+			$this->check('Site Builder normalization reports dropped field settings', true, in_array('Dropped unknown setting inputfieldClass from field project_year (FieldtypeInteger).', $normalizationWarnings, true));
 			$builderDefaults = $this->invokeProtected($builder, 'normalizeOptions', [[]]);
 			$this->check('Site Builder default planning token limit is generous', AgentToolsSiteBuilder::defaultPlanTokenLimit, $builderDefaults['planTokenLimit']);
 			$this->check('Site Builder default build token limit is generous', AgentToolsSiteBuilder::defaultBuildTokenLimit, $builderDefaults['buildTokenLimit']);
@@ -379,8 +421,10 @@ class WireTest_AgentTools extends WireTest {
 			$this->check('Site Builder rejects singleton with no allowed parents', true, in_array("Template $templateName cannot combine singleton=true with allowedParents=[].", $badErrors, true));
 			$badPlan = $plan;
 			$badPlan['templates'][0]['fields'][1]['settings']['notAFieldSetting'] = true;
-			$badErrors = $builder->validatePlan($badPlan);
-			$this->check('Site Builder rejects unknown field context setting', true, in_array("Unknown context setting notAFieldSetting for template $templateName field $fieldName (FieldtypeText).", $badErrors, true));
+			$contextWarnings = [];
+			$normalizedContextPlan = $plans->normalize($badPlan, $contextWarnings);
+			$this->check('Site Builder normalization drops unknown field context setting', false, isset($normalizedContextPlan['templates'][0]['fields'][1]['settings']['notAFieldSetting']));
+			$this->check('Site Builder normalization reports dropped field context setting', true, in_array("Dropped unknown context setting notAFieldSetting from template field $fieldName (FieldtypeText).", $contextWarnings, true));
 			$titleProperties = $this->invokeProtected($plans, 'getFieldProperties', [$this->wire()->modules->get('FieldtypePageTitle')]);
 			$textareaProperties = $this->invokeProtected($plans, 'getFieldProperties', [$this->wire()->modules->get('FieldtypeTextarea')]);
 			$this->check('Site Builder accepts inherited PageTitle textformatters setting', true, isset($titleProperties['textformatters']));
@@ -465,6 +509,19 @@ class WireTest_AgentTools extends WireTest {
 			$this->check('Site Builder resolves configured agent provider', (string) $buildAgent->provider, $buildOptions['provider']);
 			$this->check('Site Builder resolves configured agent model', (string) $buildAgent->model, $buildOptions['model']);
 			$this->check('Site Builder resolves configured agent endpoint', (string) $buildAgent->endpointUrl, $buildOptions['endpoint']);
+			$this->check('Site Builder enables stable initial-message caching for Anthropic', $buildOptions['provider'] === AgentToolsEngineer::providerAnthropic, !empty($buildOptions['cacheInitialMessage']));
+			$buildSystemPrompt = $this->invokeProtected($builder, 'getBuildSystemPrompt', [$buildState]);
+			$this->check('Site Builder tells agents not to repeat complete resources', true, strpos($buildSystemPrompt, 'A manifest item with status complete is already done') !== false);
+			$completedFileInstructions = $this->invokeProtected($builder, 'getCompletedFileInstructions', [[
+				'files' => [['key' => 'site/templates/home.php', 'status' => 'complete', 'bytes' => 321]],
+			]]);
+			$this->check('Site Builder describes completed files explicitly', true, strpos($completedFileInstructions, 'site/templates/home.php: written, 321 bytes; do not rewrite') !== false);
+			$cache = ['type' => 'ephemeral', 'ttl' => '1h'];
+			$cachedMessages = $this->invokeProtected($engineer, 'cacheAnthropicInitialMessage', [[
+				['role' => 'user', 'content' => 'Stable Site Builder plan and manifest.'],
+				['role' => 'assistant', 'content' => 'Working.'],
+			], $cache]);
+			$this->check('Engineer can cache the stable initial Anthropic message', $cache, $cachedMessages[0]['content'][0]['cache_control'] ?? []);
 			$buildPrompt = $engineer->startAskSession('Inspect the approved Site Builder build request.', $buildOptions);
 			$buildPromptSessionId = (string) $buildPrompt['sessionId'];
 			$buildAskState = $engineer->getAskState($buildPromptSessionId);
@@ -619,6 +676,7 @@ class WireTest_AgentTools extends WireTest {
 				'content' => '<?php namespace ProcessWire; ?><h1><?= $page->title ?></h1><p>Corrected</p>',
 			]);
 			$this->check('Site Builder skips a completed file with identical content', 'unchanged', $unchangedResult['result']);
+			$this->check('Site Builder no-op tells agent not to rewrite the file', true, strpos((string) ($unchangedResult['message'] ?? ''), 'do not rewrite it unless verification reports a problem') !== false);
 			$this->check('Site Builder identical file leaves verification current', 2, count($builder->getManifest($sessionId)['verification']));
 
 			$rollback = $builder->startOver($sessionId);
