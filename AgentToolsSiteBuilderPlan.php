@@ -76,6 +76,32 @@ class AgentToolsSiteBuilderPlan extends Wire {
 	 *
 	 */
 	public function normalize(array $plan): array {
+		$plannedFields = [];
+		foreach((array) ($plan['fields'] ?? []) as $field) {
+			if(is_array($field) && !empty($field['name'])) $plannedFields[(string) $field['name']] = true;
+		}
+		foreach((array) ($plan['templates'] ?? []) as $index => $template) {
+			if(!is_array($template) || ($template['disposition'] ?? '') !== 'reuse') continue;
+			$template['fields'] = array_values(array_filter((array) ($template['fields'] ?? []), function($field) use($plannedFields) {
+				return is_array($field) && isset($plannedFields[(string) ($field['name'] ?? '')]);
+			}));
+			$plan['templates'][$index] = $template;
+		}
+		$knownFileRoles = [
+			'site/templates/_init.php' => 'init',
+			'site/templates/_main.php' => 'main',
+			'site/templates/admin.php' => 'admin',
+			'site/ready.php' => 'ready',
+			'site/init.php' => 'siteInit',
+		];
+		foreach((array) ($plan['files'] ?? []) as $index => $file) {
+			if(!is_array($file)) continue;
+			$path = str_replace('\\', '/', (string) ($file['path'] ?? ''));
+			if(isset($knownFileRoles[$path])) {
+				$file['role'] = $knownFileRoles[$path];
+				$plan['files'][$index] = $file;
+			}
+		}
 		$verification = is_array($plan['verification'] ?? null) ? $plan['verification'] : [];
 		$routes = is_array($verification['routes'] ?? null) ? $verification['routes'] : [];
 		$adminPages = is_array($verification['adminPages'] ?? null) ? $verification['adminPages'] : [];
@@ -128,7 +154,7 @@ Each field has name, disposition (create/reuse/update), type, label, summary, an
 
 	Use the current-site snapshot supplied with the request. Anything present in the snapshot must use reuse or update; use create only for new resources. For reused fields, copy the type and relevant settings exactly from the snapshot. The snapshot's fields list excludes system fields; its coreFields list contains reusable core fields needed by ordinary site templates.
 
-	Use stable field/template names and page keys, never database IDs. Disposition create requires absence, reuse means no changes, and update means modify an existing resource. A reuse page cannot have values or contentBrief. Page names need only be unique among siblings. Every template field must reference fields[]. Every new front-end template needs exactly one role=template file; an existing template may rely on its existing file when that file will not change. Data-only templates do not need template files. File paths are limited to site/templates/, site/classes/, site/modules/, and the exact files site/ready.php and site/init.php. Files allow only create or update; omit existing files that will not be written.
+	Use stable field/template names and page keys, never database IDs. Disposition create requires absence, reuse means no changes, and update means modify an existing resource. A reuse page cannot have values or contentBrief. Page names need only be unique among siblings. Every template field must reference fields[]. For reused templates, list only fields used by planned pages; do not copy every existing assignment from the snapshot, because omitted assignments remain untouched. Every new front-end template needs exactly one role=template file; an existing template may rely on its existing file when that file will not change. Data-only templates do not need template files. File paths are limited to site/templates/, site/classes/, site/modules/, and the exact files site/ready.php and site/init.php. File roles are init, main, template, pageClass, stylesheet, script, module, ready, siteInit, admin, or include. Files allow only create or update; omit existing files that will not be written.
 
 allowedParents and allowedChildren are the only family controls. null preserves defaults; [] means none. Never put noParents, noChildren, parentTemplates, or childTemplates in settings. singleton=true means noParents=-1 and cannot be combined with allowedParents=[]. Template updates are additive in version 1: omit removeFields and never remove an existing field from a template. Rich text uses InputfieldTinyMCE with contentType>=1. Do not use CKEditor. File/image fields require outputFormat=2 for a single value or outputFormat=1 for an array, and maxFiles must agree. Prefer singular field names for single values and plural names for multiple values.
 
@@ -472,6 +498,7 @@ PROMPT;
 	/** @param array $files @param array<string,array<string,mixed>> $templates @param string[] $errors */
 	protected function validateFiles(array $files, array $templates, array &$errors): void {
 		$roles = ['init', 'main', 'template', 'pageClass', 'stylesheet', 'script', 'module', 'ready', 'siteInit', 'admin', 'include'];
+		$roleList = implode(', ', $roles);
 		$paths = [];
 		foreach($files as $index => $item) {
 			if(!is_array($item)) {
@@ -483,7 +510,7 @@ PROMPT;
 			if(isset($paths[$path])) $errors[] = "Duplicate file path: $path.";
 			$paths[$path] = true;
 			$role = (string) ($item['role'] ?? '');
-			if(!in_array($role, $roles, true)) $errors[] = "File $path has invalid role $role.";
+			if(!in_array($role, $roles, true)) $errors[] = "File $path has invalid role $role; allowed roles: $roleList.";
 			$disposition = $this->validateDisposition($item, "file $path", $errors, ['create', 'update']);
 			if(($role === 'template' || $role === 'pageClass')) {
 				$template = (string) ($item['template'] ?? '');

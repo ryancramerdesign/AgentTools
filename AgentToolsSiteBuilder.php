@@ -18,6 +18,10 @@ class AgentToolsSiteBuilder extends AgentToolsHelper {
 	const phaseVerify = 'verify';
 	const phaseDone = 'done';
 	const maxConsecutiveToolFailures = 5;
+	const planMaxTokens = 16384;
+	const defaultPlanTokenLimit = 100000;
+	const defaultBuildTokenLimit = 750000;
+	const defaultVerifyTokenLimit = 200000;
 
 	/** @var AgentToolsSiteBuilderPlan|null */
 	protected $plans = null;
@@ -159,13 +163,31 @@ class AgentToolsSiteBuilder extends AgentToolsHelper {
 	 */
 	public function revisePlan(string $id, string $request): array {
 		$request = trim($request);
-		if($request === '') throw new WireException($this->_('Please describe the requested plan revision.'));
 		return $this->updateLocked($id, function(AgentToolsSiteBuilderSession $session, array &$state) use($request): void {
 			if(empty($state['plan'])) throw new WireException($this->_('There is no Site Builder plan to revise yet.'));
+			$hadErrors = !empty($state['planErrors']);
+			$plan = $this->plans()->normalize((array) $state['plan']);
+			$errors = $this->plans()->validate($plan);
+			$state['plan'] = $plan;
+			$state['planErrors'] = $errors;
+			if($request === '' && !$hadErrors) throw new WireException($this->_('Please describe the requested plan revision.'));
+			if($request === '' && !$errors) {
+				$state['status'] = 'awaiting-approval';
+				$state['error'] = '';
+				$state['revisionRequest'] = '';
+				$this->log($session, $state, $this->_('Plan normalized and ready for review.'));
+				return;
+			}
+			$correction = $errors ? "Correct the current plan validation errors:\n- " . implode("\n- ", $errors) : '';
+			if($request !== '' && $correction !== '') {
+				$revisionRequest = $request . "\n\n" . $correction;
+			} else {
+				$revisionRequest = $request !== '' ? $request : $correction;
+			}
 			$state['phase'] = self::phasePlan;
 			$state['status'] = 'ready';
 			$state['planApproved'] = false;
-			$state['revisionRequest'] = $request;
+			$state['revisionRequest'] = $revisionRequest;
 			$state['engineerSessionId'] = '';
 			$state['engineerRound'] = 0;
 			$state['engineerTokenUsage'] = $this->emptyTokenUsage();
@@ -206,11 +228,18 @@ class AgentToolsSiteBuilder extends AgentToolsHelper {
 		});
 	}
 
-	/** Resume a paused or budget-limited build. @return array<string,mixed> */
+	/** Resume a paused or work-limited build. @return array<string,mixed> */
 	public function resume(string $id): array {
 		return $this->updateLocked($id, function(AgentToolsSiteBuilderSession $session, array &$state): void {
 			if(($state['phase'] ?? '') === self::phaseDone) throw new WireException($this->_('This Site Builder session is already complete.'));
-			$this->resetTerminalEngineerSession($state);
+			$failedPlan = ($state['phase'] ?? '') === self::phasePlan && !empty($state['planErrors']);
+			if($failedPlan) {
+				$state['engineerSessionId'] = '';
+				$state['engineerRound'] = 0;
+				$state['engineerTokenUsage'] = $this->emptyTokenUsage();
+			} else {
+				$this->resetTerminalEngineerSession($state);
+			}
 			$state['consecutiveToolFailures'] = 0;
 			$state['status'] = 'ready';
 			$state['error'] = '';
@@ -219,7 +248,7 @@ class AgentToolsSiteBuilder extends AgentToolsHelper {
 	}
 
 	/**
-	 * Extend a phase round/token budget before resuming.
+	 * Increase a phase round/token allowance before resuming.
 	 *
 	 * @return array<string,mixed>
 	 *
@@ -231,12 +260,15 @@ class AgentToolsSiteBuilder extends AgentToolsHelper {
 			$key = $phase . 'RoundLimit';
 			$tokenKey = $phase . 'TokenLimit';
 			$state['options'][$key] = min(200, (int) $state['options'][$key] + max(1, $rounds));
-			$state['options'][$tokenKey] = min(2000000, (int) $state['options'][$tokenKey] + max(1000, $tokens));
+			$state['options'][$tokenKey] = min(2000000, max(
+				$this->getDefaultTokenLimit($phase),
+				(int) $state['options'][$tokenKey] + max(1000, $tokens)
+			));
 			$this->resetTerminalEngineerSession($state);
 			$state['consecutiveToolFailures'] = 0;
 			$state['status'] = 'ready';
 			$state['error'] = '';
-			$this->log($session, $state, sprintf($this->_('Extended %s phase budget.'), $phase));
+			$this->log($session, $state, sprintf($this->_('Allowed more work for the %s phase.'), $phase));
 		});
 	}
 
@@ -383,18 +415,18 @@ class AgentToolsSiteBuilder extends AgentToolsHelper {
 			}
 			if($errors) {
 				$this->recordPlanFailure($session, $state, $plan, $errors, (string) $result['response']);
-			if($state['planAttempts'] >= 3) {
-				$state['status'] = 'paused';
-				$state['error'] = $this->_('Planning paused after three invalid plans. The user may revise or resume it.');
-				$this->addMessage($session, $state, $state['error'], 'warning');
-				return;
-			}
-			$state['revisionRequest'] = "Correct the previous plan. Validation errors:\n- " . implode("\n- ", $errors);
-			if($plan) $state['plan'] = $plan;
-			$state['engineerSessionId'] = '';
-			$state['engineerRound'] = 0;
-			$state['engineerTokenUsage'] = $this->emptyTokenUsage();
-			$state['status'] = 'continue';
+				$state['revisionRequest'] = "Correct the previous plan. Validation errors:\n- " . implode("\n- ", $errors);
+				if($plan) $state['plan'] = $plan;
+				$state['engineerSessionId'] = '';
+				$state['engineerRound'] = 0;
+				$state['engineerTokenUsage'] = $this->emptyTokenUsage();
+				if($state['planAttempts'] >= 3) {
+					$state['status'] = 'paused';
+					$state['error'] = $this->_('Planning paused after three invalid plans. The user may revise or resume it.');
+					$this->addMessage($session, $state, $state['error'], 'warning');
+					return;
+				}
+				$state['status'] = 'continue';
 			if($this->isBudgetReached($state, self::phasePlan)) return;
 			$this->addMessage($session, $state, $this->_('The plan needs correction; another planning round is ready.'), 'warning');
 			return;
@@ -519,7 +551,7 @@ class AgentToolsSiteBuilder extends AgentToolsHelper {
 			$tools = $this->getToolDefinitions($provider, true);
 			$systemPrompt = $this->getVerifySystemPrompt($state);
 		}
-		return [
+		$result = [
 			'agentId' => (string) $options['agentId'],
 			'provider' => (string) $agent->provider,
 			'model' => (string) $agent->model,
@@ -533,6 +565,13 @@ class AgentToolsSiteBuilder extends AgentToolsHelper {
 			'timeout' => (int) $this->at->get('engineer_request_timeout'),
 			'traceType' => 'site-builder-' . $phase,
 		];
+		if($phase === self::phasePlan && $provider === AgentToolsEngineer::providerAnthropic) {
+			$result['anthropic'] = ['max_tokens' => self::planMaxTokens];
+			if(strpos(strtolower((string) $agent->model), 'claude-sonnet-5') === 0) {
+				$result['anthropic']['thinking'] = ['type' => 'disabled'];
+			}
+		}
+		return $result;
 	}
 
 	/** @return array<int,array<string,mixed>> */
@@ -780,7 +819,7 @@ PROMPT;
 		$tokens = (int) ($state['phaseTokenUsage'][$phase]['total'] ?? 0);
 		if($rounds < $roundLimit && ($tokenLimit < 1 || $tokens < $tokenLimit)) return false;
 		$state['status'] = 'paused';
-		$state['error'] = sprintf($this->_('The %s phase reached its configured budget. Extend the build to continue.'), $phase);
+		$state['error'] = sprintf($this->_('The %s phase reached its configured work limit. Allow more work to continue.'), $phase);
 		return true;
 	}
 
@@ -860,9 +899,9 @@ PROMPT;
 			'planRoundLimit' => 5,
 			'buildRoundLimit' => 50,
 			'verifyRoundLimit' => 15,
-			'planTokenLimit' => 30000,
-			'buildTokenLimit' => 300000,
-			'verifyTokenLimit' => 80000,
+			'planTokenLimit' => self::defaultPlanTokenLimit,
+			'buildTokenLimit' => self::defaultBuildTokenLimit,
+			'verifyTokenLimit' => self::defaultVerifyTokenLimit,
 		];
 		$options = array_merge($defaults, $options);
 		$options['agentId'] = (string) $options['agentId'];
@@ -873,6 +912,13 @@ PROMPT;
 		foreach(['planRoundLimit', 'buildRoundLimit', 'verifyRoundLimit'] as $key) $options[$key] = max(1, min(200, (int) $options[$key]));
 		foreach(['planTokenLimit', 'buildTokenLimit', 'verifyTokenLimit'] as $key) $options[$key] = max(1000, min(2000000, (int) $options[$key]));
 		return array_intersect_key($options, $defaults);
+	}
+
+	protected function getDefaultTokenLimit(string $phase): int {
+		if($phase === self::phasePlan) return self::defaultPlanTokenLimit;
+		if($phase === self::phaseBuild) return self::defaultBuildTokenLimit;
+		if($phase === self::phaseVerify) return self::defaultVerifyTokenLimit;
+		return 0;
 	}
 
 	/** @return array<string,mixed> */

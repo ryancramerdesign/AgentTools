@@ -1,5 +1,41 @@
 # Changelog
 
+## Version 30
+
+### Site Builder
+
+- Added a resumable, plan-driven Site Builder that can create or extend a
+  ProcessWire site from a plain-language description using deterministic,
+  rollback-aware tools.
+- Added planning, review, revision, approval, incremental build, and
+  verification phases with persistent session state, progress logs, pause and
+  resume controls, configurable work limits, and recovery from interrupted or
+  invalid agent responses.
+- Added the Site Builder admin interface with starter ideas, agent and design
+  options, live progress, plan validation details, manifest summaries,
+  rollback controls, and links to the completed site and admin.
+- Added plan normalization and validation for existing fields, templates,
+  pages, files, modules, family settings, file roles, and representative
+  front-end and admin verification routes.
+- Added profile-aware image guidance so generated sites use documented image
+  helpers and placeholders while remaining complete when images or
+  placeholders are unavailable.
+- Added a required confirmation when an approved plan will update existing
+  site content or files, with a reminder to maintain current database and file
+  backups.
+
+### Engineer
+
+- Added file-backed resumable Engineer sessions used by multi-round workflows,
+  including provider continuation state, ownership checks, cleanup, and trace
+  integration.
+
+### Agents
+
+- Made the full agent header icon the drag-and-drop sorting handle.
+
+---
+
 ## Version 29
 
 ### Engineer

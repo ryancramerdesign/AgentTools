@@ -259,6 +259,23 @@ class WireTest_AgentTools extends WireTest {
 		];
 
 		try {
+			$normalizationFixture = [
+				'fields' => [['name' => 'title']],
+				'templates' => [[
+					'name' => 'basic-page',
+					'disposition' => 'reuse',
+					'fields' => [['name' => 'title'], ['name' => 'wire_test_fixture']],
+				]],
+				'pages' => [],
+				'files' => [['path' => 'site/templates/_main.php', 'role' => 'markup-region']],
+			];
+			$normalizedFixture = $plans->normalize($normalizationFixture);
+			$this->check('Site Builder normalization removes unrelated reused-template fields', ['title'], array_column($normalizedFixture['templates'][0]['fields'], 'name'));
+			$this->check('Site Builder normalization assigns known ProcessWire file roles', 'main', $normalizedFixture['files'][0]['role']);
+			$builderDefaults = $this->invokeProtected($builder, 'normalizeOptions', [[]]);
+			$this->check('Site Builder default planning token limit is generous', AgentToolsSiteBuilder::defaultPlanTokenLimit, $builderDefaults['planTokenLimit']);
+			$this->check('Site Builder default build token limit is generous', AgentToolsSiteBuilder::defaultBuildTokenLimit, $builderDefaults['buildTokenLimit']);
+			$this->check('Site Builder default verification token limit is generous', AgentToolsSiteBuilder::defaultVerifyTokenLimit, $builderDefaults['verifyTokenLimit']);
 			$budgetState = [
 				'options' => ['planRoundLimit' => 1, 'planTokenLimit' => 1000],
 				'phaseRounds' => ['plan' => 1],
@@ -422,6 +439,14 @@ class WireTest_AgentTools extends WireTest {
 			$sessionId = (string) $started['id'];
 			$this->check('Site Builder starts in plan phase without provider call', 'plan', $started['phase']);
 			$this->check('Site Builder start reports zero rounds', 0, $started['round']);
+			$planningState = $builder->getState($sessionId);
+			$planningOptions = $this->invokeProtected($builder, 'getAskOptions', [$planningState, AgentToolsSiteBuilder::phasePlan]);
+			if($planningOptions['provider'] === AgentToolsEngineer::providerAnthropic) {
+				$this->check('Site Builder raises Anthropic planning output limit', AgentToolsSiteBuilder::planMaxTokens, $planningOptions['anthropic']['max_tokens'] ?? 0);
+				if(strpos(strtolower((string) $planningOptions['model']), 'claude-sonnet-5') === 0) {
+					$this->check('Site Builder disables Sonnet 5 thinking for structured plans', 'disabled', $planningOptions['anthropic']['thinking']['type'] ?? '');
+				}
+			}
 			$planned = $builder->step($sessionId);
 			$state = $builder->getState($sessionId);
 			$engineerSessionId = (string) ($state['engineerSessionId'] ?? '');
@@ -1485,7 +1510,7 @@ class WireTest_AgentTools extends WireTest {
 			mkdir($staleOrphan);
 			$this->tmpDirs[] = $freshOrphan;
 			$this->tmpDirs[] = $staleOrphan;
-			touch($staleOrphan, time() - 120);
+			touch($staleOrphan, 1);
 			$this->invokeProtected($engineer, 'pruneAskSessions', [60, 1]);
 			$this->check('Engineer cleanup removes oldest state-less session', false, is_dir($staleOrphan));
 			$this->check('Engineer cleanup leaves fresh state-less session', true, is_dir($freshOrphan));

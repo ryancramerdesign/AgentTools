@@ -15,7 +15,7 @@ class ProcessAgentTools extends Process {
 		return [
 			'title' => 'Agent Tools',
 			'summary' => 'Admin interface for AgentTools migrations and AI engineer.',
-			'version' => 14,
+			'version' => 15,
 			'author' => 'Claude (Anthropic), GPT 5.5 Codex and Ryan Cramer',
 			'icon' => 'at',
 			'requires' => 'AgentTools',
@@ -27,6 +27,7 @@ class ProcessAgentTools extends Process {
 			'useNavJSON' => true,
 			'nav' => [
 				['url' => 'engineer/', 'label' => 'Engineer', 'icon' => 'commenting'],
+				['url' => 'site-builder/', 'label' => 'Site Builder', 'icon' => 'magic'],
 				['url' => 'migrations/', 'label' => 'Migrations', 'icon' => 'database'],
 				['url' => 'tasks/', 'label' => 'Tasks', 'icon' => 'tasks'],
 				['url' => 'agents/', 'label' => 'Agents', 'icon' => 'universal-access'],
@@ -79,6 +80,7 @@ class ProcessAgentTools extends Process {
 		parent::init();
 		$this->loadProcessingAssets();
 		$this->addHookAfter('ProcessAgentTools::execute*', function(HookEvent $e) {
+			if($e->method === 'executeSiteBuilderStep') return;
 			$e->return = $this->renderTabs() . $e->return;
 		});
 	}
@@ -87,7 +89,7 @@ class ProcessAgentTools extends Process {
 	 * Get a helper instance
 	 *
 	 * @param string $name Name of helper, i.e. "tasks"
-	 * @return ProcessAgentToolsHelper|ProcessAgentToolsAgents|ProcessAgentToolsMigrations|ProcessAgentToolsTasks
+	 * @return ProcessAgentToolsHelper|ProcessAgentToolsAgents|ProcessAgentToolsJobs|ProcessAgentToolsMigrations|ProcessAgentToolsSiteBuilder|ProcessAgentToolsTasks
 	 * @throws WireException
 	 *
 	 */
@@ -162,6 +164,7 @@ class ProcessAgentTools extends Process {
 			case 'run': return $this->_('Run');
 			case 'run-now': return $this->_('Run Now');
 			case 'save': return $this->_('Save');
+			case 'site-builder': return $this->_('Site Builder');
 			case 'status': return $this->_('Status');
 			case 'task': return $this->_('Task');
 			case 'tasks': return $this->_('Tasks');
@@ -208,6 +211,7 @@ class ProcessAgentTools extends Process {
 			case 'failed': return 'times';
 			case 'import': return 'download';
 			case 'migrations': return 'database';
+			case 'site-builder': return 'magic';
 			case 'tasks': return 'tasks';
 		}
 		return 'question-circle';
@@ -236,6 +240,8 @@ class ProcessAgentTools extends Process {
 				$this->_('Run predefined tasks with the Engineer. Tasks can assist with security, accessibility, monitoring, and more.');
 			case 'jobs': return
 				$this->_('Review queued, running, completed, and failed background jobs.');
+			case 'site-builder': return
+				$this->_('Describe the site you want, review its plan, and let an agent build and verify it one careful step at a time.');
 		}
 		return 'unknown description name';
 	}
@@ -909,6 +915,31 @@ class ProcessAgentTools extends Process {
 	 */
 	public function ___executeReplyJob() {
 		return $this->getHelper('jobs')->executeReplyJob();
+	}
+
+	/******************************************************************
+	 * SITE BUILDER METHODS
+	 *
+	 */
+
+	/**
+	 * Site Builder admin interface
+	 *
+	 * @return string
+	 *
+	 */
+	public function ___executeSiteBuilder(): string {
+		return $this->getHelper('siteBuilder')->executeSiteBuilder();
+	}
+
+	/**
+	 * Execute one Site Builder provider round and return JSON
+	 *
+	 * @return string
+	 *
+	 */
+	public function ___executeSiteBuilderStep(): string {
+		return $this->getHelper('siteBuilder')->executeSiteBuilderStep();
 	}
 
 
