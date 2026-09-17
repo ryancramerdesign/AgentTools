@@ -2013,6 +2013,8 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		$evalDesc =
 			"Evaluate PHP code with full ProcessWire API access. Use echo to output results. " .
 			"Available variables: $apiVars. Do not include an opening <?php tag. " .
+			"When inspecting ProcessWire objects, output only selected scalar properties such as IDs, names, titles, or counts; " .
+			"never pass Wire, Page, or PageArray objects to var_dump(), var_export(), or print_r(). " .
 			$includeDesc .
 			"Shell/process execution functions, PHP backtick shell execution, " .
 			"and function/class/interface/trait/enum declarations are not allowed.";
@@ -2928,6 +2930,8 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		extract($this->wire()->fuel->getArray());
 		$validationError = $this->validateEvalPhp($code, $dryRun);
 		if($validationError !== '') return "ERROR: $validationError";
+		$inspectionError = $this->validateEngineerEvalPhpInspection($code);
+		if($inspectionError !== '') return "ERROR: $inspectionError";
 		$errors = [];
 		set_error_handler(function($severity, $message, $file, $line) use(&$errors) {
 			$label = match($severity) {
@@ -2970,6 +2974,32 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			$output = substr($output, 0, self::maxOutputLength) . "\n[output truncated]";
 		}
 		return $output;
+	}
+
+	/**
+	 * Block inspection helpers that can recursively traverse ProcessWire object graphs.
+	 *
+	 * This applies only to the Engineer tool runtime, not direct CLI eval usage.
+	 */
+	protected function validateEngineerEvalPhpInspection(string $code): string {
+		$blocked = ['print_r', 'var_dump', 'var_export'];
+		$tokens = token_get_all('<?php namespace ProcessWire; ' . $code);
+		foreach($tokens as $n => $token) {
+			if(!is_array($token)) continue;
+			$name = $this->getEvalPhpTokenName($token);
+			if($name === '') continue;
+			if(in_array($name, $blocked, true) && $this->isEvalPhpFunctionCall($tokens, $n)) {
+				return "Inspection function $name() is not allowed in Engineer eval_php. Output selected scalar properties or JSON-encode a small scalar array instead.";
+			}
+			if(($name === 'call_user_func' || $name === 'call_user_func_array') && $this->isEvalPhpFunctionCall($tokens, $n)) {
+				$called = strtolower(ltrim($this->getEvalPhpFirstCallArgumentString($tokens, $n), '\\'));
+				$called = basename(str_replace('\\', '/', $called));
+				if(in_array($called, $blocked, true)) {
+					return "Inspection function $called() is not allowed in Engineer eval_php. Output selected scalar properties or JSON-encode a small scalar array instead.";
+				}
+			}
+		}
+		return '';
 	}
 
 	/**

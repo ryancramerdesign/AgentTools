@@ -69,6 +69,20 @@ class ProcessAgentToolsSiteBuilder extends ProcessAgentToolsHelper {
 	public function executeSiteBuilderStep(): string {
 		$this->wire()->config->ajax = true;
 		header('Content-Type: application/json; charset=utf-8');
+		$bufferLevel = ob_get_level();
+		ob_start();
+		$completed = false;
+		$memoryReserve = str_repeat('x', 262144);
+		register_shutdown_function(function() use(&$completed, &$memoryReserve, $bufferLevel): void {
+			if($completed) return;
+			$memoryReserve = '';
+			$error = error_get_last();
+			if(!$error || !in_array((int) $error['type'], [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR], true)) return;
+			while(ob_get_level() > $bufferLevel) ob_end_clean();
+			http_response_code(500);
+			header('Content-Type: application/json; charset=utf-8');
+			echo '{"ok":false,"error":"The Site Builder step was interrupted by a server error."}';
+		});
 		$data = ['ok' => false, 'error' => $this->_('Unable to run the Site Builder step.')];
 		try {
 			$this->wire()->session->CSRF()->validate();
@@ -86,6 +100,9 @@ class ProcessAgentToolsSiteBuilder extends ProcessAgentToolsHelper {
 			$data['error'] = $e->getMessage();
 		}
 		$json = json_encode($data, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
+		$completed = true;
+		$memoryReserve = '';
+		while(ob_get_level() > $bufferLevel) ob_end_clean();
 		return $json === false ? '{"ok":false,"error":"Unable to encode Site Builder response."}' : $json;
 	}
 
@@ -106,7 +123,9 @@ class ProcessAgentToolsSiteBuilder extends ProcessAgentToolsHelper {
 			'submit_site_builder_pause' => 'pause',
 			'submit_site_builder_resume' => 'resume',
 			'submit_site_builder_extend' => 'extend',
+			'submit_site_builder_finish_refinement' => 'finish-refinement',
 			'submit_site_builder_start_over' => 'start-over',
+			'submit_site_builder_refine' => 'refine',
 		] as $name => $value) {
 			if($input->post($name) !== null) {
 				$action = $value;
@@ -143,12 +162,19 @@ class ProcessAgentToolsSiteBuilder extends ProcessAgentToolsHelper {
 				} else if($action === 'resume') {
 					$builder->resume($id);
 				} else if($action === 'extend') {
-					$builder->extend($id, 10, 100000);
+					$builder->extend($id, 10, $this->getWorkExtensionTokens($builder->getState($id), 10));
+				} else if($action === 'finish-refinement') {
+					$result = $builder->finishRefinement($id);
+					if(($result['status'] ?? '') === 'busy') {
+						$this->warning($this->_('The current round is still finishing. Pause the refinement before finishing it.'));
+					}
 				} else if($action === 'start-over') {
 					if(!$input->post('confirmStartOver')) throw new WireException($this->_('Please confirm that you want to undo this build.'));
 					$result = $builder->startOver($id);
 					if(empty($result['rollback']['ok'])) throw new WireException((string) ($result['error'] ?? $this->_('The build could not be fully undone.')));
 					$this->message($this->_('Site Builder changes were rolled back.'));
+				} else if($action === 'refine') {
+					$builder->refine($id, trim((string) $input->post('refinement')));
 				}
 			}
 			$this->wire()->session->location($this->url('site-builder/?id=' . rawurlencode($id)));
@@ -156,6 +182,21 @@ class ProcessAgentToolsSiteBuilder extends ProcessAgentToolsHelper {
 			$this->error($e->getMessage());
 		}
 		return $id;
+	}
+
+	/**
+	 * Size a work extension to cover approximately the requested number of recent rounds.
+	 *
+	 * @param array<string,mixed> $state
+	 */
+	protected function getWorkExtensionTokens(array $state, int $rounds): int {
+		$phase = (string) ($state['phase'] ?? '');
+		$usedRounds = (int) ($state['phaseRounds'][$phase] ?? 0);
+		$usedTokens = (int) ($state['phaseTokenUsage'][$phase]['total'] ?? 0);
+		if($usedRounds < 1 || $usedTokens < 1) return 100000;
+		$estimated = (int) ceil(($usedTokens / $usedRounds) * max(1, $rounds));
+		$rounded = (int) (ceil($estimated / 50000) * 50000);
+		return max(100000, min(500000, $rounded));
 	}
 
 	/**
@@ -404,6 +445,7 @@ class ProcessAgentToolsSiteBuilder extends ProcessAgentToolsHelper {
 			'data-text-retrying' => $this->_('Connection interrupted. Retrying…'),
 			'data-text-retry' => $this->_('Retrying…'),
 			'data-text-stopped' => $this->_('The build stopped because the request could not be completed.'),
+			'data-text-retry-stopped' => $this->_('The server interrupted several attempts. Refresh this page to try recovering again.'),
 			'data-text-updating' => $this->_('Step complete. Updating the screen…'),
 			'data-text-busy' => $this->_('Another step is still finishing…'),
 			'data-text-continuing' => $this->_('Step complete. Continuing…'),
@@ -412,6 +454,11 @@ class ProcessAgentToolsSiteBuilder extends ProcessAgentToolsHelper {
 			'data-label-phase' => $this->_('Phase'),
 			'data-label-round' => $this->_('Round'),
 			'data-label-tokens' => $this->_('tokens'),
+			'data-measure-modal' => $this->_('modal'),
+			'data-measure-card' => $this->_('card'),
+			'data-measure-sidebar' => $this->_('sidebar'),
+			'data-measure-hero' => $this->_('hero'),
+			'data-measure-field-row' => $this->_('field row'),
 		];
 		$attr = '';
 		foreach($attrs as $name => $value) $attr .= ' ' . $name . '="' . htmlspecialchars($value, ENT_QUOTES, 'UTF-8') . '"';
@@ -420,10 +467,9 @@ class ProcessAgentToolsSiteBuilder extends ProcessAgentToolsHelper {
 		$f->description = $this->_('Please be patient, this may take awhile.');
 		$f->label = $this->_('Building and verifying your site');
 		$f->icon = 'magic';
-		$f->value = '<div' . $attr . '>' .
+		$f->value = '<div class="at-no-measure"' . $attr . '>' .
 			$this->renderStateLine($state) .
 			'<p id="at-site-builder-current" class="detail" aria-live="polite">' .
-				($active ? '<i class="fa fa-spinner fa-spin fa-fw" aria-hidden="true"></i> ' : '') .
 				'<span>' . $this->wire()->sanitizer->entities($currentText) . '</span>' .
 				($active ? ' <span id="at-site-builder-elapsed" aria-hidden="true"></span>' : '') .
 			'</p>' .
@@ -448,6 +494,14 @@ class ProcessAgentToolsSiteBuilder extends ProcessAgentToolsHelper {
 			$f->val($allowMore ? $this->_('Allow more work and resume') : $this->_('Resume'));
 			$f->showInHeader(true);
 			$form->add($f);
+			if(($state['phase'] ?? '') === AgentToolsSiteBuilder::phaseRefine) {
+				$f = $form->InputfieldSubmit;
+				$f->attr('name', 'submit_site_builder_finish_refinement');
+				$f->icon = 'check';
+				$f->val($this->_('Finish refinement and verify'));
+				$f->setSecondary();
+				$form->add($f);
+			}
 		} else {
 			$f = $form->InputfieldSubmit;
 			$f->attr('name', 'submit_site_builder_pause');
@@ -468,7 +522,7 @@ class ProcessAgentToolsSiteBuilder extends ProcessAgentToolsHelper {
 	 */
 	protected function isPhaseWorkLimitReached(array $state): bool {
 		$phase = (string) ($state['phase'] ?? '');
-		if(!in_array($phase, [AgentToolsSiteBuilder::phasePlan, AgentToolsSiteBuilder::phaseBuild, AgentToolsSiteBuilder::phaseVerify], true)) return false;
+		if(!in_array($phase, [AgentToolsSiteBuilder::phasePlan, AgentToolsSiteBuilder::phaseBuild, AgentToolsSiteBuilder::phaseRefine, AgentToolsSiteBuilder::phaseVerify], true)) return false;
 		$options = (array) ($state['options'] ?? []);
 		$roundLimit = (int) ($options[$phase . 'RoundLimit'] ?? 0);
 		$tokenLimit = (int) ($options[$phase . 'TokenLimit'] ?? 0);
@@ -489,19 +543,36 @@ class ProcessAgentToolsSiteBuilder extends ProcessAgentToolsHelper {
 		$form = $this->newForm();
 		$manifest = $this->at->siteBuilder()->getManifest($id);
 		$f = $form->InputfieldMarkup;
-		$f->label = $this->_('Site build complete');
+		$f->label = ($state['verificationPurpose'] ?? 'build') === 'refine' ? $this->_('Site refinement complete') : $this->_('Site build complete');
 		$f->icon = 'check';
 		$f->value = $this->renderStateLine($state) . $this->renderManifestSummary($manifest) .
 			'<p class="uk-margin-top">' .
-			'<a class="uk-button uk-button-primary" target="_blank" rel="noopener" href="' . $this->wire()->pages->get(1)->httpUrl() . '">' . wireIconMarkup('external-link') . ' ' . $this->_('View site') . '</a> ' .
-			'<a class="uk-button uk-button-default" target="_blank" rel="noopener" href="' . $this->wire()->pages->get((int) $this->wire()->config->adminRootPageID)->httpUrl() . '">' . wireIconMarkup('cog') . ' ' . $this->_('Open admin') . '</a>' .
+			'<a class="uk-button uk-button-primary" target="_blank" rel="noopener" href="' . $this->wire()->config->urls->root . '">' . wireIconMarkup('external-link') . ' ' . $this->_('View site') . '</a> ' .
+			'<a class="uk-button uk-button-default" target="_blank" rel="noopener" href="' . $this->wire()->config->urls->admin . '">' . wireIconMarkup('cog') . ' ' . $this->_('Open admin') . '</a>' .
 			'</p>';
+		$form->add($f);
+
+		$f = $form->InputfieldTextarea;
+		$f->attr('name', 'refinement');
+		$f->label = $this->_('Refine this site');
+		$f->icon = 'magic';
+		$f->description = $this->_('Describe a small correction, content improvement, or sample-page addition. Refinement uses the approved site plan and runs verification again.');
+		$f->notes = $this->_('Major new features or schema changes should begin with a new site description.');
+		$f->attr('rows', 4);
+		$form->add($f);
+
+		$f = $form->InputfieldSubmit;
+		$f->attr('name', 'submit_site_builder_refine');
+		$f->icon = 'magic';
+		$f->val($this->_('Refine site'));
+		$f->appendMarkup .= '<br><br>';
 		$form->add($f);
 
 		$f = $form->InputfieldMarkup;
 		$f->label = $this->_('Progress log');
 		$f->icon = 'list';
 		$f->collapsed = Inputfield::collapsedYes;
+		$f->themeOffset = 1;
 		$f->value = '<ol class="at-site-builder-log">' . $this->renderLogItems($this->at->siteBuilder()->getLog($id)) . '</ol>';
 		$form->add($f);
 
@@ -529,7 +600,7 @@ class ProcessAgentToolsSiteBuilder extends ProcessAgentToolsHelper {
 		$new->href = $this->url('site-builder/?new=1');
 		$new->icon = 'plus';
 		$new->val($this->_('Build another site'));
-		$new->showInHeader(true);
+		$new->setSecondary();
 		$form->add($new);
 		return $form->render();
 	}
@@ -661,6 +732,7 @@ class ProcessAgentToolsSiteBuilder extends ProcessAgentToolsHelper {
 
 	protected function loadAssets(): void {
 		$url = $this->wire()->config->urls($this->pat);
+		$this->wire()->config->scripts->add($url . 'measure-activity.js');
 		$this->wire()->config->scripts->add($url . 'site-builder.js');
 		$this->wire()->config->styles->add($url . 'site-builder.css');
 	}

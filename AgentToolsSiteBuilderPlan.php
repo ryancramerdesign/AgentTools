@@ -105,13 +105,22 @@ class AgentToolsSiteBuilderPlan extends Wire {
 			'site/ready.php' => 'ready',
 			'site/init.php' => 'siteInit',
 		];
+		$pageClassTemplates = $this->getPageClassTemplateMap($plan);
 		foreach((array) ($plan['files'] ?? []) as $index => $file) {
 			if(!is_array($file)) continue;
 			$path = str_replace('\\', '/', (string) ($file['path'] ?? ''));
 			if(isset($knownFileRoles[$path])) {
 				$file['role'] = $knownFileRoles[$path];
-				$plan['files'][$index] = $file;
 			}
+			if(($file['role'] ?? '') === 'pageClass' && empty($file['template'])) {
+				$className = basename($path, '.php');
+				$matches = (array) ($pageClassTemplates[$className] ?? []);
+				if(count($matches) === 1) {
+					$file['template'] = reset($matches);
+					$warnings[] = "Set template {$file['template']} on file $path.";
+				}
+			}
+			$plan['files'][$index] = $file;
 		}
 		$verification = is_array($plan['verification'] ?? null) ? $plan['verification'] : [];
 		$routes = is_array($verification['routes'] ?? null) ? $verification['routes'] : [];
@@ -162,7 +171,7 @@ class AgentToolsSiteBuilderPlan extends Wire {
 		return <<<'PROMPT'
 		You are the planning phase of ProcessWire AgentTools Site Builder. Produce exactly one JSON object and no Markdown or commentary. The object must use schemaVersion 1 and contain: title, summary, assumptions[], features[], design{}, fields[], templates[], pages[], files[], modules[], and openQuestions[]. It may also contain verification{}.
 
-Each field has name, disposition (create/reuse/update), type, label, summary, and settings. Each template has name, disposition, label, summary, dataOnly, singleton, fields[], allowedParents, allowedChildren, and settings. Each template field has name, required, columnWidth, and settings. Each page has key, disposition, parent (page key or null), name, template, status, values, and optional contentBrief. Each file has path, role, disposition, summary, optional template, and optional methods. Modules are explicit objects with name, source, and disposition. Verification contains routes[], adminPages[], and checks[].
+Each field has name, disposition (create/reuse/update), type, label, summary, and settings. Each template has name, disposition, label, summary, dataOnly, singleton, fields[], allowedParents, allowedChildren, and settings. Each template field has name, required, columnWidth, and settings. Each page has key, disposition, parent (page key or null), name, template, status, values, and optional contentBrief. Each file has path, role, disposition, summary, optional template, and optional methods. File roles template and pageClass both require template. Modules are explicit objects with name, source, and disposition. Verification contains routes[], adminPages[], and checks[].
 
 	Use the current-site snapshot supplied with the request. Anything present in the snapshot must use reuse or update; use create only for new resources. For reused fields, copy the type and relevant settings exactly from the snapshot. The snapshot's fields list excludes system fields. Its coreFields list contains all existing ProcessWire system fields marked system=true. A system field may be added to a planned template with disposition reuse, its exact type, and its relevant snapshot settings; it must never use create or update.
 
@@ -194,6 +203,7 @@ Hooks shared by front end and admin belong in site/ready.php or site/init.php; f
 	  "pages": [{"key":"home","disposition":"update","parent":null,"name":"home","template":"home","status":"published","values":{"title":"Field Notes"},"contentBrief":{"body":"A concise introduction to the publication."}}],
 	  "files": [
 	    {"path":"site/templates/home.php","role":"template","disposition":"update","template":"home","summary":"Render the homepage."},
+	    {"path":"site/classes/HomePage.php","role":"pageClass","disposition":"create","template":"home","summary":"Provide homepage-specific page methods."},
 	    {"path":"site/templates/styles/main.css","role":"stylesheet","disposition":"create","summary":"Site layout and design tokens."}
 	  ],
 	  "modules": [{"name":"ProcessPageEdit","source":"core","disposition":"reuse"}],
@@ -540,7 +550,16 @@ PROMPT;
 			$disposition = $this->validateDisposition($item, "file $path", $errors, ['create', 'update']);
 			if(($role === 'template' || $role === 'pageClass')) {
 				$template = (string) ($item['template'] ?? '');
-				if(!isset($templates[$template])) $errors[] = "File $path role $role references unknown template $template.";
+				if($template === '') {
+					$message = "File $path role $role requires template.";
+					if($role === 'pageClass') {
+						$names = $this->getPageClassTemplateNames($templates);
+						if($names) $message .= ' Considered templates: ' . implode(', ', $names) . '.';
+					}
+					$errors[] = $message;
+				} else if(!isset($templates[$template]) && !$this->wire()->templates->get($template)) {
+					$errors[] = "File $path role $role references unknown template $template.";
+				}
 			}
 			$file = $this->wire()->config->paths->root . $path;
 			if($disposition === 'create' && is_file($file)) $errors[] = "File $path is marked create but already exists.";
@@ -720,6 +739,9 @@ PROMPT;
 			'FieldtypeDatetime' => [
 				'outputformat' => 'dateOutputFormat',
 			],
+			'FieldtypePage' => [
+				'inputfieldclass' => 'inputfield',
+			],
 		];
 		$lower = strtolower($property);
 		$replacement = (string) ($aliases[$typeName][$lower] ?? '');
@@ -753,6 +775,30 @@ PROMPT;
 		$name = trim($name);
 		if($name === '') return '';
 		return stripos($name, 'Fieldtype') === 0 ? $name : 'Fieldtype' . ucfirst($name);
+	}
+
+	/** @return array<string,string[]> Class basename to matching template names */
+	protected function getPageClassTemplateMap(array $plan): array {
+		$names = [];
+		foreach((array) ($plan['templates'] ?? []) as $template) {
+			if(is_array($template) && !empty($template['name'])) $names[(string) $template['name']] = true;
+		}
+		foreach($this->wire()->templates as $template) $names[(string) $template->name] = true;
+		$map = [];
+		foreach(array_keys($names) as $name) {
+			$className = str_replace(' ', '', ucwords(str_replace(['-', '_', '.'], ' ', $name))) . 'Page';
+			$map[$className][] = $name;
+		}
+		return $map;
+	}
+
+	/** @param array<string,array<string,mixed>> $planned @return string[] */
+	protected function getPageClassTemplateNames(array $planned = []): array {
+		$names = array_keys($planned);
+		foreach($this->wire()->templates as $template) $names[] = (string) $template->name;
+		$names = array_values(array_unique($names));
+		sort($names, SORT_STRING);
+		return $names;
 	}
 
 	protected function isAllowedFilePath(string $path): bool {

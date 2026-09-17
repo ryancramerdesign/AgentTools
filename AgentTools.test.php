@@ -219,6 +219,7 @@ class WireTest_AgentTools extends WireTest {
 		$pageName = $templateName;
 		$filePath = 'site/templates/' . $templateName . '.php';
 		$file = $this->wire()->config->paths->root . $filePath;
+		$sampleName = '';
 		$sessionId = '';
 		$engineerSessionId = '';
 		$buildPromptSessionId = '';
@@ -306,21 +307,28 @@ class WireTest_AgentTools extends WireTest {
 					'fields' => [['name' => 'title'], ['name' => 'wire_test_fixture']],
 				]],
 				'pages' => [],
-				'files' => [['path' => 'site/templates/_main.php', 'role' => 'markup-region']],
+				'files' => [
+					['path' => 'site/templates/_main.php', 'role' => 'markup-region'],
+					['path' => 'site/classes/BasicPagePage.php', 'role' => 'pageClass'],
+				],
 			];
 			$normalizationWarnings = [];
 			$normalizedFixture = $plans->normalize($normalizationFixture, $normalizationWarnings);
 			$this->check('Site Builder normalization removes unrelated reused-template fields', ['title'], array_column($normalizedFixture['templates'][0]['fields'], 'name'));
 			$this->check('Site Builder normalization assigns known ProcessWire file roles', 'main', $normalizedFixture['files'][0]['role']);
+			$this->check('Site Builder normalization derives Page-class template', 'basic-page', $normalizedFixture['files'][1]['template'] ?? '');
+			$this->check('Site Builder reports derived Page-class template', true, in_array('Set template basic-page on file site/classes/BasicPagePage.php.', $normalizationWarnings, true));
 			$this->check('Site Builder normalization drops undocumented field settings', false, isset($normalizedFixture['fields'][1]['settings']['inputfieldClass']));
 			$this->check('Site Builder normalization reports dropped field settings', true, in_array('Dropped unknown setting inputfieldClass from field project_year (FieldtypeInteger).', $normalizationWarnings, true));
 			$repairWarnings = [];
 			$repairFixture = $plans->normalize(['fields' => [
 				['name' => 'author', 'type' => 'FieldtypeText', 'settings' => ['maxLength' => 120]],
 				['name' => 'published_date', 'type' => 'FieldtypeDatetime', 'settings' => ['outputFormat' => 'Y-m-d']],
+				['name' => 'related_page', 'type' => 'FieldtypePage', 'settings' => ['inputfieldClass' => 'InputfieldAsmSelect']],
 			]], $repairWarnings);
 			$this->check('Site Builder repairs case-only field setting names', 120, $repairFixture['fields'][0]['settings']['maxlength'] ?? 0);
 			$this->check('Site Builder repairs known Fieldtype setting aliases', 'Y-m-d', $repairFixture['fields'][1]['settings']['dateOutputFormat'] ?? '');
+			$this->check('Site Builder repairs Page inputfieldClass alias', 'InputfieldAsmSelect', $repairFixture['fields'][2]['settings']['inputfield'] ?? '');
 			$this->check('Site Builder reports repaired case-only setting names', true, in_array('Renamed setting maxLength to maxlength on field author (FieldtypeText).', $repairWarnings, true));
 			$this->check('Site Builder reports repaired Fieldtype setting aliases', true, in_array('Renamed setting outputFormat to dateOutputFormat on field published_date (FieldtypeDatetime).', $repairWarnings, true));
 			$datetimeWarnings = [];
@@ -340,11 +348,13 @@ class WireTest_AgentTools extends WireTest {
 			$builderDefaults = $this->invokeProtected($builder, 'normalizeOptions', [[]]);
 			$this->check('Site Builder default planning token limit is generous', AgentToolsSiteBuilder::defaultPlanTokenLimit, $builderDefaults['planTokenLimit']);
 			$this->check('Site Builder default build token limit is generous', AgentToolsSiteBuilder::defaultBuildTokenLimit, $builderDefaults['buildTokenLimit']);
+			$this->check('Site Builder refinement has a separate token limit', AgentToolsSiteBuilder::defaultRefineTokenLimit, $builderDefaults['refineTokenLimit']);
 			$this->check('Site Builder default verification token limit is generous', AgentToolsSiteBuilder::defaultVerifyTokenLimit, $builderDefaults['verifyTokenLimit']);
 			$planningPrompt = $plans->getSystemPrompt();
 			$this->check('Site Builder planner warns about native field names', true, strpos($planningPrompt, 'New field names must not use native Page properties') !== false);
 			$this->check('Site Builder planner uses ProcessWire Datetime HTML types', true, strpos($planningPrompt, 'date, time, or datetime (not datetime-local)') !== false);
 			$this->check('Site Builder planner requires values or briefs for useful page fields', true, strpos($planningPrompt, 'must have either a value or a contentBrief entry') !== false);
+			$this->check('Site Builder planner requires template on Page-class files', true, strpos($planningPrompt, 'File roles template and pageClass both require template') !== false);
 			$this->check('Engineer retries provider rate limits', true, $this->invokeProtected($at->engineer(), 'isRetryableHttpCode', [429]));
 			$this->check('Engineer retries provider server errors', true, $this->invokeProtected($at->engineer(), 'isRetryableHttpCode', [500]));
 			$this->check('Engineer does not retry ordinary client errors', false, $this->invokeProtected($at->engineer(), 'isRetryableHttpCode', [400]));
@@ -357,6 +367,20 @@ class WireTest_AgentTools extends WireTest {
 			$this->check('Site Builder enforces planning budget', true, $this->invokeProtected($builder, 'isBudgetReached', $budgetArgs));
 			$this->check('Site Builder planning budget pauses the session', 'paused', $budgetState['status']);
 			$this->check('Site Builder accepts deterministic fixture plan', [], $builder->validatePlan($plan));
+			$missingFileTemplatePlan = $plan;
+			$missingFileTemplatePlan['files'][] = [
+				'path' => 'site/classes/UnmatchedPage.php', 'role' => 'pageClass',
+				'disposition' => 'create', 'summary' => 'Missing template test.',
+			];
+			$missingFileTemplateErrors = $builder->validatePlan($missingFileTemplatePlan);
+			$this->check('Site Builder distinguishes missing Page-class template', true, strpos(implode("\n", $missingFileTemplateErrors), 'File site/classes/UnmatchedPage.php role pageClass requires template.') !== false);
+			$unknownFileTemplatePlan = $plan;
+			$unknownFileTemplatePlan['files'][] = [
+				'path' => 'site/classes/UnknownPage.php', 'role' => 'pageClass',
+				'disposition' => 'create', 'template' => 'not-a-template', 'summary' => 'Unknown template test.',
+			];
+			$unknownFileTemplateErrors = $builder->validatePlan($unknownFileTemplatePlan);
+			$this->check('Site Builder distinguishes unknown Page-class template', true, in_array('File site/classes/UnknownPage.php role pageClass references unknown template not-a-template.', $unknownFileTemplateErrors, true));
 			$reservedPlan = $plan;
 			$reservedPlan['fields'][] = [
 				'name' => 'published', 'disposition' => 'create', 'type' => 'FieldtypeDatetime',
@@ -594,6 +618,7 @@ class WireTest_AgentTools extends WireTest {
 			$this->check('Site Builder enables stable initial-message caching for Anthropic', $buildOptions['provider'] === AgentToolsEngineer::providerAnthropic, !empty($buildOptions['cacheInitialMessage']));
 			$buildSystemPrompt = $this->invokeProtected($builder, 'getBuildSystemPrompt', [$buildState]);
 			$this->check('Site Builder tells agents not to repeat complete resources', true, strpos($buildSystemPrompt, 'A manifest item with status complete is already done') !== false);
+			$this->check('Site Builder tells agents not to repeat profile region content', true, strpos($buildSystemPrompt, 'do not repeat the page title, summary, or other region content') !== false);
 			$completedFileInstructions = $this->invokeProtected($builder, 'getCompletedFileInstructions', [[
 				'files' => [['key' => 'site/templates/home.php', 'status' => 'complete', 'bytes' => 321]],
 			]]);
@@ -770,9 +795,68 @@ class WireTest_AgentTools extends WireTest {
 			$this->check('Site Builder no-op tells agent not to rewrite the file', true, strpos((string) ($unchangedResult['message'] ?? ''), 'do not rewrite it unless verification reports a problem') !== false);
 			$this->check('Site Builder identical file leaves verification current', 2, count($builder->getManifest($sessionId)['verification']));
 
+			$refineStore = new AgentToolsSiteBuilderSession($at, $sessionId);
+			$this->wire($refineStore);
+			$this->check('Site Builder refinement test obtains lock', true, $refineStore->lock(360));
+			$refineState = $refineStore->load();
+			$refineState['phase'] = AgentToolsSiteBuilder::phaseDone;
+			$refineState['status'] = 'done';
+			$refineState['finished'] = time();
+			$refineStore->save($refineState);
+			$refineStore->unlock();
+			$refining = $builder->refine($sessionId, 'Improve the fixture and add one sample page.');
+			$this->check('Site Builder starts fresh refinement phase', AgentToolsSiteBuilder::phaseRefine, $refining['phase']);
+			$this->check('Site Builder refinement clears stale verification', 0, count($builder->getManifest($sessionId)['verification']));
+			$refinementState = $builder->getState($sessionId);
+			$refinementOptions = $this->invokeProtected($builder, 'getAskOptions', [$refinementState, AgentToolsSiteBuilder::phaseRefine]);
+			$refinementToolNames = [];
+			foreach($refinementOptions['tools'] as $tool) {
+				$refinementToolNames[] = $refinementOptions['provider'] === AgentToolsEngineer::providerAnthropic ? ($tool['name'] ?? '') : ($tool['function']['name'] ?? '');
+			}
+			$this->check('Site Builder refinement exposes dedicated page tool', true, in_array('refine_pages', $refinementToolNames, true));
+			$this->check('Site Builder refinement excludes schema creation tools', false, in_array('create_fields', $refinementToolNames, true));
+			$this->check('Site Builder refinement warns against dumping ProcessWire objects', true, strpos((string) $refinementOptions['systemPrompt'], 'never pass Wire, Page, or PageArray objects') !== false);
+			$sampleKey = 'sample-' . $suffix;
+			$sampleName = 'sample-' . $suffix;
+			$refinedPages = $builder->executeBuildTool($sessionId, 'refine_pages', ['pages' => [
+				['key' => 'fixture', 'values' => [$fieldName => 'Refined builder value']],
+				[
+					'key' => $sampleKey,
+					'parent' => 'home',
+					'name' => $sampleName,
+					'template' => $templateName,
+					'status' => 'unpublished',
+					'values' => ['title' => 'Refinement sample', $fieldName => 'Sample value'],
+				],
+			]]);
+			$this->check('Site Builder refinement updates approved page content', 'refined', $refinedPages['pages']['fixture'] ?? '');
+			$this->check('Site Builder refinement adds sample page', 'created', $refinedPages['pages'][$sampleKey] ?? '');
+			$createdFixture = $this->wire()->pages->get((int) $createdFixture->id);
+			$this->check('Site Builder refined value is saved', 'Refined builder value', (string) $createdFixture->get($fieldName));
+			$samplePage = $this->wire()->pages->get("parent=1, name=$sampleName, include=all");
+			$this->check('Site Builder sample page exists', true, $samplePage && $samplePage->id > 0);
+			$refinedFile = $builder->executeBuildTool($sessionId, 'write_file', [
+				'path' => $filePath,
+				'content' => '<?php namespace ProcessWire; ?><h1><?= $page->title ?></h1><p>Refined</p>',
+			]);
+			$this->check('Site Builder refinement rewrites approved file', 'rewritten', $refinedFile['result'] ?? '');
+			$refinedManifest = $builder->getManifest($sessionId);
+			$refinedFileEntry = array_values(array_filter($refinedManifest['files'], function($entry) use($filePath) { return ($entry['key'] ?? '') === $filePath; }))[0] ?? [];
+			$refinedPageEntry = array_values(array_filter($refinedManifest['pages'], function($entry) use($sampleKey) { return ($entry['key'] ?? '') === $sampleKey; }))[0] ?? [];
+			$this->check('Site Builder attributes refined file in manifest', [1], $refinedFileEntry['refinements'] ?? []);
+			$this->check('Site Builder attributes sample page in manifest', [1], $refinedPageEntry['refinements'] ?? []);
+			$refinementResources = $refinedManifest['refinements'][0]['resources'] ?? [];
+			$this->check('Site Builder refinement record lists refined file', true, in_array($filePath, $refinementResources['files'] ?? [], true));
+			$this->check('Site Builder refinement record lists sample page', true, in_array($sampleKey, $refinementResources['pages'] ?? [], true));
+			$finishingRefinement = $builder->finishRefinement($sessionId);
+			$this->check('Site Builder can finish refinement without more agent work', AgentToolsSiteBuilder::phaseVerify, $finishingRefinement['phase']);
+			$verificationState = $builder->getState($sessionId);
+			$this->check('Site Builder finishing refinement starts fresh verification', 0, $verificationState['phaseRounds']['verify']);
+
 			$rollback = $builder->startOver($sessionId);
 			$this->check('Site Builder Start over succeeds', true, $rollback['rollback']['ok']);
 			$this->check('Site Builder Start over removes page', 0, (int) $this->wire()->pages->get("parent=1, name=$pageName, include=all")->id);
+			$this->check('Site Builder Start over removes refinement page', 0, (int) $this->wire()->pages->get("parent=1, name=$sampleName, include=all")->id);
 			$removedTemplate = $this->wire()->templates->get($templateName);
 			$removedField = $this->wire()->fields->get($fieldName);
 			$this->check('Site Builder Start over removes template', 0, $removedTemplate ? (int) $removedTemplate->id : 0);
@@ -794,6 +878,10 @@ class WireTest_AgentTools extends WireTest {
 			if($buildRunSessionId !== '') $at->engineer()->removeAskSession($buildRunSessionId);
 			if($restartedBuildSessionId !== '') $at->engineer()->removeAskSession($restartedBuildSessionId);
 			if($uninstalledFieldtypeSessionId !== '') $this->wire()->files->rmdir($at->getFilesPath('builds') . $uninstalledFieldtypeSessionId, true);
+			if($sampleName !== '') {
+				$sample = $this->wire()->pages->get("parent=1, name=$sampleName, include=all");
+				if($sample && $sample->id) $this->wire()->pages->delete($sample, true);
+			}
 			$page = $this->wire()->pages->get("parent=1, name=$pageName, include=all");
 			if($page && $page->id) $this->wire()->pages->delete($page, true);
 			$template = $this->wire()->templates->get($templateName);
@@ -915,6 +1003,10 @@ class WireTest_AgentTools extends WireTest {
 		$this->check('Read-only validation blocks array callback writes', 'Read-only mode blocked mutating eval_php callback: save().', $engineer->validateEvalPhp('call_user_func([$page, "save"]);', true, 'Read-only mode'));
 		$this->check('Read-only validation blocks dynamic method calls', 'Read-only mode blocked dynamic eval_php method call.', $engineer->validateEvalPhp('$method = "save"; $page->$method();', true, 'Read-only mode'));
 		$this->check('Normal eval validation allows ProcessWire save() syntax', '', $engineer->validateEvalPhp('$page->save();'));
+		$unsafeInspection = $engineer->executeLocalTool('eval_php', ['code' => 'echo var_export($page, true);']);
+		$this->check('Engineer eval blocks recursive object inspection helpers', true, strpos($unsafeInspection, 'Inspection function var_export() is not allowed') !== false);
+		$safeInspection = $engineer->executeLocalTool('eval_php', ['code' => 'echo json_encode(["id" => $page->id]);']);
+		$this->check('Engineer eval allows bounded scalar JSON inspection', json_encode(['id' => (int) $this->wire()->page->id]), $safeInspection);
 	}
 
 	/**
@@ -1238,6 +1330,7 @@ class WireTest_AgentTools extends WireTest {
 	protected function testOpenAIResponsesToolShapes(AgentTools $at) {
 		$engineer = $at->engineer();
 		$chatTools = $engineer->getToolDefinitions(AgentToolsEngineer::providerOpenAI);
+		$this->check('Engineer eval tool warns against dumping ProcessWire objects', true, strpos((string) ($chatTools[0]['function']['description'] ?? ''), 'never pass Wire, Page, or PageArray objects') !== false);
 		$responsesTools = $this->invokeProtected($engineer, 'buildOpenAIResponsesTools', [ $chatTools ]);
 		$this->check('Responses tools use top-level name', 'eval_php', $responsesTools[0]['name'] ?? '');
 		$this->check('Responses tools omit chat function wrapper', false, isset($responsesTools[0]['function']));

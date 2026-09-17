@@ -45,6 +45,7 @@ class AgentToolsSiteBuilderTools extends Wire {
 				case 'create_fields': return $this->createFields((array) ($input['names'] ?? []));
 				case 'create_templates': return $this->createTemplates((array) ($input['names'] ?? []));
 				case 'create_pages': return $this->createPages((array) ($input['pages'] ?? []));
+				case 'refine_pages': return $this->refinePages((array) ($input['pages'] ?? []));
 				case 'install_modules': return $this->installModules((array) ($input['names'] ?? []));
 				case 'write_file': return $this->writeFile((string) ($input['path'] ?? ''), (string) ($input['content'] ?? ''));
 				case 'report_progress': return $this->reportProgress((string) ($input['message'] ?? ''));
@@ -460,6 +461,108 @@ class AgentToolsSiteBuilderTools extends Wire {
 	}
 
 	/**
+	 * Refine content on approved pages or add sample pages with approved schema.
+	 *
+	 * @param array<int,array<string,mixed>> $items
+	 * @return array<string,mixed>
+	 */
+	public function refinePages(array $items): array {
+		if(!$items) $this->invalid('At least one page refinement is required.');
+		$state = $this->session->load();
+		if(($state['phase'] ?? '') !== AgentToolsSiteBuilder::phaseRefine) $this->invalid('refine_pages is available only during refinement.');
+		$plan = $this->getPlan();
+		$pageMap = $this->plans->getPageMap($plan);
+		$templateMap = $this->plans->getTemplateMap($plan);
+		$fieldMap = $this->plans->getFieldMap($plan);
+		$updates = [];
+		$newPages = [];
+		$seen = [];
+
+		foreach($items as $item) {
+			if(!is_array($item)) $this->invalid('Each refine_pages entry must be an object.');
+			$key = trim((string) ($item['key'] ?? ''));
+			if($key === '' || !preg_match('/^[A-Za-z][A-Za-z0-9_-]*$/', $key)) $this->invalid("Invalid refinement page key: $key");
+			if(isset($seen[$key])) $this->invalid("Page $key appears more than once in this refine_pages call.");
+			$seen[$key] = true;
+			$values = $item['values'] ?? [];
+			if(!is_array($values)) $this->invalid("Page $key values must be an object.");
+			$status = (string) ($item['status'] ?? '');
+			if($status !== '' && !in_array($status, ['published', 'unpublished', 'hidden'], true)) $this->invalid("Unsupported page status: $status");
+
+			if(isset($pageMap[$key])) {
+				$planned = $pageMap[$key];
+				foreach(['parent', 'name', 'template'] as $property) {
+					if(array_key_exists($property, $item) && $item[$property] !== $planned[$property]) {
+						$this->invalid("Refinement cannot change page $key $property.");
+					}
+				}
+				$this->validateRefinementValues($key, (string) $planned['template'], $values, $templateMap, $fieldMap);
+				$updates[$key] = ['values' => $values, 'status' => $status];
+				continue;
+			}
+
+			$parent = trim((string) ($item['parent'] ?? ''));
+			$name = trim((string) ($item['name'] ?? ''));
+			$template = trim((string) ($item['template'] ?? ''));
+			if($parent === '') $this->invalid("New refinement page $key requires a parent page key.");
+			if($name === '' || $this->wire()->sanitizer->pageName($name) !== $name) $this->invalid("New refinement page $key has invalid name $name.");
+			if(!isset($templateMap[$template])) $this->invalid("New refinement page $key must use a template from the approved plan.");
+			$this->validateRefinementValues($key, $template, $values, $templateMap, $fieldMap);
+			$newPages[$key] = [
+				'key' => $key,
+				'disposition' => 'create',
+				'parent' => $parent,
+				'name' => $name,
+				'template' => $template,
+				'status' => $status ?: 'published',
+				'values' => $values,
+				'contentBrief' => [],
+				'refinement' => (int) ($state['refinementNumber'] ?? 0),
+			];
+		}
+
+		$combinedMap = array_merge($pageMap, $newPages);
+		foreach($newPages as $key => $item) {
+			if(!isset($combinedMap[(string) $item['parent']])) $this->invalid("New refinement page $key references unknown parent {$item['parent']}.");
+			$plan['pages'][] = $item;
+		}
+		if($newPages) {
+			$warnings = [];
+			$plan = $this->plans->normalize($plan, $warnings);
+			$state['plan'] = $plan;
+			$this->session->save($state);
+		}
+
+		$results = [];
+		if($newPages) {
+			$create = [];
+			foreach(array_keys($newPages) as $key) $create[] = ['key' => $key, 'content' => []];
+			$created = $this->createPages($create);
+			if(empty($created['ok'])) return $created;
+			$results = (array) ($created['pages'] ?? []);
+			$state = $this->session->load();
+			$pageMap = $this->plans->getPageMap((array) $state['plan']);
+		}
+
+		foreach($updates as $key => $update) {
+			$page = $this->resolvePage($key, $pageMap, $state);
+			if(!$page || !$page->id) $this->invalid("Unable to refine missing page $key.");
+			$values = (array) $update['values'];
+			$this->ensurePageRollbackValues($key, $page, array_keys($values));
+			$page->of(false);
+			foreach($values as $fieldName => $value) $page->set((string) $fieldName, $value);
+			if($update['status'] !== '') $this->applyPageStatus($page, (string) $update['status']);
+			$page->save();
+			$state['pageIds'][$key] = (int) $page->id;
+			$this->session->save($state);
+			$this->completeManifestItem('pages', $key, ['id' => (int) $page->id]);
+			$this->log("Refined page $key.", 'page', $key);
+			$results[$key] = 'refined';
+		}
+		return ['ok' => true, 'pages' => $results];
+	}
+
+	/**
 	 * Write exactly one approved file and record its prior state.
 	 *
 	 * @param string $path Root-relative path
@@ -636,7 +739,7 @@ class AgentToolsSiteBuilderTools extends Wire {
 		$manifest = $this->session->loadManifest();
 		return array_merge([
 			'fields' => [], 'templates' => [], 'pages' => [], 'files' => [],
-			'modules' => [], 'directories' => [], 'verification' => [], 'rollbackHistory' => [],
+			'modules' => [], 'directories' => [], 'verification' => [], 'refinements' => [], 'rollbackHistory' => [],
 		], $manifest);
 	}
 
@@ -663,6 +766,52 @@ class AgentToolsSiteBuilderTools extends Wire {
 			$data['childTemplates'] = array_values($children);
 			$data['noChildren'] = count($children) ? 0 : 1;
 		}
+	}
+
+	/** @param array<string,mixed> $values @param array<string,array<string,mixed>> $templates @param array<string,array<string,mixed>> $fields */
+	protected function validateRefinementValues(string $key, string $templateName, array $values, array $templates, array $fields): void {
+		if(!isset($templates[$templateName])) $this->invalid("Page $key uses template $templateName outside the approved plan.");
+		$approved = [];
+		foreach((array) ($templates[$templateName]['fields'] ?? []) as $field) {
+			if(is_array($field) && !empty($field['name'])) $approved[(string) $field['name']] = true;
+		}
+		foreach($values as $fieldName => $value) {
+			$fieldName = (string) $fieldName;
+			if(!isset($fields[$fieldName]) || !isset($approved[$fieldName])) {
+				$this->invalid("Page $key field $fieldName is not approved for template $templateName.");
+			}
+			if(!(is_scalar($value) || $value === null || is_array($value))) $this->invalid("Page $key field $fieldName has an unsupported value.");
+		}
+	}
+
+	/** @param string[] $fieldNames */
+	protected function ensurePageRollbackValues(string $key, Page $page, array $fieldNames): void {
+		$manifest = $this->getManifest();
+		foreach($manifest['pages'] as $index => $entry) {
+			if(($entry['key'] ?? '') !== $key) continue;
+			if(($entry['disposition'] ?? '') === 'update') {
+				foreach($fieldNames as $fieldName) {
+					if(!array_key_exists($fieldName, $manifest['pages'][$index]['before']['values'])) {
+						$manifest['pages'][$index]['before']['values'][$fieldName] = $this->normalizeValue($page->get($fieldName));
+					}
+				}
+				$this->session->saveManifest($manifest);
+			}
+			return;
+		}
+		$beforeValues = [];
+		foreach($fieldNames as $fieldName) $beforeValues[$fieldName] = $this->normalizeValue($page->get($fieldName));
+		$this->beginManifestItem('pages', $key, [
+			'disposition' => 'update',
+			'id' => (int) $page->id,
+			'before' => [
+				'parent' => (int) $page->parent_id,
+				'template' => (string) $page->template->name,
+				'name' => (string) $page->name,
+				'status' => (int) $page->status,
+				'values' => $beforeValues,
+			],
+		]);
 	}
 
 	/** @param array<string,mixed> $item @param array<string,array<string,mixed>> $map @param array<string,mixed> $state */
@@ -754,6 +903,22 @@ class AgentToolsSiteBuilderTools extends Wire {
 		$manifest = $this->getManifest();
 		foreach($manifest[$type] as $index => $entry) {
 			if(($entry['key'] ?? '') !== $key) continue;
+			$state = $this->session->load();
+			if(($state['phase'] ?? '') === AgentToolsSiteBuilder::phaseRefine) {
+				$refinementNumber = (int) ($state['refinementNumber'] ?? 0);
+				$refinements = array_values(array_unique(array_merge(
+					(array) ($entry['refinements'] ?? []),
+					[$refinementNumber]
+				)));
+				$data['refinements'] = array_values(array_filter($refinements));
+				foreach((array) ($manifest['refinements'] ?? []) as $refinementIndex => $refinement) {
+					if((int) ($refinement['number'] ?? 0) !== $refinementNumber) continue;
+					$resources = (array) ($refinement['resources'] ?? []);
+					$resources[$type] = array_values(array_unique(array_merge((array) ($resources[$type] ?? []), [$key])));
+					$manifest['refinements'][$refinementIndex]['resources'] = $resources;
+					break;
+				}
+			}
 			$manifest[$type][$index] = array_merge($entry, $data, ['status' => 'complete', 'completed' => time()]);
 			$manifest['verification'] = [];
 			$this->session->saveManifest($manifest);

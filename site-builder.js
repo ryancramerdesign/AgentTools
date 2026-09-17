@@ -36,7 +36,6 @@
 		if(!root || root.getAttribute('data-auto') !== '1') return;
 		var current = document.getElementById('at-site-builder-current');
 		var currentText = current ? current.querySelector('span') : null;
-		var spinner = current ? current.querySelector('.fa-spinner') : null;
 		var elapsed = document.getElementById('at-site-builder-elapsed');
 		var log = document.getElementById('at-site-builder-log');
 		var state = root.querySelector('.at-site-builder-state');
@@ -44,6 +43,8 @@
 		var failures = 0;
 		var startedAt = Date.now();
 		var elapsedTimer = null;
+		var activityCaption = '';
+		var activityStarted = false;
 		var text = function(name, fallback) {
 			return root.getAttribute('data-' + name) || fallback;
 		};
@@ -55,12 +56,32 @@
 		};
 		var setCurrent = function(message, active) {
 			if(currentText) currentText.textContent = message;
-			if(spinner) spinner.hidden = active === false;
 			if(active === false) {
+				if(window.PWMeasureActivity && activityStarted) window.PWMeasureActivity.stop();
+				activityStarted = false;
 				if(elapsedTimer) window.clearInterval(elapsedTimer);
 				elapsedTimer = null;
 				if(elapsed) elapsed.hidden = true;
-			} else if(elapsed) {
+			} else {
+				if(!activityCaption) activityCaption = message;
+				if(window.PWMeasureActivity && !activityStarted) {
+					window.PWMeasureActivity.start({
+						selectors: [
+							'#pw-content-title', '.InputfieldHeader', '.uk-button',
+							'#pw-masthead a', '.pw-primary-nav a', 'th', 'td'
+						],
+						ghosts: [
+							{ label: text('measure-modal', 'modal'), w: 480, h: 320 },
+							{ label: text('measure-card', 'card'), w: 300, h: 210 },
+							{ label: text('measure-sidebar', 'sidebar'), w: 240, h: 420 },
+							{ label: text('measure-hero', 'hero'), w: 620, h: 260 },
+							{ label: text('measure-field-row', 'field row'), w: 360, h: 64 }
+						],
+						getCaption: function() { return activityCaption; }
+					});
+					activityStarted = true;
+				}
+				if(!elapsed) return;
 				elapsed.hidden = false;
 				updateElapsed();
 				if(!elapsedTimer) elapsedTimer = window.setInterval(updateElapsed, 1000);
@@ -79,6 +100,7 @@
 				log.innerHTML = '<li class="detail">' + escapeHtml(text('text-empty-log', 'No progress has been recorded yet.')) + '</li>';
 				return;
 			}
+			activityCaption = String(entries[entries.length - 1].message || '');
 			log.innerHTML = entries.map(function(entry) {
 				var date = entry.timestamp ? new Date(Number(entry.timestamp) * 1000) : null;
 				var time = date ? date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '';
@@ -128,7 +150,8 @@
 					try {
 						return JSON.parse(value);
 					} catch(parseError) {
-						parseError.retry = false;
+						parseError.message = 'The server interrupted this step.';
+						parseError.retry = true;
 						throw parseError;
 					}
 				});
@@ -160,6 +183,12 @@
 					return;
 				}
 				failures++;
+				if(failures >= 6) {
+					stopped = true;
+					setCurrent(text('text-retry-stopped', 'The server interrupted several attempts. Refresh this page to try recovering again.'), false);
+					if(current) current.classList.add('at-site-builder-error');
+					return;
+				}
 				var delay = Math.min(10000, 1000 * Math.pow(2, Math.min(failures - 1, 4)));
 				setCurrent((error.message || 'Connection interrupted.') + ' ' + text('text-retry', 'Retrying…'), true);
 				schedule(delay);
@@ -168,6 +197,7 @@
 
 		window.addEventListener('beforeunload', function() {
 			stopped = true;
+			if(window.PWMeasureActivity && activityStarted) window.PWMeasureActivity.stop();
 			if(elapsedTimer) window.clearInterval(elapsedTimer);
 		});
 		runStep();

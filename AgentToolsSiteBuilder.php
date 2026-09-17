@@ -15,12 +15,14 @@ class AgentToolsSiteBuilder extends AgentToolsHelper {
 	const phaseDescribe = 'describe';
 	const phasePlan = 'plan';
 	const phaseBuild = 'build';
+	const phaseRefine = 'refine';
 	const phaseVerify = 'verify';
 	const phaseDone = 'done';
 	const maxConsecutiveToolFailures = 5;
 	const planMaxTokens = 16384;
 	const defaultPlanTokenLimit = 100000;
 	const defaultBuildTokenLimit = 750000;
+	const defaultRefineTokenLimit = 150000;
 	const defaultVerifyTokenLimit = 200000;
 
 	/** @var AgentToolsSiteBuilderPlan|null */
@@ -39,8 +41,8 @@ class AgentToolsSiteBuilder extends AgentToolsHelper {
 	 *  - designDirection: editorial, minimal, bold-modern, or warm-organic
 	 *  - cssApproach: agenttools-base, uikit, or bootstrap
 	 *  - javascript: vanilla or htmx
-	 *  - planRoundLimit, buildRoundLimit, verifyRoundLimit
-	 *  - planTokenLimit, buildTokenLimit, verifyTokenLimit
+	 *  - planRoundLimit, buildRoundLimit, refineRoundLimit, verifyRoundLimit
+	 *  - planTokenLimit, buildTokenLimit, refineTokenLimit, verifyTokenLimit
 	 * @return array<string,mixed>
 	 * @throws WireException
 	 *
@@ -75,13 +77,18 @@ class AgentToolsSiteBuilder extends AgentToolsHelper {
 				'engineerRound' => 0,
 				'engineerTokenUsage' => $this->emptyTokenUsage(),
 				'round' => 0,
-				'phaseRounds' => ['plan' => 0, 'build' => 0, 'verify' => 0],
+				'phaseRounds' => ['plan' => 0, 'build' => 0, 'refine' => 0, 'verify' => 0],
 				'tokenUsage' => $this->emptyTokenUsage(),
 				'phaseTokenUsage' => [
 					'plan' => $this->emptyTokenUsage(),
 					'build' => $this->emptyTokenUsage(),
+					'refine' => $this->emptyTokenUsage(),
 					'verify' => $this->emptyTokenUsage(),
 				],
+				'refinementNumber' => 0,
+				'refinementRequest' => '',
+				'refinements' => [],
+				'verificationPurpose' => 'build',
 				'consecutiveToolFailures' => 0,
 				'pageIds' => [],
 				'error' => '',
@@ -130,6 +137,9 @@ class AgentToolsSiteBuilder extends AgentToolsHelper {
 					break;
 				case self::phaseBuild:
 					$this->stepBuild($session, $state, $runtimeOptions);
+					break;
+				case self::phaseRefine:
+					$this->stepRefine($session, $state, $runtimeOptions);
 					break;
 				case self::phaseVerify:
 					$this->stepVerify($session, $state, $runtimeOptions);
@@ -216,11 +226,74 @@ class AgentToolsSiteBuilder extends AgentToolsHelper {
 			$state['phase'] = self::phaseBuild;
 			$state['status'] = 'ready';
 			$state['planApproved'] = true;
+			$state['verificationPurpose'] = 'build';
 			$state['revisionRequest'] = '';
 			$state['engineerSessionId'] = '';
 			$state['engineerRound'] = 0;
 			$state['engineerTokenUsage'] = $this->emptyTokenUsage();
 			$this->log($session, $state, $this->_('Plan approved. Build is ready.'));
+		});
+	}
+
+	/**
+	 * Start a bounded refinement of a completed site with a fresh agent session.
+	 *
+	 * @return array<string,mixed>
+	 */
+	public function refine(string $id, string $request): array {
+		$request = trim($request);
+		if($request === '') throw new WireException($this->_('Please describe what you would like to refine.'));
+		return $this->updateLocked($id, function(AgentToolsSiteBuilderSession $session, array &$state) use($request): void {
+			if(($state['phase'] ?? '') !== self::phaseDone || ($state['status'] ?? '') !== 'done') {
+				throw new WireException($this->_('The site build must be complete before it can be refined.'));
+			}
+			$number = (int) ($state['refinementNumber'] ?? 0) + 1;
+			$state['options'] = $this->normalizeOptions((array) ($state['options'] ?? []));
+			$state['refinementNumber'] = $number;
+			$state['refinementRequest'] = $request;
+			$state['refinements'][] = [
+				'number' => $number,
+				'request' => $request,
+				'started' => time(),
+				'finished' => 0,
+			];
+			$state['phase'] = self::phaseRefine;
+			$state['status'] = 'ready';
+			$state['finished'] = 0;
+			$state['error'] = '';
+			$state['verificationPurpose'] = 'refine';
+			$state['phaseRounds']['refine'] = 0;
+			$state['phaseTokenUsage']['refine'] = $this->emptyTokenUsage();
+			$state['engineerSessionId'] = '';
+			$state['engineerRound'] = 0;
+			$state['engineerTokenUsage'] = $this->emptyTokenUsage();
+			$state['consecutiveToolFailures'] = 0;
+			$manifest = $session->loadManifest();
+			$manifest['verification'] = [];
+			$manifest['refinements'][] = [
+				'number' => $number,
+				'request' => $request,
+				'started' => time(),
+				'finished' => 0,
+				'resources' => [],
+			];
+			$session->saveManifest($manifest);
+			$this->log($session, $state, sprintf($this->_('Refinement %d is ready.'), $number));
+		});
+	}
+
+	/**
+	 * Stop requesting refinement work and verify everything completed so far.
+	 *
+	 * @return array<string,mixed>
+	 */
+	public function finishRefinement(string $id): array {
+		return $this->updateLocked($id, function(AgentToolsSiteBuilderSession $session, array &$state): void {
+			if(($state['phase'] ?? '') !== self::phaseRefine) {
+				throw new WireException($this->_('This Site Builder session is not in the refinement phase.'));
+			}
+			$state['error'] = '';
+			$this->enterVerifyPhase($session, $state);
 		});
 	}
 
@@ -260,7 +333,7 @@ class AgentToolsSiteBuilder extends AgentToolsHelper {
 	public function extend(string $id, int $rounds = 5, int $tokens = 50000): array {
 		return $this->updateLocked($id, function(AgentToolsSiteBuilderSession $session, array &$state) use($rounds, $tokens): void {
 			$phase = (string) ($state['phase'] ?? '');
-			if(!in_array($phase, [self::phasePlan, self::phaseBuild, self::phaseVerify], true)) throw new WireException($this->_('This phase cannot be extended.'));
+			if(!in_array($phase, [self::phasePlan, self::phaseBuild, self::phaseRefine, self::phaseVerify], true)) throw new WireException($this->_('This phase cannot be extended.'));
 			$key = $phase . 'RoundLimit';
 			$tokenKey = $phase . 'TokenLimit';
 			$state['options'][$key] = min(200, (int) $state['options'][$key] + max(1, $rounds));
@@ -306,11 +379,12 @@ class AgentToolsSiteBuilder extends AgentToolsHelper {
 				$state['engineerRound'] = 0;
 				$state['engineerTokenUsage'] = $this->emptyTokenUsage();
 				$state['round'] = 0;
-				$state['phaseRounds'] = ['plan' => 0, 'build' => 0, 'verify' => 0];
+				$state['phaseRounds'] = ['plan' => 0, 'build' => 0, 'refine' => 0, 'verify' => 0];
 				$state['tokenUsage'] = $this->emptyTokenUsage();
 				$state['phaseTokenUsage'] = [
 					'plan' => $this->emptyTokenUsage(),
 					'build' => $this->emptyTokenUsage(),
+					'refine' => $this->emptyTokenUsage(),
 					'verify' => $this->emptyTokenUsage(),
 				];
 				$state['consecutiveToolFailures'] = 0;
@@ -501,6 +575,46 @@ class AgentToolsSiteBuilder extends AgentToolsHelper {
 	}
 
 	/** @param array<string,mixed> $state @param array<string,mixed> $runtimeOptions */
+	protected function stepRefine(AgentToolsSiteBuilderSession $session, array &$state, array $runtimeOptions): void {
+		if(empty($state['planApproved'])) throw new WireException($this->_('The Site Builder plan has not been approved.'));
+		if($this->isBudgetReached($state, self::phaseRefine)) return;
+		if(empty($state['engineerSessionId'])) {
+			$started = $this->at->engineer()->startAskSession(
+				$this->getRefineRequest($state, $session->loadManifest()),
+				$this->getAskOptions($state, self::phaseRefine)
+			);
+			if(($started['status'] ?? '') === 'error') throw new WireException((string) $started['error']);
+			$state['engineerSessionId'] = (string) $started['sessionId'];
+			$state['engineerRound'] = 0;
+			$state['engineerTokenUsage'] = $this->emptyTokenUsage();
+			$session->save($state);
+		}
+		$tools = new AgentToolsSiteBuilderTools($this->at, $session, $this->plans());
+		$this->wire($tools);
+		$runtimeOptions['toolHandler'] = function(string $name, array $input) use($tools, $session, &$state) {
+			if(($state['status'] ?? '') === 'paused') return ['ok' => false, 'error' => (string) $state['error']];
+			$result = $tools->execute($name, $input);
+			$this->accountToolResult($session, $state, $name, $result);
+			return $result;
+		};
+		$runtimeOptions['onInterrupt'] = 'resume';
+		$result = $this->at->engineer()->askStep((string) $state['engineerSessionId'], $runtimeOptions);
+		if(($result['status'] ?? '') === 'busy') {
+			$state['status'] = 'busy';
+			return;
+		}
+		$this->accountAskResult($state, $result);
+		if(($state['status'] ?? '') === 'paused') return;
+		if(!empty($result['error'])) throw new WireException((string) $result['error']);
+		if(empty($result['done'])) {
+			$state['status'] = 'continue';
+			$this->isBudgetReached($state, self::phaseRefine);
+			return;
+		}
+		$this->enterVerifyPhase($session, $state);
+	}
+
+	/** @param array<string,mixed> $state @param array<string,mixed> $runtimeOptions */
 	protected function stepVerify(AgentToolsSiteBuilderSession $session, array &$state, array $runtimeOptions): void {
 		if($this->isVerificationComplete($state, $session->loadManifest())) {
 			$this->completeBuild($session, $state);
@@ -562,10 +676,13 @@ class AgentToolsSiteBuilder extends AgentToolsHelper {
 		$tools = [];
 		$systemPrompt = $this->plans()->getSystemPrompt();
 		if($phase === self::phaseBuild) {
-			$tools = $this->getToolDefinitions($provider, false);
+			$tools = $this->getToolDefinitions($provider, self::phaseBuild);
 			$systemPrompt = $this->getBuildSystemPrompt($state);
+		} else if($phase === self::phaseRefine) {
+			$tools = $this->getToolDefinitions($provider, self::phaseRefine);
+			$systemPrompt = $this->getRefineSystemPrompt($state);
 		} else if($phase === self::phaseVerify) {
-			$tools = $this->getToolDefinitions($provider, true);
+			$tools = $this->getToolDefinitions($provider, self::phaseVerify);
 			$systemPrompt = $this->getVerifySystemPrompt($state);
 		}
 		$result = [
@@ -593,15 +710,21 @@ class AgentToolsSiteBuilder extends AgentToolsHelper {
 	}
 
 	/** @return array<int,array<string,mixed>> */
-	protected function getToolDefinitions(string $provider, bool $verify): array {
+	protected function getToolDefinitions(string $provider, string $phase): array {
 		$base = $this->at->engineer()->getToolDefinitions($provider, 'site', false, false, true);
-		$allowedBase = $verify ? ['eval_php', 'read_file', 'api_docs'] : ['eval_php', 'site_info', 'read_file', 'api_docs'];
+		$allowedBase = $phase === self::phaseVerify ? ['eval_php', 'read_file', 'api_docs'] : ['eval_php', 'site_info', 'read_file', 'api_docs'];
 		$tools = [];
 		foreach($base as $tool) {
 			$name = $provider === AgentToolsEngineer::providerAnthropic ? ($tool['name'] ?? '') : ($tool['function']['name'] ?? '');
 			if(in_array($name, $allowedBase, true)) $tools[] = $tool;
 		}
-		$definitions = $verify ? $this->getVerifyToolSchemas() : $this->getBuildToolSchemas();
+		if($phase === self::phaseVerify) {
+			$definitions = $this->getVerifyToolSchemas();
+		} else if($phase === self::phaseRefine) {
+			$definitions = $this->getRefineToolSchemas();
+		} else {
+			$definitions = $this->getBuildToolSchemas();
+		}
 		foreach($definitions as $name => $definition) $tools[] = $this->formatTool($provider, $name, $definition['description'], $definition['parameters']);
 		return $tools;
 	}
@@ -667,6 +790,35 @@ class AgentToolsSiteBuilder extends AgentToolsHelper {
 		return $schemas;
 	}
 
+	/** @return array<string,array<string,mixed>> */
+	protected function getRefineToolSchemas(): array {
+		$schemas = $this->getBuildToolSchemas();
+		$schemas = array_intersect_key($schemas, array_flip(['write_file', 'report_progress']));
+		$schemas['refine_pages'] = [
+			'description' => 'Make small content corrections to planned pages or add sample pages using templates already approved by the plan. Existing page structure cannot be changed.',
+			'parameters' => [
+				'type' => 'object',
+				'properties' => ['pages' => [
+					'type' => 'array',
+					'items' => [
+						'type' => 'object',
+						'properties' => [
+							'key' => ['type' => 'string'],
+							'parent' => ['type' => 'string'],
+							'name' => ['type' => 'string'],
+							'template' => ['type' => 'string'],
+							'status' => ['type' => 'string', 'enum' => ['published', 'unpublished', 'hidden']],
+							'values' => ['type' => 'object'],
+						],
+						'required' => ['key', 'values'],
+					],
+				]],
+				'required' => ['pages'],
+			],
+		];
+		return $schemas;
+	}
+
 	/** @return array<string,mixed> */
 	protected function formatTool(string $provider, string $name, string $description, array $parameters): array {
 		if($provider === AgentToolsEngineer::providerAnthropic) return ['name' => $name, 'description' => $description, 'input_schema' => $parameters];
@@ -706,9 +858,18 @@ class AgentToolsSiteBuilder extends AgentToolsHelper {
 	}
 
 	protected function getVerifyRequest(array $state, array $manifest): string {
+		$context = ($state['verificationPurpose'] ?? 'build') === 'refine' ? "\n\nREFINEMENT REQUEST:\n" . (string) ($state['refinementRequest'] ?? '') : '';
 		return "Verify every route and representative admin page in the approved plan with fetch_page. Fix generated files with write_file when needed, then repeat failed checks. Do not claim completion until all required checks return ok.\n\nPLAN:\n" .
 			json_encode($state['plan'], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) .
-			"\n\nCURRENT MANIFEST:\n" . json_encode($manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+			"\n\nCURRENT MANIFEST:\n" . json_encode($manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) . $context;
+	}
+
+	protected function getRefineRequest(array $state, array $manifest): string {
+		return "Refine the completed site according to the request below. Work within the approved plan and current schema. Make only the small corrections requested, then stop so Site Builder can verify the result.\n\nREFINEMENT REQUEST:\n" .
+			(string) ($state['refinementRequest'] ?? '') .
+			"\n\nAPPROVED PLAN:\n" . json_encode($state['plan'], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) .
+			"\n\nCURRENT MANIFEST:\n" . json_encode($manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) .
+			"\n\nFRESH SITE SNAPSHOT:\n" . json_encode($this->plans()->getSiteSnapshot(), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
 	}
 
 	protected function getBuildSystemPrompt(array $state): string {
@@ -717,7 +878,7 @@ class AgentToolsSiteBuilder extends AgentToolsHelper {
 
 Never use eval_php to create or modify planned fields, templates, pages, files, or modules because those changes would bypass the rollback manifest. Use eval_php only for inspection or exceptional non-resource work, and explicitly report any mutation it performs. Do not create migrations. Stop and report a plan conflict rather than improvising a different resource.
 
-	Generated templates use ProcessWire markup regions with _init.php prepended and _main.php appended. Rich text uses TinyMCE. Template updates are additive: preserve all existing fields and data, adding or reconfiguring only fields named in the approved plan. Hooks shared by front end and admin go in site/ready.php or site/init.php; front-end-only hooks go in site/templates/_init.php; admin-only hooks go in site/templates/admin.php. Do not create a module just to hold hooks. Follow Page-class naming conventions. When the supplied site profile documents an image helper, render every image through that helper and design around the image area it returns, including placeholders; the layout must still work when placeholders are disabled and the helper returns nothing. Without a documented image helper, avoid warnings and broken image markup and make layouts look complete without an image. Omit empty optional values rather than casting them into visible placeholders such as 0. Prefer the approved CSS approach and vanilla JavaScript unless the plan says otherwise.
+	Generated templates use ProcessWire markup regions with _init.php prepended and _main.php appended. When the supplied site profile documents named regions and their default content, template files must output only content those regions do not already render; do not repeat the page title, summary, or other region content. Rich text uses TinyMCE. Template updates are additive: preserve all existing fields and data, adding or reconfiguring only fields named in the approved plan. Hooks shared by front end and admin go in site/ready.php or site/init.php; front-end-only hooks go in site/templates/_init.php; admin-only hooks go in site/templates/admin.php. Do not create a module just to hold hooks. Follow Page-class naming conventions. When the supplied site profile documents an image helper, render every image through that helper and design around the image area it returns, including placeholders; the layout must still work when placeholders are disabled and the helper returns nothing. Without a documented image helper, avoid warnings and broken image markup and make layouts look complete without an image. Omit empty optional values rather than casting them into visible placeholders such as 0. Prefer the approved CSS approach and vanilla JavaScript unless the plan says otherwise.
 
 A manifest item with status complete is already done. Never repeat create_fields, create_templates, create_pages, install_modules, or write_file for a complete item during the build phase. An unchanged write_file result confirms the file is already correct; do not submit it again. Completed files may be rewritten only during verification when a verification result identifies a problem.
 
@@ -741,6 +902,14 @@ PROMPT;
 	protected function getVerifySystemPrompt(array $state): string {
 		return <<<'PROMPT'
 You are the verification phase of ProcessWire AgentTools Site Builder. Verify all front-end routes and every representative admin page specified by the approved plan. Use fetch_page for each required check. Inspect and fix only approved generated files with write_file, then fetch failed pages again. Use eval_php only for read-only diagnosis; do not create schema or content during verification. Report concise progress and do not claim success while any required verification is missing or failed.
+PROMPT;
+	}
+
+	protected function getRefineSystemPrompt(array $state): string {
+		return <<<'PROMPT'
+You are the refinement phase of ProcessWire AgentTools Site Builder. Apply one small, focused correction to an already completed site. Use write_file only for files already listed in the approved plan. Use refine_pages to correct content on planned pages or add a small number of sample pages with templates and fields already approved by the plan. Use eval_php only for read-only inspection. When inspecting ProcessWire objects, echo selected scalar properties such as IDs, names, titles, or counts; never pass Wire, Page, or PageArray objects to var_dump(), var_export(), or print_r(). Do not create or change fields, templates, modules, migrations, or unapproved files. Do not turn a refinement into a major new feature; tell the user that a new build is needed when the request requires new schema or broad architecture.
+
+Keep repeatable content in ProcessWire pages and fields rather than hardcoding repeated items in template files. Report concise progress. Before finishing, confirm that the requested correction was actually made. Site Builder will run a separate verification phase after you stop.
 PROMPT;
 	}
 
@@ -774,21 +943,40 @@ PROMPT;
 	}
 
 	protected function enterVerifyPhase(AgentToolsSiteBuilderSession $session, array &$state): void {
+		if(($state['phase'] ?? '') === self::phaseRefine) {
+			$state['phaseRounds']['verify'] = 0;
+			$state['phaseTokenUsage']['verify'] = $this->emptyTokenUsage();
+		}
 		$state['phase'] = self::phaseVerify;
 		$state['status'] = 'ready';
 		$state['engineerSessionId'] = '';
 		$state['engineerRound'] = 0;
 		$state['engineerTokenUsage'] = $this->emptyTokenUsage();
 		$state['consecutiveToolFailures'] = 0;
-		$this->addMessage($session, $state, $this->_('Build complete. Verification is ready.'));
+		$message = ($state['verificationPurpose'] ?? 'build') === 'refine' ?
+			$this->_('Refinement complete. Verification is ready.') :
+			$this->_('Build complete. Verification is ready.');
+		$this->addMessage($session, $state, $message);
 	}
 
 	protected function completeBuild(AgentToolsSiteBuilderSession $session, array &$state): void {
+		$refined = ($state['verificationPurpose'] ?? 'build') === 'refine';
 		$state['phase'] = self::phaseDone;
 		$state['status'] = 'done';
 		$state['finished'] = time();
 		$state['engineerSessionId'] = '';
-		$this->addMessage($session, $state, $this->_('Site Builder finished successfully.'));
+		if($refined) {
+			$number = (int) ($state['refinementNumber'] ?? 0);
+			foreach((array) ($state['refinements'] ?? []) as $index => $item) {
+				if((int) ($item['number'] ?? 0) === $number) $state['refinements'][$index]['finished'] = time();
+			}
+			$manifest = $session->loadManifest();
+			foreach((array) ($manifest['refinements'] ?? []) as $index => $item) {
+				if((int) ($item['number'] ?? 0) === $number) $manifest['refinements'][$index]['finished'] = time();
+			}
+			$session->saveManifest($manifest);
+		}
+		$this->addMessage($session, $state, $refined ? $this->_('Site refinement finished successfully.') : $this->_('Site Builder finished successfully.'));
 		$this->at->sitemap()->generate();
 		$this->at->sitemap()->generateSchema();
 	}
@@ -974,8 +1162,10 @@ PROMPT;
 			'planRoundLimit' => 5,
 			'buildRoundLimit' => 50,
 			'verifyRoundLimit' => 15,
+			'refineRoundLimit' => 15,
 			'planTokenLimit' => self::defaultPlanTokenLimit,
 			'buildTokenLimit' => self::defaultBuildTokenLimit,
+			'refineTokenLimit' => self::defaultRefineTokenLimit,
 			'verifyTokenLimit' => self::defaultVerifyTokenLimit,
 		];
 		$options = array_merge($defaults, $options);
@@ -984,14 +1174,15 @@ PROMPT;
 		if(!in_array($options['designDirection'], ['editorial', 'minimal', 'bold-modern', 'warm-organic'], true)) $options['designDirection'] = 'editorial';
 		if(!in_array($options['cssApproach'], ['agenttools-base', 'uikit', 'bootstrap'], true)) $options['cssApproach'] = 'agenttools-base';
 		if(!in_array($options['javascript'], ['vanilla', 'htmx'], true)) $options['javascript'] = 'vanilla';
-		foreach(['planRoundLimit', 'buildRoundLimit', 'verifyRoundLimit'] as $key) $options[$key] = max(1, min(200, (int) $options[$key]));
-		foreach(['planTokenLimit', 'buildTokenLimit', 'verifyTokenLimit'] as $key) $options[$key] = max(1000, min(2000000, (int) $options[$key]));
+		foreach(['planRoundLimit', 'buildRoundLimit', 'refineRoundLimit', 'verifyRoundLimit'] as $key) $options[$key] = max(1, min(200, (int) $options[$key]));
+		foreach(['planTokenLimit', 'buildTokenLimit', 'refineTokenLimit', 'verifyTokenLimit'] as $key) $options[$key] = max(1000, min(2000000, (int) $options[$key]));
 		return array_intersect_key($options, $defaults);
 	}
 
 	protected function getDefaultTokenLimit(string $phase): int {
 		if($phase === self::phasePlan) return self::defaultPlanTokenLimit;
 		if($phase === self::phaseBuild) return self::defaultBuildTokenLimit;
+		if($phase === self::phaseRefine) return self::defaultRefineTokenLimit;
 		if($phase === self::phaseVerify) return self::defaultVerifyTokenLimit;
 		return 0;
 	}
@@ -1008,6 +1199,7 @@ PROMPT;
 			'modules' => [],
 			'directories' => [],
 			'verification' => [],
+			'refinements' => [],
 			'rollbackHistory' => [],
 		];
 	}

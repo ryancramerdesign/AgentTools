@@ -1,5 +1,30 @@
 # Changelog
 
+## Version 33
+
+### Site Builder
+
+- Added a focused refinement workflow for completed sites, including bounded
+  file and page updates, sample-page creation, rollback tracking, dedicated
+  verification, and a manual finish-and-verify action.
+- Added an architectural measuring activity indicator for active work while
+  retaining live phase, round, token, elapsed-time, and progress-log details.
+- Improved long-running request recovery with valid JSON responses after fatal
+  server errors, bounded retry backoff, and work extensions sized from recent
+  token usage.
+- Improved plan normalization and build guidance for Page classes, profile
+  markup regions, field settings, Datetime inputs, and completed resources.
+- Improved completed-build actions and presentation, including new-tab site
+  and admin links and clearer refinement and progress controls.
+
+### Engineer
+
+- Prevented recursive object inspection helpers in Engineer `eval_php` calls
+  from exhausting memory on ProcessWire object graphs, with guidance to output
+  selected scalar values instead.
+
+---
+
 ## Version 32
 
 ### Site Builder
