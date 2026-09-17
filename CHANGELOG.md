@@ -1,5 +1,28 @@
 # Changelog
 
+## Version 32
+
+### Site Builder
+
+- Added plan-time rejection of native ProcessWire field names and automatic
+  rollback to planning when an approved plan encounters a non-retryable build
+  error.
+- Preserved field-setting intent by repairing unambiguous capitalization
+  mistakes and known aliases before dropping unsupported settings.
+- Improved partial page creation so approved values override duplicate
+  generated content and one invalid page does not block valid siblings.
+- Added safe defaults and validation for newly created Datetime fields,
+  including ProcessWire's supported HTML date, time, and datetime input types.
+- Clarified build progress presentation and added broader regression coverage
+  for plan correction, rollback, normalization, and page batching.
+
+### Engineer
+
+- Added automatic short-backoff retries for provider rate limits and server
+  errors.
+
+---
+
 ## Version 30
 
 ### Site Builder

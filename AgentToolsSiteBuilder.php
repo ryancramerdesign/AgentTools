@@ -293,15 +293,7 @@ class AgentToolsSiteBuilder extends AgentToolsHelper {
 			$this->wire($tools);
 			$rollback = $tools->startOver();
 			if($rollback['ok']) {
-				$oldManifest = $session->loadManifest();
-				$history = (array) ($oldManifest['rollbackHistory'] ?? []);
-				unset($oldManifest['rollbackHistory']);
-				$history[] = $oldManifest;
-				$manifest = $this->newManifest($id);
-				$manifest['rollbackHistory'] = $history;
-				$session->saveManifest($manifest);
-				$backupPath = $session->getPath() . 'backups/';
-				if(is_dir($backupPath)) $this->wire()->files->rmdir($backupPath, true);
+				$this->resetManifestAfterRollback($session, $id);
 				$state['phase'] = self::phaseDescribe;
 				$state['status'] = 'reset';
 				$state['error'] = '';
@@ -463,10 +455,16 @@ class AgentToolsSiteBuilder extends AgentToolsHelper {
 		}
 		$tools = new AgentToolsSiteBuilderTools($this->at, $session, $this->plans());
 		$this->wire($tools);
-		$runtimeOptions['toolHandler'] = function(string $name, array $input) use($tools, $session, &$state) {
+		$planFailure = '';
+		$runtimeOptions['toolHandler'] = function(string $name, array $input) use($tools, $session, &$state, &$planFailure) {
 			if(($state['status'] ?? '') === 'paused') return ['ok' => false, 'error' => (string) $state['error']];
 			$result = $tools->execute($name, $input);
 			$this->accountToolResult($session, $state, $name, $result);
+			if(is_array($result) && !empty($result['planError'])) {
+				$planFailure = (string) ($result['error'] ?? 'The approved plan could not be carried out.');
+				$state['status'] = 'paused';
+				$state['error'] = $planFailure;
+			}
 			return $result;
 		};
 		$runtimeOptions['onInterrupt'] = 'resume';
@@ -476,6 +474,10 @@ class AgentToolsSiteBuilder extends AgentToolsHelper {
 			return;
 		}
 		$this->accountAskResult($state, $result);
+		if($planFailure !== '') {
+			$this->returnBuildFailureToPlanning($session, $state, $planFailure);
+			return;
+		}
 		if($this->isBuildComplete($state, $session->loadManifest())) {
 			$this->enterVerifyPhase($session, $state);
 			return;
@@ -617,7 +619,7 @@ class AgentToolsSiteBuilder extends AgentToolsHelper {
 				'parameters' => ['type' => 'object', 'properties' => ['names' => $nameList], 'required' => ['names']],
 			],
 			'create_pages' => [
-				'description' => 'Create or update approved plan pages. Provide generated long content only for fields named in each page contentBrief. Include parents before children when practical.',
+				'description' => "Create or update approved plan pages. content is only for fields listed in each page's contentBrief. Fields in the plan's values are applied automatically; do not include them. Include parents before children when practical.",
 				'parameters' => [
 					'type' => 'object',
 					'properties' => ['pages' => [
@@ -830,6 +832,47 @@ PROMPT;
 			self::maxConsecutiveToolFailures
 		);
 		$this->addMessage($session, $state, $state['error'], 'warning');
+	}
+
+	/**
+	 * Roll back an impossible approved plan and ask the planner to correct it.
+	 */
+	protected function returnBuildFailureToPlanning(AgentToolsSiteBuilderSession $session, array &$state, string $error): void {
+		$tools = new AgentToolsSiteBuilderTools($this->at, $session, $this->plans());
+		$this->wire($tools);
+		$rollback = $tools->startOver();
+		if(empty($rollback['ok'])) {
+			$state['status'] = 'error';
+			$state['error'] = $this->_('The approved plan failed and some Site Builder resources could not be restored or removed.');
+			$this->addMessage($session, $state, $state['error'], 'error');
+			return;
+		}
+		$this->resetManifestAfterRollback($session, (string) $state['id']);
+		$state['phase'] = self::phasePlan;
+		$state['status'] = 'continue';
+		$state['error'] = '';
+		$state['planApproved'] = false;
+		$state['planErrors'] = [$error];
+		$state['revisionRequest'] = "Correct the approved plan because its build failed with this non-retryable error:\n- $error\n\nPreserve the user's requested site and revise only what is necessary to make the plan buildable.";
+		$state['engineerSessionId'] = '';
+		$state['engineerRound'] = 0;
+		$state['engineerTokenUsage'] = $this->emptyTokenUsage();
+		$state['consecutiveToolFailures'] = 0;
+		$state['pageIds'] = [];
+		$this->addMessage($session, $state, $this->_('The approved plan could not be built. Its changes were rolled back and a corrected plan will be prepared.'), 'warning');
+	}
+
+	/** Archive the rolled-back manifest and prepare a clean manifest for another plan. */
+	protected function resetManifestAfterRollback(AgentToolsSiteBuilderSession $session, string $id): void {
+		$oldManifest = $session->loadManifest();
+		$history = (array) ($oldManifest['rollbackHistory'] ?? []);
+		unset($oldManifest['rollbackHistory']);
+		$history[] = $oldManifest;
+		$manifest = $this->newManifest($id);
+		$manifest['rollbackHistory'] = $history;
+		$session->saveManifest($manifest);
+		$backupPath = $session->getPath() . 'backups/';
+		if(is_dir($backupPath)) $this->wire()->files->rmdir($backupPath, true);
 	}
 
 	protected function resetTerminalEngineerSession(array &$state): bool {

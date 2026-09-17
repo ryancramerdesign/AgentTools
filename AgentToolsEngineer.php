@@ -3597,7 +3597,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	 *
 	 */
 	protected function curlPost(string $url, array $payload, array $headers, int $timeout = 120): array {
-		$retryDelays = [2, 4, 8]; // seconds to sleep between attempts on 529
+		$retryDelays = [2, 4];
 		$attempt = 0;
 
 		while(true) {
@@ -3616,6 +3616,11 @@ class AgentToolsEngineer extends AgentToolsHelper {
 
 			if($response === false) throw new WireException("API request failed: $curlError");
 
+			if($this->isRetryableHttpCode($httpCode) && $attempt < count($retryDelays)) {
+				sleep($retryDelays[$attempt++]);
+				continue;
+			}
+
 			$data = json_decode($response, true);
 			if(!is_array($data)) throw new WireException("Invalid API response: expected JSON");
 
@@ -3625,12 +3630,6 @@ class AgentToolsEngineer extends AgentToolsHelper {
 				'request' => $payload,
 				'response' => $data
 			]);
-
-			// Retry on 529 (overloaded) with exponential backoff
-			if($httpCode === 529 && $attempt < count($retryDelays)) {
-				sleep($retryDelays[$attempt++]);
-				continue;
-			}
 
 			if($httpCode >= 400) {
 				$error = $data['error']['message'] ?? $data['error'] ?? $data['message'] ?? null;
@@ -3642,6 +3641,11 @@ class AgentToolsEngineer extends AgentToolsHelper {
 
 			return $data;
 		}
+	}
+
+	/** Is an HTTP response likely to succeed when retried shortly? */
+	protected function isRetryableHttpCode(int $httpCode): bool {
+		return $httpCode === 429 || ($httpCode >= 500 && $httpCode <= 599);
 	}
 
 	/**

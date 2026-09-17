@@ -52,6 +52,11 @@ class AgentToolsSiteBuilderTools extends Wire {
 			}
 		} catch(AgentToolsSiteBuilderToolException $e) {
 			return ['ok' => false, 'error' => $e->getMessage()];
+		} catch(\Throwable $e) {
+			if(in_array($name, ['create_fields', 'create_templates', 'create_pages', 'install_modules'], true)) {
+				return ['ok' => false, 'error' => $e->getMessage(), 'planError' => true];
+			}
+			throw $e;
 		}
 		return null;
 	}
@@ -295,6 +300,8 @@ class AgentToolsSiteBuilderTools extends Wire {
 		$plan = $this->getPlan();
 		$map = $this->plans->getPageMap($plan);
 		$requested = [];
+		$ignored = [];
+		$errors = [];
 		foreach($items as $item) {
 			if(!is_array($item) || empty($item['key'])) $this->invalid('Each create_pages entry requires a page key.');
 			$key = (string) $item['key'];
@@ -304,34 +311,87 @@ class AgentToolsSiteBuilderTools extends Wire {
 		if(!$requested) $this->invalid('At least one approved plan page is required.');
 		$state = $this->session->load();
 		foreach($requested as $key => $content) {
-			if(!isset($map[$key])) $this->invalid("Page $key is not in the approved Site Builder plan.");
+			if(!isset($map[$key])) {
+				$errors[$key] = "Page $key is not in the approved Site Builder plan.";
+				unset($requested[$key]);
+				continue;
+			}
 			$item = $map[$key];
 			$brief = (array) ($item['contentBrief'] ?? []);
+			$values = (array) ($item['values'] ?? []);
+			$pageErrors = [];
 			foreach($content as $fieldName => $value) {
-				if(!array_key_exists($fieldName, $brief)) $this->invalid("Generated content field $fieldName is not in page $key contentBrief.");
-				if(!is_string($value)) $this->invalid("Generated content field $fieldName for page $key must be a string.");
+				if(array_key_exists($fieldName, $values)) {
+					unset($requested[$key][$fieldName]);
+					$ignored[$key][$fieldName] = 'set from approved plan values';
+					continue;
+				}
+				if(!array_key_exists($fieldName, $brief)) {
+					$pageErrors[] = "Generated content field $fieldName is in neither page $key values nor contentBrief.";
+				} else if(!is_string($value)) {
+					$pageErrors[] = "Generated content field $fieldName for page $key must be a string.";
+				}
+			}
+			if($pageErrors) {
+				$errors[$key] = implode(' ', $pageErrors);
+				unset($requested[$key]);
+				continue;
 			}
 			$status = (string) ($item['status'] ?? 'published');
-			if(!in_array($status, ['published', 'unpublished', 'hidden'], true)) $this->invalid("Unsupported page status: $status");
+			if(!in_array($status, ['published', 'unpublished', 'hidden'], true)) {
+				$errors[$key] = "Unsupported page status: $status";
+				unset($requested[$key]);
+				continue;
+			}
 			$disposition = (string) $item['disposition'];
 			$page = $this->resolvePage($key, $map, $state);
 			if($page && $page->id && (string) $page->template->name !== (string) $item['template']) {
-				$this->invalid("Page $key template mismatch: plan has {$item['template']}, site has {$page->template->name}.");
+				$errors[$key] = "Page $key template mismatch: plan has {$item['template']}, site has {$page->template->name}.";
+				unset($requested[$key]);
+				continue;
 			}
-			if($disposition === 'reuse' && (!$page || !$page->id)) $this->invalid("Reused page $key no longer exists.");
+			if($disposition === 'reuse' && (!$page || !$page->id)) {
+				$errors[$key] = "Reused page $key no longer exists.";
+				unset($requested[$key]);
+				continue;
+			}
 			$existing = $this->findManifestItem('pages', $key);
-			if($disposition === 'create' && $page && $page->id && !$existing) $this->invalid("Page $key already exists but the plan says create.");
-			if($disposition === 'update' && (!$page || !$page->id)) $this->invalid("Page $key no longer exists for update.");
+			if($disposition === 'create' && $page && $page->id && !$existing) {
+				$errors[$key] = "Page $key already exists but the plan says create.";
+				unset($requested[$key]);
+				continue;
+			}
+			if($disposition === 'update' && (!$page || !$page->id)) {
+				$errors[$key] = "Page $key no longer exists for update.";
+				unset($requested[$key]);
+				continue;
+			}
 			if($disposition === 'create' && (!$existing || ($existing['status'] ?? '') !== 'complete')) {
 				$template = $this->wire()->templates->get((string) $item['template']);
-				if(!$template || !$template->id) $this->invalid("Page $key requires template {$item['template']}.");
-				$parentKey = $item['parent'] ?? null;
-				if($parentKey !== null && !isset($requested[(string) $parentKey])) {
-					$parent = $this->resolvePage((string) $parentKey, $map, $state);
-					if(!$parent || !$parent->id) $this->invalid("Parent page $parentKey has not been built yet.");
+				if(!$template || !$template->id) {
+					$errors[$key] = "Page $key requires template {$item['template']}.";
+					unset($requested[$key]);
 				}
 			}
 		}
+		foreach($requested as $key => $content) {
+			$item = $map[$key];
+			$existing = $this->findManifestItem('pages', $key);
+			if((string) $item['disposition'] !== 'create' || ($existing && ($existing['status'] ?? '') === 'complete')) continue;
+			$parentKey = $item['parent'] ?? null;
+			if($parentKey === null || isset($requested[(string) $parentKey])) continue;
+			$parent = $this->resolvePage((string) $parentKey, $map, $state);
+			if($parent && $parent->id) continue;
+			$errors[$key] = "Parent page $parentKey has not been built yet.";
+			unset($requested[$key]);
+		}
+		if(!$requested) return [
+			'ok' => false,
+			'pages' => [],
+			'errors' => $errors,
+			'ignored' => $ignored,
+			'error' => 'No requested pages could be processed: ' . implode(' ', $errors),
+		];
 		$keys = $this->orderPageKeys(array_keys($requested), $map);
 		$results = [];
 		foreach($keys as $key) {
@@ -390,7 +450,13 @@ class AgentToolsSiteBuilderTools extends Wire {
 			$results[$key] = $disposition === 'create' ? 'created' : 'updated';
 		}
 		$this->session->save($state);
-		return ['ok' => true, 'pages' => $results];
+		$result = ['ok' => !$errors, 'pages' => $results];
+		if($errors) {
+			$result['errors'] = $errors;
+			$result['error'] = 'Some requested pages could not be processed: ' . implode(' ', $errors);
+		}
+		if($ignored) $result['ignored'] = $ignored;
+		return $result;
 	}
 
 	/**

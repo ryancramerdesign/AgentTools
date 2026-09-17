@@ -166,7 +166,7 @@ Each field has name, disposition (create/reuse/update), type, label, summary, an
 
 	Use the current-site snapshot supplied with the request. Anything present in the snapshot must use reuse or update; use create only for new resources. For reused fields, copy the type and relevant settings exactly from the snapshot. The snapshot's fields list excludes system fields. Its coreFields list contains all existing ProcessWire system fields marked system=true. A system field may be added to a planned template with disposition reuse, its exact type, and its relevant snapshot settings; it must never use create or update.
 
-	Use stable field/template names and page keys, never database IDs. Disposition create requires absence, reuse means no changes, and update means modify an existing resource. A reuse page cannot have values or contentBrief. Page names need only be unique among siblings. Every template field must reference fields[]. For reused templates, list only fields used by planned pages; do not copy every existing assignment from the snapshot, because omitted assignments remain untouched. Every new front-end template needs exactly one role=template file; an existing template may rely on its existing file when that file will not change. Data-only templates do not need template files. File paths are limited to site/templates/, site/classes/, site/modules/, and the exact files site/ready.php and site/init.php. File roles are init, main, template, pageClass, stylesheet, script, module, ready, siteInit, admin, or include. Files allow only create or update; omit existing files that will not be written.
+	Use stable field/template names and page keys, never database IDs. Disposition create requires absence, reuse means no changes, and update means modify an existing resource. New field names must not use native Page properties such as published, created, modified, status, name, parent, template, sort, or id. For FieldtypeDatetime, HTML input types are date, time, or datetime (not datetime-local); use datetime when collecting date and time together. A reuse page cannot have values or contentBrief. Page names need only be unique among siblings. Every template field must reference fields[]. For reused templates, list only fields used by planned pages; do not copy every existing assignment from the snapshot, because omitted assignments remain untouched. Every new front-end template needs exactly one role=template file; an existing template may rely on its existing file when that file will not change. Data-only templates do not need template files. File paths are limited to site/templates/, site/classes/, site/modules/, and the exact files site/ready.php and site/init.php. File roles are init, main, template, pageClass, stylesheet, script, module, ready, siteInit, admin, or include. Files allow only create or update; omit existing files that will not be written.
 
 	A plan with a visual design must include a role=stylesheet file. When profileNotes names a primary stylesheet such as site/templates/styles/main.css, include that exact file with create or update as appropriate so all planned styling work is approved before the build begins.
 
@@ -176,7 +176,7 @@ allowedParents and allowedChildren are the only family controls. null preserves 
 
 Hooks shared by front end and admin belong in site/ready.php or site/init.php; front-end-only hooks in site/templates/_init.php; admin-only hooks in site/templates/admin.php. Do not generate a module solely to hold hooks. Generated templates use markup regions with _init.php prepended and _main.php appended. With usePageClasses enabled, follow ProcessWire template-name Page-class conventions. Image uploads are outside version 1. When profileNotes documents an image helper, plan to render every image through that helper and design around the image area it returns, including placeholders; the layout must still work when placeholders are disabled and the helper returns nothing. Without a documented image helper, avoid warnings and broken image markup and make layouts look complete without an image. Omit empty optional values rather than casting them into visible placeholders such as 0.
 
-	Keep short reviewable values in pages[].values. Put long content intent in contentBrief, as an object keyed by field name, so it can be authored during build. verification may be omitted or contain routes, adminPages, and checks; missing routes and representative admin pages are derived automatically. Ensure the plan is internally consistent and leave openQuestions empty when it is ready for approval.
+	Keep short reviewable values in pages[].values. Put long content intent in contentBrief, as an object keyed by field name, so it can be authored during build. Every field needed for a useful page, especially dates and authors, must have either a value or a contentBrief entry. verification may be omitted or contain routes, adminPages, and checks; missing routes and representative admin pages are derived automatically. Ensure the plan is internally consistent and leave openQuestions empty when it is ready for approval.
 
 	Follow this compact shape example (example names are illustrative; use the supplied snapshot and user request for the actual plan):
 	{
@@ -331,6 +331,9 @@ PROMPT;
 		foreach($fields as $name => $item) {
 			if($this->wire()->sanitizer->fieldName($name) !== $name) $errors[] = "Invalid field name: $name.";
 			$disposition = $this->validateDisposition($item, "field $name", $errors);
+			if($disposition === 'create' && $this->wire()->fields->isNative($name)) {
+				$errors[] = "Field name $name is reserved by ProcessWire. Choose a different name (e.g. {$name}_date).";
+			}
 			$typeName = $this->normalizeFieldtypeName((string) ($item['type'] ?? ''));
 			if($typeName === '') {
 				$errors[] = "Field $name is missing type.";
@@ -372,6 +375,9 @@ PROMPT;
 				$errors[] = "TinyMCE field $name must set contentType to at least 1.";
 			}
 			if(($settings['inputfieldClass'] ?? '') === 'InputfieldCKEditor') $errors[] = "Field $name must use InputfieldTinyMCE rather than CKEditor.";
+			if($typeName === 'FieldtypeDatetime' && array_key_exists('htmlType', $settings) && !in_array($settings['htmlType'], ['date', 'time', 'datetime'], true)) {
+				$errors[] = "Datetime field $name htmlType must be date, time, or datetime.";
+			}
 
 			$existing = $this->wire()->fields->get($name);
 			if($existing && $existing->id && ($existing->flags & Field::flagSystem) && $disposition !== 'reuse') {
@@ -642,9 +648,47 @@ PROMPT;
 		$allowed = $this->getFieldProperties($fieldtype);
 		foreach(array_keys($field['settings']) as $property) {
 			if(isset($allowed[$property])) continue;
+			$replacement = $this->normalizeFieldPropertyName($property, $typeName, $allowed);
+			if($replacement !== '') {
+				if(!array_key_exists($replacement, $field['settings'])) $field['settings'][$replacement] = $field['settings'][$property];
+				unset($field['settings'][$property]);
+				$warnings[] = "Renamed setting $property to $replacement on field $name ($typeName).";
+				continue;
+			}
 			unset($field['settings'][$property]);
 			$warnings[] = "Dropped unknown setting $property from field $name ($typeName).";
 		}
+		if($typeName === 'FieldtypeDatetime' && ($field['disposition'] ?? '') === 'create') {
+			$field = $this->normalizeCreatedDatetimeSettings($field, $warnings);
+		}
+		return $field;
+	}
+
+	/** @param array<string,mixed> $field @param string[] $warnings @return array<string,mixed> */
+	protected function normalizeCreatedDatetimeSettings(array $field, array &$warnings): array {
+		$name = (string) ($field['name'] ?? 'datetime');
+		$settings = (array) ($field['settings'] ?? []);
+		if(array_key_exists('inputType', $settings)) {
+			if($settings['inputType'] === 'html' && !array_key_exists('htmlType', $settings)) {
+				$settings['htmlType'] = !empty($settings['timeInputFormat']) ? 'datetime' : 'date';
+				$warnings[] = "Added htmlType {$settings['htmlType']} to created Datetime field $name.";
+			}
+			$field['settings'] = $settings;
+			return $field;
+		}
+		if(array_key_exists('htmlType', $settings)) {
+			$settings['inputType'] = 'html';
+			$warnings[] = "Added inputType html to created Datetime field $name with explicit htmlType.";
+		} else if(!empty($settings['timeInputFormat']) && !array_key_exists('datepicker', $settings) && !array_key_exists('dateInputFormat', $settings)) {
+			$settings['inputType'] = 'html';
+			$settings['htmlType'] = 'datetime';
+			$warnings[] = "Added HTML datetime input defaults to created Datetime field $name.";
+		} else if(!array_intersect(['datepicker', 'dateInputFormat', 'timeInputFormat'], array_keys($settings))) {
+			$settings['inputType'] = 'html';
+			$settings['htmlType'] = 'date';
+			$warnings[] = "Added HTML date input defaults to created Datetime field $name.";
+		}
+		$field['settings'] = $settings;
 		return $field;
 	}
 
@@ -657,10 +701,34 @@ PROMPT;
 		$allowed = $this->getFieldProperties($fieldtype);
 		foreach(array_keys($context['settings']) as $property) {
 			if(isset($allowed[$property])) continue;
+			$replacement = $this->normalizeFieldPropertyName($property, $typeName, $allowed);
+			if($replacement !== '') {
+				if(!array_key_exists($replacement, $context['settings'])) $context['settings'][$replacement] = $context['settings'][$property];
+				unset($context['settings'][$property]);
+				$warnings[] = "Renamed context setting $property to $replacement on template field $fieldName ($typeName).";
+				continue;
+			}
 			unset($context['settings'][$property]);
 			$warnings[] = "Dropped unknown context setting $property from template field $fieldName ($typeName).";
 		}
 		return $context;
+	}
+
+	/** @param array<string,bool> $allowed */
+	protected function normalizeFieldPropertyName(string $property, string $typeName, array $allowed): string {
+		$aliases = [
+			'FieldtypeDatetime' => [
+				'outputformat' => 'dateOutputFormat',
+			],
+		];
+		$lower = strtolower($property);
+		$replacement = (string) ($aliases[$typeName][$lower] ?? '');
+		if($replacement !== '' && isset($allowed[$replacement])) return $replacement;
+		$matches = [];
+		foreach(array_keys($allowed) as $candidate) {
+			if(strtolower($candidate) === $lower) $matches[] = $candidate;
+		}
+		return count($matches) === 1 ? (string) reset($matches) : '';
 	}
 
 	/** @return array<string,bool> */

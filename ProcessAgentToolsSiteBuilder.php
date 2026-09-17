@@ -351,6 +351,7 @@ class ProcessAgentToolsSiteBuilder extends ProcessAgentToolsHelper {
 		$raw->icon = 'code';
 		$raw->collapsed = Inputfield::collapsedYes;
 		$raw->value = $this->pre(json_encode($plan, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
+		$raw->themeOffset = 1;
 		$form->add($raw);
 		return $form->render();
 	}
@@ -416,6 +417,7 @@ class ProcessAgentToolsSiteBuilder extends ProcessAgentToolsHelper {
 		foreach($attrs as $name => $value) $attr .= ' ' . $name . '="' . htmlspecialchars($value, ENT_QUOTES, 'UTF-8') . '"';
 
 		$f = $form->InputfieldMarkup;
+		$f->description = $this->_('Please be patient, this may take awhile.');
 		$f->label = $this->_('Building and verifying your site');
 		$f->icon = 'magic';
 		$f->value = '<div' . $attr . '>' .

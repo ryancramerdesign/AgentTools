@@ -314,10 +314,40 @@ class WireTest_AgentTools extends WireTest {
 			$this->check('Site Builder normalization assigns known ProcessWire file roles', 'main', $normalizedFixture['files'][0]['role']);
 			$this->check('Site Builder normalization drops undocumented field settings', false, isset($normalizedFixture['fields'][1]['settings']['inputfieldClass']));
 			$this->check('Site Builder normalization reports dropped field settings', true, in_array('Dropped unknown setting inputfieldClass from field project_year (FieldtypeInteger).', $normalizationWarnings, true));
+			$repairWarnings = [];
+			$repairFixture = $plans->normalize(['fields' => [
+				['name' => 'author', 'type' => 'FieldtypeText', 'settings' => ['maxLength' => 120]],
+				['name' => 'published_date', 'type' => 'FieldtypeDatetime', 'settings' => ['outputFormat' => 'Y-m-d']],
+			]], $repairWarnings);
+			$this->check('Site Builder repairs case-only field setting names', 120, $repairFixture['fields'][0]['settings']['maxlength'] ?? 0);
+			$this->check('Site Builder repairs known Fieldtype setting aliases', 'Y-m-d', $repairFixture['fields'][1]['settings']['dateOutputFormat'] ?? '');
+			$this->check('Site Builder reports repaired case-only setting names', true, in_array('Renamed setting maxLength to maxlength on field author (FieldtypeText).', $repairWarnings, true));
+			$this->check('Site Builder reports repaired Fieldtype setting aliases', true, in_array('Renamed setting outputFormat to dateOutputFormat on field published_date (FieldtypeDatetime).', $repairWarnings, true));
+			$datetimeWarnings = [];
+			$datetimeFixture = $plans->normalize(['fields' => [
+				['name' => 'new_date', 'disposition' => 'create', 'type' => 'FieldtypeDatetime', 'settings' => []],
+				['name' => 'new_datetime', 'disposition' => 'create', 'type' => 'FieldtypeDatetime', 'settings' => ['timeInputFormat' => 'H:i']],
+				['name' => 'picker_date', 'disposition' => 'create', 'type' => 'FieldtypeDatetime', 'settings' => ['datepicker' => 3, 'dateInputFormat' => 'Y-m-d']],
+				['name' => 'reused_date', 'disposition' => 'reuse', 'type' => 'FieldtypeDatetime', 'settings' => []],
+				['name' => 'updated_date', 'disposition' => 'update', 'type' => 'FieldtypeDatetime', 'settings' => []],
+			]], $datetimeWarnings);
+			$this->check('Site Builder defaults untouched created Datetime fields to HTML date', ['inputType' => 'html', 'htmlType' => 'date'], $datetimeFixture['fields'][0]['settings']);
+			$this->check('Site Builder defaults lone time formats to HTML datetime', ['timeInputFormat' => 'H:i', 'inputType' => 'html', 'htmlType' => 'datetime'], $datetimeFixture['fields'][1]['settings']);
+			$this->check('Site Builder preserves explicit Datetime picker settings', ['datepicker' => 3, 'dateInputFormat' => 'Y-m-d'], $datetimeFixture['fields'][2]['settings']);
+			$this->check('Site Builder does not default reused Datetime fields', [], $datetimeFixture['fields'][3]['settings']);
+			$this->check('Site Builder does not default updated Datetime fields', [], $datetimeFixture['fields'][4]['settings']);
+			$this->check('Site Builder reports created Datetime input defaults', true, in_array('Added HTML date input defaults to created Datetime field new_date.', $datetimeWarnings, true));
 			$builderDefaults = $this->invokeProtected($builder, 'normalizeOptions', [[]]);
 			$this->check('Site Builder default planning token limit is generous', AgentToolsSiteBuilder::defaultPlanTokenLimit, $builderDefaults['planTokenLimit']);
 			$this->check('Site Builder default build token limit is generous', AgentToolsSiteBuilder::defaultBuildTokenLimit, $builderDefaults['buildTokenLimit']);
 			$this->check('Site Builder default verification token limit is generous', AgentToolsSiteBuilder::defaultVerifyTokenLimit, $builderDefaults['verifyTokenLimit']);
+			$planningPrompt = $plans->getSystemPrompt();
+			$this->check('Site Builder planner warns about native field names', true, strpos($planningPrompt, 'New field names must not use native Page properties') !== false);
+			$this->check('Site Builder planner uses ProcessWire Datetime HTML types', true, strpos($planningPrompt, 'date, time, or datetime (not datetime-local)') !== false);
+			$this->check('Site Builder planner requires values or briefs for useful page fields', true, strpos($planningPrompt, 'must have either a value or a contentBrief entry') !== false);
+			$this->check('Engineer retries provider rate limits', true, $this->invokeProtected($at->engineer(), 'isRetryableHttpCode', [429]));
+			$this->check('Engineer retries provider server errors', true, $this->invokeProtected($at->engineer(), 'isRetryableHttpCode', [500]));
+			$this->check('Engineer does not retry ordinary client errors', false, $this->invokeProtected($at->engineer(), 'isRetryableHttpCode', [400]));
 			$budgetState = [
 				'options' => ['planRoundLimit' => 1, 'planTokenLimit' => 1000],
 				'phaseRounds' => ['plan' => 1],
@@ -327,6 +357,58 @@ class WireTest_AgentTools extends WireTest {
 			$this->check('Site Builder enforces planning budget', true, $this->invokeProtected($builder, 'isBudgetReached', $budgetArgs));
 			$this->check('Site Builder planning budget pauses the session', 'paused', $budgetState['status']);
 			$this->check('Site Builder accepts deterministic fixture plan', [], $builder->validatePlan($plan));
+			$reservedPlan = $plan;
+			$reservedPlan['fields'][] = [
+				'name' => 'published', 'disposition' => 'create', 'type' => 'FieldtypeDatetime',
+				'label' => 'Published', 'summary' => 'Reserved field test.', 'settings' => [],
+			];
+			$reservedErrors = $builder->validatePlan($reservedPlan);
+			$this->check('Site Builder rejects native field names during planning', true, in_array('Field name published is reserved by ProcessWire. Choose a different name (e.g. published_date).', $reservedErrors, true));
+			$invalidDatetimePlan = $plan;
+			$invalidDatetimePlan['fields'][] = [
+				'name' => $fieldName . '_date', 'disposition' => 'create', 'type' => 'FieldtypeDatetime',
+				'label' => 'Date', 'summary' => 'Invalid Datetime HTML type test.',
+				'settings' => ['inputType' => 'html', 'htmlType' => 'datetime-local'],
+			];
+			$invalidDatetimeErrors = $builder->validatePlan($invalidDatetimePlan);
+			$this->check('Site Builder rejects unsupported Datetime HTML types', true, in_array("Datetime field {$fieldName}_date htmlType must be date, time, or datetime.", $invalidDatetimeErrors, true));
+
+			$planFailureSession = new AgentToolsSiteBuilderSession($at);
+			$this->wire($planFailureSession);
+			try {
+				$this->check('Site Builder plan-failure session obtains lock', true, $planFailureSession->lock(360));
+				$planFailureId = $planFailureSession->getId();
+				$planFailureState = [
+					'id' => $planFailureId,
+					'phase' => AgentToolsSiteBuilder::phaseBuild,
+					'status' => 'running',
+					'plan' => $reservedPlan,
+					'planApproved' => true,
+					'planErrors' => [],
+					'revisionRequest' => '',
+					'engineerSessionId' => 'test-build-session',
+					'engineerRound' => 1,
+					'engineerTokenUsage' => [],
+					'consecutiveToolFailures' => 0,
+					'pageIds' => [],
+				];
+				$planFailureSession->save($planFailureState);
+				$planFailureManifest = $this->invokeProtected($builder, 'newManifest', [$planFailureId]);
+				$planFailureSession->saveManifest($planFailureManifest);
+				$planFailureTools = new AgentToolsSiteBuilderTools($at, $planFailureSession, $plans);
+				$this->wire($planFailureTools);
+				$planFailureResult = $planFailureTools->execute('create_fields', ['names' => ['published']]);
+				$this->check('Site Builder marks non-retryable field build errors as plan errors', true, !empty($planFailureResult['planError']));
+				$planFailureArgs = [$planFailureSession, &$planFailureState, (string) $planFailureResult['error']];
+				$this->invokeProtected($builder, 'returnBuildFailureToPlanning', $planFailureArgs);
+				$this->check('Site Builder returns non-retryable build failures to planning', AgentToolsSiteBuilder::phasePlan, $planFailureState['phase']);
+				$this->check('Site Builder unapproves a failed build plan', false, $planFailureState['planApproved']);
+				$this->check('Site Builder carries build failure into plan revision', true, strpos($planFailureState['revisionRequest'], (string) $planFailureResult['error']) !== false);
+				$this->check('Site Builder archives rolled-back failed build manifest', 1, count($planFailureSession->loadManifest()['rollbackHistory']));
+			} finally {
+				$planFailureSession->unlock();
+				$this->wire()->files->rmdir($planFailureSession->getPath(), true);
+			}
 			$uninstalledType = '';
 			$uninstalledFieldtype = null;
 			foreach(array_keys($this->wire()->modules->getInstallable()) as $moduleName) {
@@ -629,14 +711,23 @@ class WireTest_AgentTools extends WireTest {
 			$this->check('Site Builder creates approved field', 'created', $fieldsResult['fields'][$fieldName]);
 			$templatesResult = $builder->executeBuildTool($sessionId, 'create_templates', ['names' => [$templateName]]);
 			$this->check('Site Builder creates approved template', 'created', $templatesResult['templates'][$templateName]);
-			$badPagesResult = $builder->executeBuildTool($sessionId, 'create_pages', ['pages' => [['key' => 'fixture', 'content' => ['title' => 'Generated title']]]]);
-			$this->check('Site Builder returns correctable page validation error', false, $badPagesResult['ok']);
-			$this->check('Site Builder page validation names unapproved generated field', true, strpos((string) $badPagesResult['error'], 'Generated content field title') !== false);
-			$badPagesResult = $builder->executeBuildTool($sessionId, 'create_pages', ['pages' => [['key' => 'fixture'], ['key' => 'not-in-approved-plan']]]);
-			$this->check('Site Builder rejects invalid page batch without throwing', false, $badPagesResult['ok']);
-			$this->check('Site Builder validates full page call before mutation', 0, (int) $this->wire()->pages->get("parent=1, name=$pageName, include=all")->id);
+			$pageBatchResult = $builder->executeBuildTool($sessionId, 'create_pages', ['pages' => [
+				['key' => 'fixture', 'content' => ['title' => 'Generated title']],
+				['key' => 'not-in-approved-plan'],
+			]]);
+			$this->check('Site Builder reports partial page batch errors', false, $pageBatchResult['ok']);
+			$this->check('Site Builder processes valid pages in a partial batch', 'created', $pageBatchResult['pages']['fixture']);
+			$this->check('Site Builder ignores generated content already in plan values', 'set from approved plan values', $pageBatchResult['ignored']['fixture']['title'] ?? '');
+			$this->check('Site Builder reports only the invalid page in a partial batch', true, isset($pageBatchResult['errors']['not-in-approved-plan']));
+			$createdFixture = $this->wire()->pages->get("parent=1, name=$pageName, include=all");
+			$this->check('Site Builder approved page value wins over ignored content', 'Builder fixture', (string) $createdFixture->title);
+			$badPagesResult = $builder->executeBuildTool($sessionId, 'create_pages', ['pages' => [[
+				'key' => 'fixture', 'content' => ['published_date' => '2026-09-17'],
+			]]]);
+			$this->check('Site Builder returns genuine unplanned page content as an error', false, $badPagesResult['ok']);
+			$this->check('Site Builder identifies content absent from values and contentBrief', true, strpos((string) ($badPagesResult['errors']['fixture'] ?? ''), 'neither page fixture values nor contentBrief') !== false);
 			$pagesResult = $builder->executeBuildTool($sessionId, 'create_pages', ['pages' => [['key' => 'fixture']]]);
-			$this->check('Site Builder creates approved page', 'created', $pagesResult['pages']['fixture']);
+			$this->check('Site Builder recognizes the already completed approved page', 'already complete', $pagesResult['pages']['fixture']);
 			$fileResult = $builder->executeBuildTool($sessionId, 'write_file', [
 				'path' => $filePath,
 				'content' => '<?php namespace ProcessWire; ?><h1><?= $page->title ?></h1>',
