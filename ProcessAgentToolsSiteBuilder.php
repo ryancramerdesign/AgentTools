@@ -583,6 +583,14 @@ class ProcessAgentToolsSiteBuilder extends ProcessAgentToolsHelper {
 			'</p>';
 		$form->add($f);
 
+		$f = $form->InputfieldMarkup;
+		$f->label = $this->_('AI usage');
+		$f->icon = 'tachometer';
+		$f->collapsed = Inputfield::collapsedYes;
+		$f->themeOffset = 1;
+		$f->value = $this->renderTokenUsageSummary($state);
+		$form->add($f);
+
 		$buildResponse = trim((string) ($state['buildResponse'] ?? ''));
 		if($buildResponse !== '') {
 			$f = $form->InputfieldMarkup;
@@ -666,16 +674,52 @@ class ProcessAgentToolsSiteBuilder extends ProcessAgentToolsHelper {
 		return $form->render();
 	}
 
-	/** Render stored agent or user prose as encoded paragraphs and line breaks only. */
+	/** Render stored agent or user prose as safe Markdown. */
 	protected function renderAgentText(string $text): string {
-		$text = trim(str_replace(["\r\n", "\r"], "\n", $text));
+		$text = trim($text);
 		if($text === '') return '<p class="detail">' . $this->_('No reply was recorded.') . '</p>';
-		$paragraphs = preg_split('/\n{2,}/', $text) ?: [$text];
-		$out = '';
-		foreach($paragraphs as $paragraph) {
-			$out .= '<p>' . nl2br($this->wire()->sanitizer->entities(trim($paragraph)), false) . '</p>';
+		return $this->at->markdownToHtml($text);
+	}
+
+	/** Render provider-reported token usage and cache reuse by phase. */
+	protected function renderTokenUsageSummary(array $state): string {
+		$s = $this->wire()->sanitizer;
+		$agent = $this->at->getAgents()->getById((string) ($state['options']['agentId'] ?? ''));
+		$isAnthropic = $agent && $agent->provider === AgentToolsEngineer::providerAnthropic;
+		$phases = (array) ($state['phaseTokenUsage'] ?? []);
+		$phases['total'] = (array) ($state['tokenUsage'] ?? []);
+		$labels = [
+			AgentToolsSiteBuilder::phasePlan => $this->_('Plan'),
+			AgentToolsSiteBuilder::phaseBuild => $this->_('Build'),
+			AgentToolsSiteBuilder::phaseRefine => $this->_('Refine'),
+			AgentToolsSiteBuilder::phaseVerify => $this->_('Verify'),
+			'total' => $this->_('Total'),
+		];
+		$out = '<div class="uk-overflow-auto"><table class="uk-table uk-table-divider uk-table-small"><thead><tr>' .
+			'<th>' . $this->_('Phase') . '</th><th>' . $this->_('Requests') . '</th>' .
+			'<th>' . $this->_('Input') . '</th><th>' . $this->_('Output') . '</th>' .
+			'<th>' . $this->_('Cache read') . '</th><th>' . $this->_('Cache write') . '</th>' .
+			'<th>' . $this->_('Cache reuse') . '</th></tr></thead><tbody>';
+		foreach($labels as $phase => $label) {
+			$usage = (array) ($phases[$phase] ?? []);
+			$requests = (int) ($usage['requests'] ?? 0);
+			if($phase !== 'total' && $requests < 1) continue;
+			$input = (int) ($usage['input'] ?? 0);
+			$cacheRead = (int) ($usage['cacheRead'] ?? 0);
+			$cacheWrite = (int) ($usage['cacheWrite'] ?? 0);
+			$cacheBase = $isAnthropic ? $input + $cacheRead + $cacheWrite : $input;
+			$cacheRate = $cacheBase > 0 ? round(($cacheRead / $cacheBase) * 100) . '%' : '0%';
+			$out .= '<tr><th>' . $s->entities($label) . '</th>' .
+				'<td>' . number_format($requests) . '</td>' .
+				'<td>' . number_format($input) . '</td>' .
+				'<td>' . number_format((int) ($usage['output'] ?? 0)) . '</td>' .
+				'<td>' . number_format($cacheRead) . '</td>' .
+				'<td>' . number_format($cacheWrite) . '</td>' .
+				'<td>' . $cacheRate . '</td></tr>';
 		}
-		return $out;
+		return $out . '</tbody></table></div><p class="notes">' .
+			$this->_('Provider-reported token counts. Cached tokens are included in the total shown above but may be priced differently.') .
+			'</p>';
 	}
 
 	/** @return InputfieldForm */

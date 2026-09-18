@@ -576,7 +576,7 @@ class AgentToolsSiteBuilder extends AgentToolsHelper {
 			}
 			$state['status'] = 'continue';
 			if($this->isBudgetReached($state, self::phasePlan)) return;
-			$this->addMessage($session, $state, $this->_('The plan needs correction; another planning round is ready.'), 'warning');
+			$this->addMessage($session, $state, $this->_('The plan needs correction; Site Builder is self-correcting in another planning round.'), 'warning');
 			return;
 		}
 		$state['plan'] = $plan;
@@ -781,6 +781,7 @@ class AgentToolsSiteBuilder extends AgentToolsHelper {
 			'timeout' => (int) $this->at->get('engineer_request_timeout'),
 			'traceType' => 'site-builder-' . $phase,
 			'cacheInitialMessage' => $provider === AgentToolsEngineer::providerAnthropic,
+			'cacheRollingMessage' => $provider === AgentToolsEngineer::providerAnthropic,
 		];
 		if($phase === self::phasePlan && $provider === AgentToolsEngineer::providerAnthropic) {
 			$result['anthropic'] = ['max_tokens' => self::planMaxTokens];
@@ -824,7 +825,7 @@ class AgentToolsSiteBuilder extends AgentToolsHelper {
 				'parameters' => ['type' => 'object', 'properties' => ['names' => $nameList], 'required' => ['names']],
 			],
 			'create_pages' => [
-				'description' => "Create or update approved plan pages. content is only for fields listed in each page's contentBrief. Fields in the plan's values are applied automatically; do not include them. Include parents before children when practical.",
+				'description' => "Create or update approved plan pages. content must include every field listed in each page's contentBrief and no others. Fields in the plan's values are applied automatically; do not include them. Include parents before children when practical.",
 				'parameters' => [
 					'type' => 'object',
 					'properties' => ['pages' => [
@@ -931,7 +932,11 @@ class AgentToolsSiteBuilder extends AgentToolsHelper {
 		$state['planAttempts'] = (int) ($state['planAttempts'] ?? 0) + 1;
 		$state['planErrors'] = array_values($errors);
 		$file = $session->savePlanAttempt((int) $state['planAttempts'], $plan, $errors, $response);
-		$this->log($session, $state, sprintf($this->_('Plan attempt %d failed validation.'), $state['planAttempts']), 'plan-error', [
+		$firstError = trim((string) ($errors[0] ?? $this->_('Unknown validation error.')));
+		if(mb_strlen($firstError) > 240) $firstError = mb_substr($firstError, 0, 237) . '...';
+		$message = sprintf($this->_('Plan attempt %1$d failed validation; Site Builder is self-correcting: %2$s'), $state['planAttempts'], $firstError);
+		if(count($errors) > 1) $message .= ' ' . sprintf($this->_('(%d more)'), count($errors) - 1);
+		$this->log($session, $state, $message, 'plan-error', [
 			'attempt' => (int) $state['planAttempts'],
 			'errors' => array_values($errors),
 			'planFile' => $file,
@@ -970,7 +975,7 @@ Never use eval_php to create or modify planned fields, templates, pages, files, 
 
 A manifest item with status complete is already done. Never repeat create_fields, create_templates, create_pages, install_modules, or write_file for a complete item during the build phase. An unchanged write_file result confirms the file is already correct; do not submit it again. Completed files may be rewritten only during verification when a verification result identifies a problem.
 
-Before a final response, compare your work with the complete plan. If anything remains, call tools rather than merely describing what should happen. Keep prose and progress reports concise.
+Batch compatible resources into one tool call, and issue independent tool calls together when possible. Before a final response, compare your work with the complete plan. If anything remains, call tools rather than merely describing what should happen. Keep prose and progress reports concise.
 PROMPT;
 	}
 

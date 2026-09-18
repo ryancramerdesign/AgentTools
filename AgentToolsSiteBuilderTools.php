@@ -328,6 +328,8 @@ class AgentToolsSiteBuilderTools extends Wire {
 			$item = $map[$key];
 			$brief = (array) ($item['contentBrief'] ?? []);
 			$values = (array) ($item['values'] ?? []);
+			$existing = $this->findManifestItem('pages', $key);
+			$alreadyComplete = $existing && ($existing['status'] ?? '') === 'complete';
 			$pageErrors = [];
 			foreach($content as $fieldName => $value) {
 				if(array_key_exists($fieldName, $values)) {
@@ -339,6 +341,11 @@ class AgentToolsSiteBuilderTools extends Wire {
 					$pageErrors[] = "Generated content field $fieldName is in neither page $key values nor contentBrief.";
 				} else if(!is_string($value)) {
 					$pageErrors[] = "Generated content field $fieldName for page $key must be a string.";
+				}
+			}
+			if(!$alreadyComplete) {
+				foreach(array_keys($brief) as $fieldName) {
+					if(!array_key_exists($fieldName, $content)) $pageErrors[] = "Generated content field $fieldName is required by page $key contentBrief.";
 				}
 			}
 			if($pageErrors) {
@@ -364,7 +371,6 @@ class AgentToolsSiteBuilderTools extends Wire {
 				unset($requested[$key]);
 				continue;
 			}
-			$existing = $this->findManifestItem('pages', $key);
 			if($disposition === 'create' && $page && $page->id && !$existing) {
 				$errors[$key] = "Page $key already exists but the plan says create.";
 				unset($requested[$key]);

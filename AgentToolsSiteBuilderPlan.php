@@ -739,6 +739,7 @@ PROMPT;
 	protected function normalizeFieldPropertyName(string $property, string $typeName, array $allowed): string {
 		$aliases = [
 			'FieldtypeDatetime' => [
+				'htmlinputtype' => 'htmlType',
 				'outputformat' => 'dateOutputFormat',
 			],
 			'FieldtypePage' => [

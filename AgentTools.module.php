@@ -54,7 +54,7 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 			'title' => 'Agent Tools',
 			'summary' => "Enables AI coding agents to access ProcessWire's API and provides a database migration system.",
 			'icon' => 'at',
-			'version' => 35,
+			'version' => 36,
 			'author' => 'Ryan Cramer, Claude (Anthropic), GPT 5.5 Codex',
 			'requires' => 'ProcessWire>=3.0.255, PHP>=8.0.0',
 			'installs' => 'ProcessAgentTools, FieldtypePageEngineer',
@@ -1081,6 +1081,67 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 	}
 
 	/**
+	 * Configure the primary agent from installer or API-provided settings.
+	 *
+	 * Existing secondary agents are preserved. The provider is applied after the
+	 * API key because AgentToolsAgent otherwise infers it from recognized keys.
+	 *
+	 * @param array<string,mixed> $settings
+	 * @return AgentToolsAgent
+	 * @throws WireException
+	 *
+	 */
+	public function configurePrimaryAgent(array $settings): AgentToolsAgent {
+		$apiKey = trim((string) ($settings['apiKey'] ?? ''));
+		$model = trim((string) ($settings['model'] ?? ''));
+		if($apiKey === '' || $model === '') {
+			throw new WireException($this->_('An API key and model are required to configure the primary agent.'));
+		}
+
+		$current = $this->getAgents();
+		$previous = $current->first();
+		$agent = new AgentToolsAgent([
+			'model' => $model,
+			'apiKey' => $apiKey,
+			'endpointUrl' => trim((string) ($settings['endpoint'] ?? '')),
+			'label' => trim((string) ($settings['label'] ?? '')),
+			'id' => $previous ? (string) $previous->id : '',
+		]);
+		$this->wire($agent);
+		$provider = strtolower(trim((string) ($settings['provider'] ?? '')));
+		if(in_array($provider, [AgentToolsEngineer::providerAnthropic, AgentToolsEngineer::providerOpenAI], true)) {
+			$agent->provider = $provider;
+		}
+
+		$agents = new AgentToolsAgents();
+		$this->wire($agents);
+		$agents->add($agent);
+		$skipPrimary = true;
+		foreach($current as $existing) {
+			if($skipPrimary) {
+				$skipPrimary = false;
+				continue;
+			}
+			$agents->add($existing);
+		}
+		$agents->ensureIds();
+
+		$data = $this->wire()->modules->getConfig('AgentTools');
+		$data['engineer_provider'] = (string) $agent->provider;
+		$data['engineer_api_key'] = (string) $agent->apiKey;
+		$data['engineer_model'] = (string) $agent->model;
+		$data['engineer_endpoint'] = (string) $agent->endpointUrl;
+		$data['engineer_label'] = (string) $agent->label;
+		$data['engineer_additional_models'] = $agents->getString();
+		$this->wire()->modules->saveConfig($this, $data);
+		foreach($data as $key => $value) {
+			if(strpos((string) $key, 'engineer_') === 0) $this->set($key, $value);
+		}
+		$this->agents = $agents;
+		return $agent;
+	}
+
+	/**
 	 * Get all defined agents
 	 *
 	 * First agent is the primary
@@ -1249,6 +1310,15 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 	public function install() {
 		$this->getFilesPath(); // creates site/assets/at/
 		$this->getFilesPath('migrations'); // creates site/assets/at/migrations/
+		$cache = $this->wire()->cache;
+		$settings = $cache->get('AgentTools.installerSettings');
+		if(!is_array($settings)) return;
+		$cache->delete('AgentTools.installerSettings');
+		if(empty($settings['apiKey'])) return;
+		$primary = $this->getPrimaryAgent();
+		if($primary && trim((string) $primary->apiKey) !== '') return;
+		$this->configurePrimaryAgent($settings);
+		$this->message($this->_('Applied the AI provider settings entered during installation.'));
 	}
 
 	/**

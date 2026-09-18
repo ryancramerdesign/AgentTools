@@ -143,6 +143,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	 *  - `onInterrupt` (string): 'stop' (default) or 'resume' after an interrupted tool call
 	 *  - `maxInterruptions` (int): Consecutive interruption limit in resume mode (default: 3)
 	 *  - `cacheInitialMessage` (bool): Add an Anthropic cache breakpoint to the first user message
+	 *  - `cacheRollingMessage` (bool): Move an Anthropic cache breakpoint to the newest message each round
 	 * @return array [ 'response' => string, 'migration' => string|null, 'error' => string|null, 'history' => array ]
 	 *
 	 */
@@ -752,7 +753,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	 */
 	protected function getProviderRequestOptions(array $options): array {
 		$result = [];
-		foreach(['timeout', 'anthropic', 'openai', 'cacheInitialMessage'] as $key) {
+		foreach(['timeout', 'anthropic', 'openai', 'cacheInitialMessage', 'cacheRollingMessage'] as $key) {
 			if(array_key_exists($key, $options)) $result[$key] = $options[$key];
 		}
 		return $result;
@@ -2260,6 +2261,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	 */
 	protected function sendAnthropicRequest(AgentToolsRequest $request): array {
 		$cache = ['type' => 'ephemeral', 'ttl' => '1h'];
+		$rollingCache = ['type' => 'ephemeral'];
 		$options = $request->options;
 		$tools = $request->tools;
 		$messages = $request->messages;
@@ -2275,9 +2277,8 @@ class AgentToolsEngineer extends AgentToolsHelper {
 		if(!empty($tools)) {
 			$tools[count($tools) - 1]['cache_control'] = $cache;
 		}
-		if(!empty($options['cacheInitialMessage'])) {
-			$messages = $this->cacheAnthropicInitialMessage($messages, $cache);
-		}
+		if(!empty($options['cacheRollingMessage'])) $messages = $this->cacheAnthropicRollingMessage($messages, $rollingCache);
+		if(!empty($options['cacheInitialMessage'])) $messages = $this->cacheAnthropicInitialMessage($messages, $cache);
 
 		$payload = [
 			'model' => $request->model,
@@ -2334,6 +2335,50 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			if(!is_array($content)) continue;
 			for($n = count($content) - 1; $n >= 0; $n--) {
 				if(!is_array($content[$n]) || ($content[$n]['type'] ?? '') !== 'text' || empty($content[$n]['text'])) continue;
+				$content[$n]['cache_control'] = $cache;
+				$messages[$index]['content'] = $content;
+				break 2;
+			}
+		}
+		return $messages;
+	}
+
+	/**
+	 * Move the rolling cache breakpoint to the final message content block.
+	 *
+	 * Message-level breakpoints from an earlier request are removed first. The
+	 * stable initial-message breakpoint, when enabled, is added afterward.
+	 *
+	 * @param array $messages
+	 * @param array $cache
+	 * @return array
+	 *
+	 */
+	protected function cacheAnthropicRollingMessage(array $messages, array $cache): array {
+		foreach($messages as $index => $message) {
+			$content = $message['content'] ?? null;
+			if(!is_array($content)) continue;
+			foreach($content as $n => $block) {
+				if(!is_array($block) || !isset($block['cache_control'])) continue;
+				unset($content[$n]['cache_control']);
+			}
+			$messages[$index]['content'] = $content;
+		}
+
+		for($index = count($messages) - 1; $index >= 0; $index--) {
+			$content = $messages[$index]['content'] ?? '';
+			if(is_string($content)) {
+				if($content === '') continue;
+				$messages[$index]['content'] = [[
+					'type' => 'text',
+					'text' => $content,
+					'cache_control' => $cache,
+				]];
+				break;
+			}
+			if(!is_array($content)) continue;
+			for($n = count($content) - 1; $n >= 0; $n--) {
+				if(!is_array($content[$n]) || empty($content[$n]['type'])) continue;
 				$content[$n]['cache_control'] = $cache;
 				$messages[$index]['content'] = $content;
 				break 2;

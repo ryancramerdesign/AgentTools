@@ -42,6 +42,7 @@ class WireTest_AgentTools extends WireTest {
 		$this->testMcpMessageShapes($at);
 		$this->testOpenAIResponsesToolShapes($at);
 		$this->testOpenCodeSessionHeaders($at);
+		$this->testPrimaryAgentConfiguration($at);
 		$this->testEngineerStepMode($at);
 		$this->testSiteBuilder($at);
 		$this->testSiteBuilderUpdateConfirmation($at);
@@ -49,6 +50,38 @@ class WireTest_AgentTools extends WireTest {
 		$this->testStatusData($at);
 		$this->testScheduledTaskIntervals($at);
 		$this->testTraceJsonEncoding($at);
+	}
+
+	/**
+	 * Test installer-facing primary agent configuration without retaining test settings.
+	 */
+	protected function testPrimaryAgentConfiguration(AgentTools $at) {
+		$modules = $this->wire()->modules;
+		$original = $modules->getConfig('AgentTools');
+		$restoreKeys = [
+			'engineer_provider', 'engineer_api_key', 'engineer_model',
+			'engineer_endpoint', 'engineer_label', 'engineer_additional_models',
+		];
+		try {
+			$agent = $at->configurePrimaryAgent([
+				'provider' => AgentToolsEngineer::providerAnthropic,
+				'apiKey' => 'installer-test-key',
+				'model' => 'installer-test-model',
+				'endpoint' => 'https://api.anthropic.com/v1/messages',
+				'label' => 'Installer test',
+			]);
+			$this->check('Installer settings configure primary agent model', 'installer-test-model', $agent->model);
+			$this->check('Installer settings preserve explicit provider', AgentToolsEngineer::providerAnthropic, $agent->provider);
+			$this->check('Installer settings configure primary agent label', 'Installer test', $agent->label);
+			$saved = $modules->getConfig('AgentTools');
+			$this->check('Installer settings persist primary agent', true, strpos((string) ($saved['engineer_additional_models'] ?? ''), 'installer-test-model') !== false);
+		} finally {
+			$modules->saveConfig($at, $original);
+			foreach($restoreKeys as $key) $at->set($key, $original[$key] ?? '');
+			$property = new \ReflectionProperty($at, 'agents');
+			$property->setAccessible(true);
+			$property->setValue($at, null);
+		}
 	}
 
 	/**
@@ -343,7 +376,8 @@ class WireTest_AgentTools extends WireTest {
 					'name' => $pageName,
 					'template' => $templateName,
 					'status' => 'unpublished',
-					'values' => ['title' => 'Builder fixture', $fieldName => 'Builder value'],
+					'values' => ['title' => 'Builder fixture'],
+					'contentBrief' => [$fieldName => 'A short disposable test value.'],
 				],
 			],
 			'files' => [[
@@ -404,17 +438,20 @@ class WireTest_AgentTools extends WireTest {
 			$datetimeWarnings = [];
 			$datetimeFixture = $plans->normalize(['fields' => [
 				['name' => 'new_date', 'disposition' => 'create', 'type' => 'FieldtypeDatetime', 'settings' => []],
+				['name' => 'aliased_date', 'disposition' => 'create', 'type' => 'FieldtypeDatetime', 'settings' => ['htmlInputType' => 'date']],
 				['name' => 'new_datetime', 'disposition' => 'create', 'type' => 'FieldtypeDatetime', 'settings' => ['timeInputFormat' => 'H:i']],
 				['name' => 'picker_date', 'disposition' => 'create', 'type' => 'FieldtypeDatetime', 'settings' => ['datepicker' => 3, 'dateInputFormat' => 'Y-m-d']],
 				['name' => 'reused_date', 'disposition' => 'reuse', 'type' => 'FieldtypeDatetime', 'settings' => []],
 				['name' => 'updated_date', 'disposition' => 'update', 'type' => 'FieldtypeDatetime', 'settings' => []],
 			]], $datetimeWarnings);
 			$this->check('Site Builder defaults untouched created Datetime fields to HTML date', ['inputType' => 'html', 'htmlType' => 'date'], $datetimeFixture['fields'][0]['settings']);
-			$this->check('Site Builder defaults lone time formats to HTML datetime', ['timeInputFormat' => 'H:i', 'inputType' => 'html', 'htmlType' => 'datetime'], $datetimeFixture['fields'][1]['settings']);
-			$this->check('Site Builder preserves explicit Datetime picker settings', ['datepicker' => 3, 'dateInputFormat' => 'Y-m-d'], $datetimeFixture['fields'][2]['settings']);
-			$this->check('Site Builder does not default reused Datetime fields', [], $datetimeFixture['fields'][3]['settings']);
-			$this->check('Site Builder does not default updated Datetime fields', [], $datetimeFixture['fields'][4]['settings']);
+			$this->check('Site Builder repairs htmlInputType Datetime alias', ['htmlType' => 'date', 'inputType' => 'html'], $datetimeFixture['fields'][1]['settings']);
+			$this->check('Site Builder defaults lone time formats to HTML datetime', ['timeInputFormat' => 'H:i', 'inputType' => 'html', 'htmlType' => 'datetime'], $datetimeFixture['fields'][2]['settings']);
+			$this->check('Site Builder preserves explicit Datetime picker settings', ['datepicker' => 3, 'dateInputFormat' => 'Y-m-d'], $datetimeFixture['fields'][3]['settings']);
+			$this->check('Site Builder does not default reused Datetime fields', [], $datetimeFixture['fields'][4]['settings']);
+			$this->check('Site Builder does not default updated Datetime fields', [], $datetimeFixture['fields'][5]['settings']);
 			$this->check('Site Builder reports created Datetime input defaults', true, in_array('Added HTML date input defaults to created Datetime field new_date.', $datetimeWarnings, true));
+			$this->check('Site Builder reports repaired Datetime HTML input alias', true, in_array('Renamed setting htmlInputType to htmlType on field aliased_date (FieldtypeDatetime).', $datetimeWarnings, true));
 			$builderDefaults = $this->invokeProtected($builder, 'normalizeOptions', [[]]);
 			$this->check('Site Builder defaults color choice to automatic', 'auto', $builderDefaults['colorScheme']);
 			$this->check('Site Builder defaults optional name to blank', '', $builderDefaults['siteName']);
@@ -596,6 +633,7 @@ class WireTest_AgentTools extends WireTest {
 				$this->check('Site Builder records failed plan attempt number', 1, $failureState['planAttempts']);
 				$this->check('Site Builder preserves invalid plan attempt', ['schemaVersion' => 1], $attemptData['plan']);
 				$this->check('Site Builder logs failed plan validation errors', ['Expected plan error'], $failureEntry['errors']);
+				$this->check('Site Builder progress identifies failed plan reason', true, strpos((string) $failureEntry['message'], 'Expected plan error') !== false);
 				$this->check('Site Builder failure log references preserved plan', 'plan-attempt-1.json', $failureEntry['planFile']);
 			} finally {
 				$failureSession->unlock();
@@ -698,6 +736,7 @@ class WireTest_AgentTools extends WireTest {
 			$this->check('Site Builder resolves configured agent model', (string) $buildAgent->model, $buildOptions['model']);
 			$this->check('Site Builder resolves configured agent endpoint', (string) $buildAgent->endpointUrl, $buildOptions['endpoint']);
 			$this->check('Site Builder enables stable initial-message caching for Anthropic', $buildOptions['provider'] === AgentToolsEngineer::providerAnthropic, !empty($buildOptions['cacheInitialMessage']));
+			$this->check('Site Builder enables rolling message caching for Anthropic', $buildOptions['provider'] === AgentToolsEngineer::providerAnthropic, !empty($buildOptions['cacheRollingMessage']));
 			$buildSystemPrompt = $this->invokeProtected($builder, 'getBuildSystemPrompt', [$buildState]);
 			$this->check('Site Builder tells agents not to repeat complete resources', true, strpos($buildSystemPrompt, 'A manifest item with status complete is already done') !== false);
 			$this->check('Site Builder tells agents not to repeat profile region content', true, strpos($buildSystemPrompt, 'do not repeat the page title, summary, or other region content') !== false);
@@ -711,6 +750,29 @@ class WireTest_AgentTools extends WireTest {
 				['role' => 'assistant', 'content' => 'Working.'],
 			], $cache]);
 			$this->check('Engineer can cache the stable initial Anthropic message', $cache, $cachedMessages[0]['content'][0]['cache_control'] ?? []);
+			$rollingMessages = $this->invokeProtected($engineer, 'cacheAnthropicRollingMessage', [[
+				['role' => 'user', 'content' => [[
+					'type' => 'text',
+					'text' => 'Stable Site Builder plan and manifest.',
+					'cache_control' => $cache,
+				]]],
+				['role' => 'assistant', 'content' => [[
+					'type' => 'tool_use',
+					'id' => 'tool_cache_test',
+					'name' => 'site_info',
+					'input' => [],
+					'cache_control' => $cache,
+				]]],
+				['role' => 'user', 'content' => [[
+					'type' => 'tool_result',
+					'tool_use_id' => 'tool_cache_test',
+					'content' => 'Result',
+				]]],
+			], $cache]);
+			$rollingMessages = $this->invokeProtected($engineer, 'cacheAnthropicInitialMessage', [$rollingMessages, $cache]);
+			$this->check('Engineer retains stable initial Anthropic breakpoint', $cache, $rollingMessages[0]['content'][0]['cache_control'] ?? []);
+			$this->check('Engineer removes stale intermediate Anthropic breakpoint', false, isset($rollingMessages[1]['content'][0]['cache_control']));
+			$this->check('Engineer moves rolling Anthropic breakpoint to newest message', $cache, $rollingMessages[2]['content'][0]['cache_control'] ?? []);
 			$buildPrompt = $engineer->startAskSession('Inspect the approved Site Builder build request.', $buildOptions);
 			$buildPromptSessionId = (string) $buildPrompt['sessionId'];
 			$buildAskState = $engineer->getAskState($buildPromptSessionId);
@@ -818,8 +880,13 @@ class WireTest_AgentTools extends WireTest {
 			$this->check('Site Builder creates approved field', 'created', $fieldsResult['fields'][$fieldName]);
 			$templatesResult = $builder->executeBuildTool($sessionId, 'create_templates', ['names' => [$templateName]]);
 			$this->check('Site Builder creates approved template', 'created', $templatesResult['templates'][$templateName]);
+			$missingContentResult = $builder->executeBuildTool($sessionId, 'create_pages', ['pages' => [[
+				'key' => 'fixture', 'content' => [],
+			]]]);
+			$this->check('Site Builder requires every planned content brief field', false, $missingContentResult['ok']);
+			$this->check('Site Builder identifies missing planned page content', true, strpos((string) ($missingContentResult['errors']['fixture'] ?? ''), "field $fieldName is required") !== false);
 			$pageBatchResult = $builder->executeBuildTool($sessionId, 'create_pages', ['pages' => [
-				['key' => 'fixture', 'content' => ['title' => 'Generated title']],
+				['key' => 'fixture', 'content' => ['title' => 'Generated title', $fieldName => 'Builder value']],
 				['key' => 'not-in-approved-plan'],
 			]]);
 			$this->check('Site Builder reports partial page batch errors', false, $pageBatchResult['ok']);

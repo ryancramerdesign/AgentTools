@@ -1,5 +1,31 @@
 # Changelog
 
+## Version 36
+
+### Site Builder
+
+- Added rolling Anthropic prompt caching for growing Site Builder
+  conversations, while retaining stable cache points for system, tool, and
+  initial-request context.
+- Added a completed-build AI usage summary with per-phase input, output,
+  cache-read, cache-write, and cache-reuse details.
+- Encouraged compatible resource batching to reduce provider rounds and
+  improved page-content completeness checks during builds.
+- Rendered Builder reports and refinement replies as safe Markdown.
+- Improved self-correcting plan feedback and repaired an additional
+  FieldtypeDatetime input-setting alias.
+
+### Installation
+
+- Added automatic one-time application of AI provider settings retained by
+  the ProcessWire installer, without replacing an already configured agent.
+
+### Documentation
+
+- Simplified the README heading by removing the logo image.
+
+---
+
 ## Version 35
 
 ### Site Builder
