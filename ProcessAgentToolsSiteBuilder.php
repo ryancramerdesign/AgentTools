@@ -345,6 +345,16 @@ class ProcessAgentToolsSiteBuilder extends ProcessAgentToolsHelper {
 		$plan = (array) ($state['plan'] ?? []);
 		$planErrors = array_values((array) ($state['planErrors'] ?? []));
 		$planWarnings = array_values((array) ($state['planWarnings'] ?? []));
+		$correctedBuildError = trim((string) ($state['correctedBuildError'] ?? ''));
+		if($correctedBuildError !== '') {
+			$f = $form->InputfieldMarkup;
+			$f->label = $this->_('Build plan corrected');
+			$f->icon = 'refresh';
+			$f->value = '<p class="uk-alert uk-alert-warning">' .
+				$this->wire()->sanitizer->entities($this->_('The previous build attempt was safely rolled back. Site Builder corrected the plan; review it and approve it again to continue.')) .
+				'</p><p class="detail">' . $this->wire()->sanitizer->entities($correctedBuildError) . '</p>';
+			$form->add($f);
+		}
 		if($planErrors) {
 			$f = $form->InputfieldMarkup;
 			$f->label = $this->_('Plan requires correction');

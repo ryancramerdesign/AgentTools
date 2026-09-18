@@ -76,6 +76,7 @@ class AgentToolsSiteBuilder extends AgentToolsHelper {
 				'planWarnings' => [],
 				'planAttempts' => 0,
 				'revisionRequest' => '',
+				'correctedBuildError' => '',
 				'buildResponse' => '',
 				'engineerSessionId' => '',
 				'engineerRound' => 0,
@@ -232,6 +233,7 @@ class AgentToolsSiteBuilder extends AgentToolsHelper {
 			$state['planApproved'] = true;
 			$state['verificationPurpose'] = 'build';
 			$state['revisionRequest'] = '';
+			$state['correctedBuildError'] = '';
 			$state['engineerSessionId'] = '';
 			$state['engineerRound'] = 0;
 			$state['engineerTokenUsage'] = $this->emptyTokenUsage();
@@ -453,7 +455,7 @@ class AgentToolsSiteBuilder extends AgentToolsHelper {
 		if($installed < 1) return false;
 		$cutoff = $installed + 300;
 		if($this->wire()->pages->count("modified>$cutoff, has_parent!=2, id!=2, include=all")) return false;
-		return !$this->siteFilesChangedSince($installed);
+		return !$this->siteFilesChangedSince($cutoff);
 	}
 
 	/**
@@ -468,6 +470,7 @@ class AgentToolsSiteBuilder extends AgentToolsHelper {
 					new \RecursiveDirectoryIterator($path, \FilesystemIterator::SKIP_DOTS)
 				);
 				foreach($files as $file) {
+					if(strpos($file->getFilename(), '.') === 0) continue;
 					if($file->isFile() && $file->getMTime() > $timestamp) return true;
 				}
 			} catch(\Throwable $e) {
@@ -1179,6 +1182,7 @@ PROMPT;
 		$state['error'] = '';
 		$state['planApproved'] = false;
 		$state['planErrors'] = [$error];
+		$state['correctedBuildError'] = $error;
 		$state['revisionRequest'] = "Correct the approved plan because its build failed with this non-retryable error:\n- $error\n\nPreserve the user's requested site and revise only what is necessary to make the plan buildable.";
 		$state['engineerSessionId'] = '';
 		$state['engineerRound'] = 0;

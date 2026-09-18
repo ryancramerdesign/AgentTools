@@ -30,6 +30,7 @@ class WireTest_AgentTools extends WireTest {
 		$at = $this->wire()->modules->get('AgentTools');
 		$this->check('AgentTools module is installed', true, $at instanceof AgentTools);
 
+		$this->testNestedFilesPath($at);
 		$this->testEvalValidation($at);
 		$this->testCliEvalParsing($at);
 		$this->testCliEvalJson($at);
@@ -48,6 +49,21 @@ class WireTest_AgentTools extends WireTest {
 		$this->testStatusData($at);
 		$this->testScheduledTaskIntervals($at);
 		$this->testTraceJsonEncoding($at);
+	}
+
+	/**
+	 * Test first-run creation of a nested AgentTools assets path.
+	 */
+	protected function testNestedFilesPath(AgentTools $at) {
+		$name = 'test-nested-' . uniqid();
+		$root = $at->getFilesPath() . $name;
+		try {
+			$path = $at->getFilesPath("$name/child");
+			$this->check('AgentTools creates nested files paths recursively', true, is_dir($path));
+			$this->check('AgentTools protects nested files paths', true, is_file($path . '.htaccess'));
+		} finally {
+			$this->wire()->files->rmdir($root, true);
+		}
 	}
 
 	/**
@@ -74,6 +90,21 @@ class WireTest_AgentTools extends WireTest {
 		$this->check('Fresh Site Builder plan skips existing-site confirmation', false, $builder(true)->planNeedsUpdateConfirmation($updatePlan));
 		$this->check('Established Site Builder plan requires update confirmation', true, $builder(false)->planNeedsUpdateConfirmation($updatePlan));
 		$this->check('Create-only Site Builder plan needs no update confirmation', false, $builder(false)->planNeedsUpdateConfirmation($createPlan));
+
+		$probePath = $this->wire()->config->paths->site . 'classes/.at-site-builder-fresh-probe';
+		$this->wire()->files->mkdir($probePath, true);
+		try {
+			$hiddenFile = $probePath . '/.htaccess';
+			$this->wire()->files->filePutContents($hiddenFile, 'Deny from all');
+			touch($hiddenFile, time() + 10);
+			$this->check('Site Builder fresh-site detection ignores hidden infrastructure files', false, $this->invokeProtected($at->siteBuilder(), 'siteFilesChangedSince', [time()]));
+			$visibleFile = $probePath . '/FreshProbe.php';
+			$this->wire()->files->filePutContents($visibleFile, '<?php namespace ProcessWire;');
+			touch($visibleFile, time() + 10);
+			$this->check('Site Builder fresh-site detection notices editable site files', true, $this->invokeProtected($at->siteBuilder(), 'siteFilesChangedSince', [time()]));
+		} finally {
+			$this->wire()->files->rmdir($probePath, true);
+		}
 	}
 
 	/**
@@ -478,6 +509,7 @@ class WireTest_AgentTools extends WireTest {
 				$this->check('Site Builder returns non-retryable build failures to planning', AgentToolsSiteBuilder::phasePlan, $planFailureState['phase']);
 				$this->check('Site Builder unapproves a failed build plan', false, $planFailureState['planApproved']);
 				$this->check('Site Builder carries build failure into plan revision', true, strpos($planFailureState['revisionRequest'], (string) $planFailureResult['error']) !== false);
+				$this->check('Site Builder retains corrected build error for review', (string) $planFailureResult['error'], $planFailureState['correctedBuildError']);
 				$this->check('Site Builder archives rolled-back failed build manifest', 1, count($planFailureSession->loadManifest()['rollbackHistory']));
 			} finally {
 				$planFailureSession->unlock();

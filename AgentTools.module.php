@@ -54,7 +54,7 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 			'title' => 'Agent Tools',
 			'summary' => "Enables AI coding agents to access ProcessWire's API and provides a database migration system.",
 			'icon' => 'at',
-			'version' => 34,
+			'version' => 35,
 			'author' => 'Ryan Cramer, Claude (Anthropic), GPT 5.5 Codex',
 			'requires' => 'ProcessWire>=3.0.255, PHP>=8.0.0',
 			'installs' => 'ProcessAgentTools, FieldtypePageEngineer',
@@ -971,7 +971,7 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 	 */
 	public function getFilesPath($subdir = '') {
 		$path = $this->wire()->config->paths->assets . self::name . '/';
-		if(!is_dir($path)) $this->wire()->files->mkdir($path);
+		if(!is_dir($path)) $this->wire()->files->mkdir($path, true);
 		if($subdir) {
 			$subdir = str_replace('\\', '/', (string) $subdir);
 			$isAbsolute = isset($subdir[0]) && $subdir[0] === '/';
@@ -982,7 +982,7 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 			}
 			$subdir = trim($subdir, '/');
 			$path .= $subdir . '/';
-			if(!is_dir($path)) $this->wire()->files->mkdir($path);
+			if(!is_dir($path)) $this->wire()->files->mkdir($path, true);
 		}
 		$this->checkHtaccessFile($path);
 		return $path;

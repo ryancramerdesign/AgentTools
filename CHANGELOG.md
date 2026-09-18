@@ -1,5 +1,24 @@
 # Changelog
 
+## Version 35
+
+### Site Builder
+
+- Improved fresh-install detection so installer-created hidden files and
+  normal installation-time file activity do not trigger the existing-site
+  confirmation.
+- Recognized modules installed automatically as dependencies during a build,
+  preventing duplicate installation attempts and unnecessary rollback.
+- Added clear review feedback when a failed build is safely rolled back and
+  its plan is automatically corrected for another approval.
+
+### Files
+
+- Fixed first-run creation of nested AgentTools asset directories, including
+  the background-job queue directories.
+
+---
+
 ## Version 34
 
 ### Site Builder

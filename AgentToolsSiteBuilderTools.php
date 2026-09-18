@@ -77,11 +77,13 @@ class AgentToolsSiteBuilderTools extends Wire {
 			if(is_array($item) && !empty($item['name'])) $map[(string) $item['name']] = $item;
 		}
 		$names = $this->cleanNames($names);
+		$initiallyInstalled = [];
 		foreach($names as $name) {
 			if(!isset($map[$name])) $this->invalid("Module $name is not in the approved Site Builder plan.");
 			$item = $map[$name];
 			$disposition = (string) $item['disposition'];
 			$installed = $this->wire()->modules->isInstalled($name);
+			$initiallyInstalled[$name] = $installed;
 			$existing = $this->findManifestItem('modules', $name);
 			if($disposition !== 'create' && !$installed) $this->invalid("Module $name is marked $disposition but is not installed.");
 			if($disposition === 'create' && $installed && !$existing) $this->invalid("Module $name is already installed but the plan says create.");
@@ -90,6 +92,7 @@ class AgentToolsSiteBuilderTools extends Wire {
 		foreach($names as $name) {
 			$item = $map[$name];
 			$disposition = (string) $item['disposition'];
+			$this->wire()->modules->refresh();
 			$installed = $this->wire()->modules->isInstalled($name);
 			if($disposition !== 'create') {
 				$results[$name] = 'reused';
@@ -104,7 +107,12 @@ class AgentToolsSiteBuilderTools extends Wire {
 				'disposition' => 'create',
 				'source' => (string) ($item['source'] ?? ''),
 			]);
-			$this->wire()->modules->refresh();
+			if(empty($initiallyInstalled[$name]) && $installed) {
+				$this->completeManifestItem('modules', $name, ['installedAsDependency' => true]);
+				$this->log("Module $name was installed as a dependency.", 'module', $name);
+				$results[$name] = 'installed as dependency';
+				continue;
+			}
 			$module = $this->wire()->modules->install($name);
 			if(!$module) throw new WireException("Unable to install module $name.");
 			$this->completeManifestItem('modules', $name);
@@ -1094,6 +1102,9 @@ class AgentToolsSiteBuilderTools extends Wire {
 	protected function rollbackModule(array $entry): array {
 		$name = (string) ($entry['key'] ?? 'module');
 		try {
+			if(!empty($entry['installedAsDependency'])) {
+				return ['ok' => true, 'item' => "module:$name", 'action' => 'handled by dependency owner'];
+			}
 			if(($entry['disposition'] ?? '') === 'create' && $this->wire()->modules->isInstalled($name)) {
 				$this->wire()->modules->uninstall($name);
 			}
