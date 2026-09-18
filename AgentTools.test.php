@@ -43,10 +43,37 @@ class WireTest_AgentTools extends WireTest {
 		$this->testOpenCodeSessionHeaders($at);
 		$this->testEngineerStepMode($at);
 		$this->testSiteBuilder($at);
+		$this->testSiteBuilderUpdateConfirmation($at);
 		$this->testSiteBuilderAdditiveTemplateUpdate($at);
 		$this->testStatusData($at);
 		$this->testScheduledTaskIntervals($at);
 		$this->testTraceJsonEncoding($at);
+	}
+
+	/**
+	 * Test that fresh profile scaffolding does not trigger the existing-site warning.
+	 */
+	protected function testSiteBuilderUpdateConfirmation(AgentTools $at) {
+		$builder = function(bool $fresh) use($at): AgentToolsSiteBuilder {
+			return new class($at, $fresh) extends AgentToolsSiteBuilder {
+				protected $testFresh;
+
+				public function __construct(AgentTools $at, bool $fresh) {
+					$this->testFresh = $fresh;
+					parent::__construct($at);
+					$at->wire($this);
+				}
+
+				protected function isFreshSite(): bool {
+					return $this->testFresh;
+				}
+			};
+		};
+		$updatePlan = ['templates' => [['name' => 'home', 'disposition' => 'update']]];
+		$createPlan = ['templates' => [['name' => 'event', 'disposition' => 'create']]];
+		$this->check('Fresh Site Builder plan skips existing-site confirmation', false, $builder(true)->planNeedsUpdateConfirmation($updatePlan));
+		$this->check('Established Site Builder plan requires update confirmation', true, $builder(false)->planNeedsUpdateConfirmation($updatePlan));
+		$this->check('Create-only Site Builder plan needs no update confirmation', false, $builder(false)->planNeedsUpdateConfirmation($createPlan));
 	}
 
 	/**
@@ -186,11 +213,21 @@ class WireTest_AgentTools extends WireTest {
 			$this->check('Site Builder still requires file for new front-end template', true, in_array('Front-end template at-new-template-without-file must have one role=template file in the plan or an existing template file.', $templateErrors, true));
 			$planRequest = $this->invokeProtected($builder, 'getPlanRequest', [[
 				'description' => 'Build a small test site.',
-				'options' => ['designDirection' => 'editorial', 'cssApproach' => 'agenttools-base', 'javascript' => 'vanilla', 'preset' => ''],
+				'options' => [
+					'designDirection' => 'classic', 'colorScheme' => 'earthy', 'brandColor' => '#2A6F4E',
+					'siteName' => 'Cedar Works', 'cssApproach' => 'agenttools-base', 'javascript' => 'vanilla', 'preset' => '',
+				],
 				'revisionRequest' => '',
 			]]);
 			$this->check('Site Builder planning request includes current-site snapshot', true, strpos($planRequest, 'CURRENT SITE SNAPSHOT:') !== false);
 			$this->check('Site Builder planning request includes AGENTS profile guidance', true, strpos($planRequest, $profileNotes) !== false);
+			$this->check('Site Builder planning request includes color scheme', true, strpos($planRequest, 'Color scheme: earthy') !== false);
+			$this->check('Site Builder planning request includes normalized brand color', true, strpos($planRequest, 'Brand color: #2a6f4e') !== false);
+			$this->check('Site Builder planning request includes exact site name', true, strpos($planRequest, '"Cedar Works"') !== false);
+			$placeholderRequest = $this->invokeProtected($builder, 'getPlanRequest', [[
+				'description' => 'Build a portfolio.', 'options' => [], 'revisionRequest' => '',
+			]]);
+			$this->check('Site Builder planning request supplies obvious name placeholders', true, strpos($placeholderRequest, 'Your Name for a portfolio') !== false);
 			$this->check('Site Builder planning prompt explains system fields', true, strpos($plans->getSystemPrompt(), 'must never use create or update') !== false);
 			$this->check('Site Builder planning prompt preserves homepage family settings', true, strpos($plans->getSystemPrompt(), 'For the home template use singleton=false and allowedParents=null') !== false);
 			$this->check('Site Builder planning prompt requires planned stylesheet work', true, strpos($plans->getSystemPrompt(), 'must include a role=stylesheet file') !== false);
@@ -225,10 +262,12 @@ class WireTest_AgentTools extends WireTest {
 		$buildPromptSessionId = '';
 		$buildRunSessionId = '';
 		$restartedBuildSessionId = '';
+		$clarificationSessionId = '';
 		$uninstalledFieldtypeSessionId = '';
 		$plannerHookId = null;
 		$buildToolHookId = null;
 		$restartHookId = null;
+		$refineReplyHookId = null;
 		$plan = [
 			'schemaVersion' => 1,
 			'title' => 'AgentTools Site Builder test',
@@ -346,6 +385,15 @@ class WireTest_AgentTools extends WireTest {
 			$this->check('Site Builder does not default updated Datetime fields', [], $datetimeFixture['fields'][4]['settings']);
 			$this->check('Site Builder reports created Datetime input defaults', true, in_array('Added HTML date input defaults to created Datetime field new_date.', $datetimeWarnings, true));
 			$builderDefaults = $this->invokeProtected($builder, 'normalizeOptions', [[]]);
+			$this->check('Site Builder defaults color choice to automatic', 'auto', $builderDefaults['colorScheme']);
+			$this->check('Site Builder defaults optional name to blank', '', $builderDefaults['siteName']);
+			$legacyBuilderOptions = $this->invokeProtected($builder, 'normalizeOptions', [[
+				'designDirection' => 'warm-organic', 'colorScheme' => 'cool', 'brandColor' => '#AABBCC',
+			]]);
+			$this->check('Site Builder maps legacy warm-organic direction to friendly', 'friendly', $legacyBuilderOptions['designDirection']);
+			$this->check('Site Builder normalizes valid brand colors', '#aabbcc', $legacyBuilderOptions['brandColor']);
+			$invalidBrandOptions = $this->invokeProtected($builder, 'normalizeOptions', [['brandColor' => 'blue']]);
+			$this->check('Site Builder drops invalid brand colors', '', $invalidBrandOptions['brandColor']);
 			$this->check('Site Builder default planning token limit is generous', AgentToolsSiteBuilder::defaultPlanTokenLimit, $builderDefaults['planTokenLimit']);
 			$this->check('Site Builder default build token limit is generous', AgentToolsSiteBuilder::defaultBuildTokenLimit, $builderDefaults['buildTokenLimit']);
 			$this->check('Site Builder refinement has a separate token limit', AgentToolsSiteBuilder::defaultRefineTokenLimit, $builderDefaults['refineTokenLimit']);
@@ -355,6 +403,8 @@ class WireTest_AgentTools extends WireTest {
 			$this->check('Site Builder planner uses ProcessWire Datetime HTML types', true, strpos($planningPrompt, 'date, time, or datetime (not datetime-local)') !== false);
 			$this->check('Site Builder planner requires values or briefs for useful page fields', true, strpos($planningPrompt, 'must have either a value or a contentBrief entry') !== false);
 			$this->check('Site Builder planner requires template on Page-class files', true, strpos($planningPrompt, 'File roles template and pageClass both require template') !== false);
+			$this->check('Site Builder planner requires a real hue outside monochrome', true, strpos($planningPrompt, 'primary accent must be a real hue') !== false);
+			$this->check('Site Builder planner records palette tokens for review', true, strpos($planningPrompt, 'Record the complete palette in design.tokens') !== false);
 			$this->check('Engineer retries provider rate limits', true, $this->invokeProtected($at->engineer(), 'isRetryableHttpCode', [429]));
 			$this->check('Engineer retries provider server errors', true, $this->invokeProtected($at->engineer(), 'isRetryableHttpCode', [500]));
 			$this->check('Engineer does not retry ordinary client errors', false, $this->invokeProtected($at->engineer(), 'isRetryableHttpCode', [400]));
@@ -804,9 +854,36 @@ class WireTest_AgentTools extends WireTest {
 			$refineState['finished'] = time();
 			$refineStore->save($refineState);
 			$refineStore->unlock();
+			$clarifying = $builder->refine($sessionId, 'Ask one clarifying question without changing the site.');
+			$clarifyingState = $builder->getState($sessionId);
+			$clarifyingOptions = $this->invokeProtected($builder, 'getAskOptions', [$clarifyingState, AgentToolsSiteBuilder::phaseRefine]);
+			$this->check('Site Builder refinement prompt supports clarification without changes', true, strpos((string) $clarifyingOptions['systemPrompt'], 'ask one short clarifying question') !== false);
+			$this->check('Site Builder new refinement begins unchanged', false, (bool) ($clarifyingState['refinements'][0]['changed'] ?? true));
+			$this->check('Site Builder new refinement begins without a reply', '', (string) ($clarifyingState['refinements'][0]['response'] ?? 'missing'));
+			$clarificationReply = 'Could you clarify which fixture detail should change?';
+			$refineReplyHookId = $engineer->addHookBefore('sendProviderRequest', function(HookEvent $event) use($clarificationReply, &$clarificationSessionId) {
+				$request = $event->arguments(0);
+				if($request instanceof AgentToolsRequest) $clarificationSessionId = (string) $request->sessionId;
+				if($request instanceof AgentToolsRequest && $request->provider === AgentToolsEngineer::providerAnthropic) {
+					$response = ['stop_reason' => 'end_turn', 'content' => [[ 'type' => 'text', 'text' => $clarificationReply ]]];
+				} else if($request instanceof AgentToolsRequest && str_ends_with((string) parse_url($request->endpoint, PHP_URL_PATH), '/responses')) {
+					$response = ['output' => [[ 'type' => 'message', 'content' => [[ 'type' => 'output_text', 'text' => $clarificationReply ]] ]]];
+				} else {
+					$response = ['choices' => [[ 'message' => [ 'role' => 'assistant', 'content' => $clarificationReply ] ]]];
+				}
+				$event->return = $response;
+				$event->replace = true;
+			});
+			$clarified = $builder->step($sessionId);
+			$engineer->removeHook($refineReplyHookId);
+			$refineReplyHookId = null;
+			$this->check('Site Builder skips verification when refinement made no changes', AgentToolsSiteBuilder::phaseDone, $clarified['phase']);
+			$this->check('Site Builder completes no-change refinement', true, (int) ($builder->getState($sessionId)['refinements'][0]['finished'] ?? 0) > 0);
+			$this->check('Site Builder stores final refinement reply', $clarificationReply, (string) ($builder->getState($sessionId)['refinements'][0]['response'] ?? ''));
+			$this->check('Site Builder preserves verification when refinement made no changes', 2, count($builder->getManifest($sessionId)['verification']));
 			$refining = $builder->refine($sessionId, 'Improve the fixture and add one sample page.');
 			$this->check('Site Builder starts fresh refinement phase', AgentToolsSiteBuilder::phaseRefine, $refining['phase']);
-			$this->check('Site Builder refinement clears stale verification', 0, count($builder->getManifest($sessionId)['verification']));
+			$this->check('Site Builder refinement keeps verification until a change succeeds', 2, count($builder->getManifest($sessionId)['verification']));
 			$refinementState = $builder->getState($sessionId);
 			$refinementOptions = $this->invokeProtected($builder, 'getAskOptions', [$refinementState, AgentToolsSiteBuilder::phaseRefine]);
 			$refinementToolNames = [];
@@ -831,6 +908,7 @@ class WireTest_AgentTools extends WireTest {
 			]]);
 			$this->check('Site Builder refinement updates approved page content', 'refined', $refinedPages['pages']['fixture'] ?? '');
 			$this->check('Site Builder refinement adds sample page', 'created', $refinedPages['pages'][$sampleKey] ?? '');
+			$this->check('Site Builder refinement clears stale verification after a change', 0, count($builder->getManifest($sessionId)['verification']));
 			$createdFixture = $this->wire()->pages->get((int) $createdFixture->id);
 			$this->check('Site Builder refined value is saved', 'Refined builder value', (string) $createdFixture->get($fieldName));
 			$samplePage = $this->wire()->pages->get("parent=1, name=$sampleName, include=all");
@@ -840,12 +918,13 @@ class WireTest_AgentTools extends WireTest {
 				'content' => '<?php namespace ProcessWire; ?><h1><?= $page->title ?></h1><p>Refined</p>',
 			]);
 			$this->check('Site Builder refinement rewrites approved file', 'rewritten', $refinedFile['result'] ?? '');
+			$this->check('Site Builder records successful refinement mutation', true, (bool) ($builder->getState($sessionId)['refinementChanged'] ?? false));
 			$refinedManifest = $builder->getManifest($sessionId);
 			$refinedFileEntry = array_values(array_filter($refinedManifest['files'], function($entry) use($filePath) { return ($entry['key'] ?? '') === $filePath; }))[0] ?? [];
 			$refinedPageEntry = array_values(array_filter($refinedManifest['pages'], function($entry) use($sampleKey) { return ($entry['key'] ?? '') === $sampleKey; }))[0] ?? [];
-			$this->check('Site Builder attributes refined file in manifest', [1], $refinedFileEntry['refinements'] ?? []);
-			$this->check('Site Builder attributes sample page in manifest', [1], $refinedPageEntry['refinements'] ?? []);
-			$refinementResources = $refinedManifest['refinements'][0]['resources'] ?? [];
+			$this->check('Site Builder attributes refined file in manifest', [2], $refinedFileEntry['refinements'] ?? []);
+			$this->check('Site Builder attributes sample page in manifest', [2], $refinedPageEntry['refinements'] ?? []);
+			$refinementResources = $refinedManifest['refinements'][1]['resources'] ?? [];
 			$this->check('Site Builder refinement record lists refined file', true, in_array($filePath, $refinementResources['files'] ?? [], true));
 			$this->check('Site Builder refinement record lists sample page', true, in_array($sampleKey, $refinementResources['pages'] ?? [], true));
 			$finishingRefinement = $builder->finishRefinement($sessionId);
@@ -873,10 +952,12 @@ class WireTest_AgentTools extends WireTest {
 			if($plannerHookId !== null) $at->engineer()->removeHook($plannerHookId);
 			if($buildToolHookId !== null) $at->engineer()->removeHook($buildToolHookId);
 			if($restartHookId !== null) $at->engineer()->removeHook($restartHookId);
+			if($refineReplyHookId !== null) $at->engineer()->removeHook($refineReplyHookId);
 			if($engineerSessionId !== '') $at->engineer()->removeAskSession($engineerSessionId);
 			if($buildPromptSessionId !== '') $at->engineer()->removeAskSession($buildPromptSessionId);
 			if($buildRunSessionId !== '') $at->engineer()->removeAskSession($buildRunSessionId);
 			if($restartedBuildSessionId !== '') $at->engineer()->removeAskSession($restartedBuildSessionId);
+			if($clarificationSessionId !== '') $at->engineer()->removeAskSession($clarificationSessionId);
 			if($uninstalledFieldtypeSessionId !== '') $this->wire()->files->rmdir($at->getFilesPath('builds') . $uninstalledFieldtypeSessionId, true);
 			if($sampleName !== '') {
 				$sample = $this->wire()->pages->get("parent=1, name=$sampleName, include=all");

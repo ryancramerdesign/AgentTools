@@ -1,5 +1,25 @@
 # Changelog
 
+## Version 34
+
+### Site Builder
+
+- Added optional site-name, color-scheme, and brand-color planning controls,
+  with clearer visual-direction choices and explicit palette, contrast, and
+  design-token guidance.
+- Added suitable placeholder names when no site or business name is supplied,
+  avoiding generic site types as homepage titles.
+- Preserved explicit existing-site confirmation while allowing fresh profile
+  scaffolding to proceed without an unnecessary warning.
+- Preserved and displayed final build and refinement replies, including a
+  short safely rendered refinement history on the completed screen.
+- Added clarification-only refinements and skipped redundant verification when
+  no site mutation succeeded, while preserving prior verification results.
+- Clarified that new plans can add features to the current site and renamed the
+  completed-screen action to **Plan an addition**.
+
+---
+
 ## Version 33
 
 ### Site Builder

@@ -38,7 +38,10 @@ class AgentToolsSiteBuilder extends AgentToolsHelper {
 	 * @param array<string,mixed> $options
 	 *  - agentId: configured AgentTools agent ID (default primary)
 	 *  - preset: optional site preset name
-	 *  - designDirection: editorial, minimal, bold-modern, or warm-organic
+	 *  - siteName: optional site or business name
+	 *  - designDirection: editorial, minimal, bold-modern, friendly, or classic
+	 *  - colorScheme: auto, warm, cool, earthy, vibrant, soft, or monochrome
+	 *  - brandColor: optional six-digit hex color
 	 *  - cssApproach: agenttools-base, uikit, or bootstrap
 	 *  - javascript: vanilla or htmx
 	 *  - planRoundLimit, buildRoundLimit, refineRoundLimit, verifyRoundLimit
@@ -73,6 +76,7 @@ class AgentToolsSiteBuilder extends AgentToolsHelper {
 				'planWarnings' => [],
 				'planAttempts' => 0,
 				'revisionRequest' => '',
+				'buildResponse' => '',
 				'engineerSessionId' => '',
 				'engineerRound' => 0,
 				'engineerTokenUsage' => $this->emptyTokenUsage(),
@@ -254,6 +258,8 @@ class AgentToolsSiteBuilder extends AgentToolsHelper {
 			$state['refinements'][] = [
 				'number' => $number,
 				'request' => $request,
+				'response' => '',
+				'changed' => false,
 				'started' => time(),
 				'finished' => 0,
 			];
@@ -268,8 +274,8 @@ class AgentToolsSiteBuilder extends AgentToolsHelper {
 			$state['engineerRound'] = 0;
 			$state['engineerTokenUsage'] = $this->emptyTokenUsage();
 			$state['consecutiveToolFailures'] = 0;
+			$state['refinementChanged'] = false;
 			$manifest = $session->loadManifest();
-			$manifest['verification'] = [];
 			$manifest['refinements'][] = [
 				'number' => $number,
 				'request' => $request,
@@ -293,7 +299,11 @@ class AgentToolsSiteBuilder extends AgentToolsHelper {
 				throw new WireException($this->_('This Site Builder session is not in the refinement phase.'));
 			}
 			$state['error'] = '';
-			$this->enterVerifyPhase($session, $state);
+			if(!empty($state['refinementChanged'])) {
+				$this->enterVerifyPhase($session, $state);
+			} else {
+				$this->completeRefinementWithoutChanges($session, $state);
+			}
 		});
 	}
 
@@ -413,6 +423,65 @@ class AgentToolsSiteBuilder extends AgentToolsHelper {
 		return is_array($state['plan'] ?? null) ? $state['plan'] : [];
 	}
 
+	/**
+	 * Does an updating plan need explicit existing-site confirmation?
+	 *
+	 * Profile scaffolding is expected to be updated during a site's first build. Once a
+	 * front-end page or editable site file has changed after installation, preserve the
+	 * existing confirmation and backup reminder.
+	 *
+	 * @param array<string,mixed> $plan
+	 */
+	public function planNeedsUpdateConfirmation(array $plan): bool {
+		$hasUpdates = false;
+		foreach(['fields', 'templates', 'pages', 'files', 'modules'] as $type) {
+			foreach((array) ($plan[$type] ?? []) as $item) {
+				if(is_array($item) && ($item['disposition'] ?? '') === 'update') {
+					$hasUpdates = true;
+					break 2;
+				}
+			}
+		}
+		return $hasUpdates && !$this->isFreshSite();
+	}
+
+	/**
+	 * Is this an installation whose front-end content and editable files remain fresh?
+	 */
+	protected function isFreshSite(): bool {
+		$installed = (int) $this->wire()->config->installed;
+		if($installed < 1) return false;
+		$cutoff = $installed + 300;
+		if($this->wire()->pages->count("modified>$cutoff, has_parent!=2, id!=2, include=all")) return false;
+		return !$this->siteFilesChangedSince($installed);
+	}
+
+	/**
+	 * Have editable front-end site files changed after installation?
+	 */
+	protected function siteFilesChangedSince(int $timestamp): bool {
+		$sitePath = $this->wire()->config->paths->site;
+		foreach([$sitePath . 'templates/', $sitePath . 'classes/'] as $path) {
+			if(!is_dir($path)) continue;
+			try {
+				$files = new \RecursiveIteratorIterator(
+					new \RecursiveDirectoryIterator($path, \FilesystemIterator::SKIP_DOTS)
+				);
+				foreach($files as $file) {
+					if($file->isFile() && $file->getMTime() > $timestamp) return true;
+				}
+			} catch(\Throwable $e) {
+				return true;
+			}
+		}
+		foreach([$sitePath . 'ready.php', $sitePath . 'init.php'] as $file) {
+			if(!is_file($file)) continue;
+			$modified = @filemtime($file);
+			if($modified === false || $modified > $timestamp) return true;
+		}
+		return false;
+	}
+
 	/** @return array<string,mixed> */
 	public function getManifest(string $id): array {
 		$state = $this->getState($id);
@@ -445,7 +514,10 @@ class AgentToolsSiteBuilder extends AgentToolsHelper {
 		try {
 			$tools = new AgentToolsSiteBuilderTools($this->at, $session, $this->plans());
 			$this->wire($tools);
-			return $tools->execute($name, $input);
+			$result = $tools->execute($name, $input);
+			$this->accountToolResult($session, $state, $name, $result);
+			$session->save($state);
+			return $result;
 		} finally {
 			$session->unlock();
 		}
@@ -514,7 +586,7 @@ class AgentToolsSiteBuilder extends AgentToolsHelper {
 	/** @param array<string,mixed> $state @param array<string,mixed> $runtimeOptions */
 	protected function stepBuild(AgentToolsSiteBuilderSession $session, array &$state, array $runtimeOptions): void {
 		if(empty($state['planApproved'])) throw new WireException($this->_('The Site Builder plan has not been approved.'));
-		if($this->isBuildComplete($state, $session->loadManifest())) {
+		if($this->isBuildComplete($state, $session->loadManifest()) && empty($state['engineerSessionId'])) {
 			$this->enterVerifyPhase($session, $state);
 			return;
 		}
@@ -552,26 +624,28 @@ class AgentToolsSiteBuilder extends AgentToolsHelper {
 			$this->returnBuildFailureToPlanning($session, $state, $planFailure);
 			return;
 		}
-		if($this->isBuildComplete($state, $session->loadManifest())) {
-			$this->enterVerifyPhase($session, $state);
-			return;
-		}
 		if(($state['status'] ?? '') === 'paused') return;
 		if(!empty($result['error'])) throw new WireException((string) $result['error']);
+		if($this->isBuildComplete($state, $session->loadManifest())) {
+			if(!empty($result['done'])) {
+				$state['buildResponse'] = $this->normalizeAgentResponse((string) ($result['response'] ?? ''));
+				$this->enterVerifyPhase($session, $state);
+			} else {
+				$state['status'] = 'continue';
+				$this->isBudgetReached($state, self::phaseBuild);
+			}
+			return;
+		}
 		if(empty($result['done'])) {
 			$state['status'] = 'continue';
 			$this->isBudgetReached($state, self::phaseBuild);
 			return;
 		}
-		if($this->isBuildComplete($state, $session->loadManifest())) {
-			$this->enterVerifyPhase($session, $state);
-		} else {
-			$state['engineerSessionId'] = '';
-			$state['engineerRound'] = 0;
-			$state['engineerTokenUsage'] = $this->emptyTokenUsage();
-			$state['status'] = 'continue';
-			$this->addMessage($session, $state, $this->_('The agent stopped before the approved plan was complete; a continuation round is ready.'), 'warning');
-		}
+		$state['engineerSessionId'] = '';
+		$state['engineerRound'] = 0;
+		$state['engineerTokenUsage'] = $this->emptyTokenUsage();
+		$state['status'] = 'continue';
+		$this->addMessage($session, $state, $this->_('The agent stopped before the approved plan was complete; a continuation round is ready.'), 'warning');
 	}
 
 	/** @param array<string,mixed> $state @param array<string,mixed> $runtimeOptions */
@@ -611,7 +685,12 @@ class AgentToolsSiteBuilder extends AgentToolsHelper {
 			$this->isBudgetReached($state, self::phaseRefine);
 			return;
 		}
-		$this->enterVerifyPhase($session, $state);
+		$this->storeRefinementResponse($state, (string) ($result['response'] ?? ''));
+		if(!empty($state['refinementChanged'])) {
+			$this->enterVerifyPhase($session, $state);
+		} else {
+			$this->completeRefinementWithoutChanges($session, $state);
+		}
 	}
 
 	/** @param array<string,mixed> $state @param array<string,mixed> $runtimeOptions */
@@ -826,10 +905,16 @@ class AgentToolsSiteBuilder extends AgentToolsHelper {
 	}
 
 	protected function getPlanRequest(array $state): string {
-		$options = $state['options'];
+		$options = $this->normalizeOptions((array) ($state['options'] ?? []));
 		$request = "Create the Site Builder JSON plan for this request:\n\n" . $state['description'];
-		$request .= "\n\nSelected design direction: {$options['designDirection']}. CSS approach: {$options['cssApproach']}. JavaScript: {$options['javascript']}.";
-		if($options['preset'] !== '') $request .= " Preset: {$options['preset']}.";
+		$request .= "\n\nSelected design direction: {$options['designDirection']}. Color scheme: {$options['colorScheme']}. CSS approach: {$options['cssApproach']}. JavaScript: {$options['javascript']}.";
+		if($options['brandColor'] !== '') $request .= " Brand color: {$options['brandColor']}; build the palette around it unless the selected scheme is monochrome.";
+		if($options['siteName'] !== '') {
+			$request .= "\nSite or business name: " . json_encode($options['siteName'], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) . '. Use this exact name as the home page title.';
+		} else {
+			$request .= "\nNo site or business name was supplied. Use an obvious placeholder suited to the site type, such as Your Name for a portfolio, Company Name for a business, or Event Series Name for events. Do not use the generic site type as the site name. Use the placeholder as the home page title.";
+		}
+		if($options['preset'] !== '') $request .= "\nPreset: {$options['preset']}.";
 		if(!empty($state['revisionRequest'])) {
 			$request .= "\n\nCurrent plan:\n" . json_encode($state['plan'], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
 			$request .= "\n\nRequested revision or validation corrections:\n" . $state['revisionRequest'];
@@ -909,7 +994,9 @@ PROMPT;
 		return <<<'PROMPT'
 You are the refinement phase of ProcessWire AgentTools Site Builder. Apply one small, focused correction to an already completed site. Use write_file only for files already listed in the approved plan. Use refine_pages to correct content on planned pages or add a small number of sample pages with templates and fields already approved by the plan. Use eval_php only for read-only inspection. When inspecting ProcessWire objects, echo selected scalar properties such as IDs, names, titles, or counts; never pass Wire, Page, or PageArray objects to var_dump(), var_export(), or print_r(). Do not create or change fields, templates, modules, migrations, or unapproved files. Do not turn a refinement into a major new feature; tell the user that a new build is needed when the request requires new schema or broad architecture.
 
-Keep repeatable content in ProcessWire pages and fields rather than hardcoding repeated items in template files. Report concise progress. Before finishing, confirm that the requested correction was actually made. Site Builder will run a separate verification phase after you stop.
+If the request is ambiguous, ask one short clarifying question and stop without making changes. The user can answer with a new refinement.
+
+Keep repeatable content in ProcessWire pages and fields rather than hardcoding repeated items in template files. Report concise progress. Before finishing, confirm that the requested correction was actually made. Site Builder will run a separate verification phase after you stop when changes were made.
 PROMPT;
 	}
 
@@ -965,20 +1052,53 @@ PROMPT;
 		$state['status'] = 'done';
 		$state['finished'] = time();
 		$state['engineerSessionId'] = '';
-		if($refined) {
-			$number = (int) ($state['refinementNumber'] ?? 0);
-			foreach((array) ($state['refinements'] ?? []) as $index => $item) {
-				if((int) ($item['number'] ?? 0) === $number) $state['refinements'][$index]['finished'] = time();
-			}
-			$manifest = $session->loadManifest();
-			foreach((array) ($manifest['refinements'] ?? []) as $index => $item) {
-				if((int) ($item['number'] ?? 0) === $number) $manifest['refinements'][$index]['finished'] = time();
-			}
-			$session->saveManifest($manifest);
-		}
+		if($refined) $this->finishRefinementRecord($session, $state);
 		$this->addMessage($session, $state, $refined ? $this->_('Site refinement finished successfully.') : $this->_('Site Builder finished successfully.'));
 		$this->at->sitemap()->generate();
 		$this->at->sitemap()->generateSchema();
+	}
+
+	/** Complete a refinement that made no site changes, without running verification. */
+	protected function completeRefinementWithoutChanges(AgentToolsSiteBuilderSession $session, array &$state): void {
+		$state['phase'] = self::phaseDone;
+		$state['status'] = 'done';
+		$state['finished'] = time();
+		$state['engineerSessionId'] = '';
+		$state['engineerRound'] = 0;
+		$state['engineerTokenUsage'] = $this->emptyTokenUsage();
+		$state['consecutiveToolFailures'] = 0;
+		$this->finishRefinementRecord($session, $state);
+		$this->addMessage($session, $state, $this->_('Refinement finished without site changes; verification was not needed.'));
+	}
+
+	/** Mark the active refinement complete in state and manifest. */
+	protected function finishRefinementRecord(AgentToolsSiteBuilderSession $session, array &$state): void {
+		$number = (int) ($state['refinementNumber'] ?? 0);
+		$finished = time();
+		foreach((array) ($state['refinements'] ?? []) as $index => $item) {
+			if((int) ($item['number'] ?? 0) === $number) $state['refinements'][$index]['finished'] = $finished;
+		}
+		$manifest = $session->loadManifest();
+		foreach((array) ($manifest['refinements'] ?? []) as $index => $item) {
+			if((int) ($item['number'] ?? 0) === $number) $manifest['refinements'][$index]['finished'] = $finished;
+		}
+		$session->saveManifest($manifest);
+	}
+
+	/** Store the active refinement's final agent reply. */
+	protected function storeRefinementResponse(array &$state, string $response): void {
+		$number = (int) ($state['refinementNumber'] ?? 0);
+		$response = $this->normalizeAgentResponse($response);
+		foreach((array) ($state['refinements'] ?? []) as $index => $item) {
+			if((int) ($item['number'] ?? 0) === $number) $state['refinements'][$index]['response'] = $response;
+		}
+	}
+
+	/** Normalize stored agent prose and put a conservative ceiling on session state growth. */
+	protected function normalizeAgentResponse(string $response): string {
+		$response = trim(str_replace(["\r\n", "\r"], "\n", $response));
+		if(strlen($response) <= 50000) return $response;
+		return function_exists('mb_strcut') ? mb_strcut($response, 0, 50000, 'UTF-8') : substr($response, 0, 50000);
 	}
 
 	/** @param array<string,mixed> $state @param array<string,mixed> $result */
@@ -1005,6 +1125,13 @@ PROMPT;
 		$failed = is_array($result) && array_key_exists('ok', $result) && empty($result['ok']);
 		if(!$failed) {
 			$state['consecutiveToolFailures'] = 0;
+			if(($state['phase'] ?? '') === self::phaseRefine && $this->toolResultChanged($name, $result)) {
+				$state['refinementChanged'] = true;
+				$number = (int) ($state['refinementNumber'] ?? 0);
+				foreach((array) ($state['refinements'] ?? []) as $index => $item) {
+					if((int) ($item['number'] ?? 0) === $number) $state['refinements'][$index]['changed'] = true;
+				}
+			}
 			return;
 		}
 		$state['consecutiveToolFailures'] = (int) ($state['consecutiveToolFailures'] ?? 0) + 1;
@@ -1020,6 +1147,17 @@ PROMPT;
 			self::maxConsecutiveToolFailures
 		);
 		$this->addMessage($session, $state, $state['error'], 'warning');
+	}
+
+	/** Did a successful refinement tool result actually mutate site data or files? */
+	protected function toolResultChanged(string $name, $result): bool {
+		if(!is_array($result) || empty($result['ok'])) return false;
+		if($name === 'write_file') return in_array((string) ($result['result'] ?? ''), ['written', 'rewritten'], true);
+		if($name !== 'refine_pages') return false;
+		foreach((array) ($result['pages'] ?? []) as $status) {
+			if(in_array((string) $status, ['created', 'refined'], true)) return true;
+		}
+		return false;
 	}
 
 	/**
@@ -1156,7 +1294,10 @@ PROMPT;
 		$defaults = [
 			'agentId' => '',
 			'preset' => '',
+			'siteName' => '',
 			'designDirection' => 'editorial',
+			'colorScheme' => 'auto',
+			'brandColor' => '',
 			'cssApproach' => 'agenttools-base',
 			'javascript' => 'vanilla',
 			'planRoundLimit' => 5,
@@ -1171,7 +1312,12 @@ PROMPT;
 		$options = array_merge($defaults, $options);
 		$options['agentId'] = (string) $options['agentId'];
 		$options['preset'] = $this->wire()->sanitizer->pageName((string) $options['preset']);
-		if(!in_array($options['designDirection'], ['editorial', 'minimal', 'bold-modern', 'warm-organic'], true)) $options['designDirection'] = 'editorial';
+		$options['siteName'] = $this->wire()->sanitizer->text((string) $options['siteName'], ['maxLength' => 100]);
+		if($options['designDirection'] === 'warm-organic') $options['designDirection'] = 'friendly';
+		if(!in_array($options['designDirection'], ['editorial', 'minimal', 'bold-modern', 'friendly', 'classic'], true)) $options['designDirection'] = 'editorial';
+		if(!in_array($options['colorScheme'], ['auto', 'warm', 'cool', 'earthy', 'vibrant', 'soft', 'monochrome'], true)) $options['colorScheme'] = 'auto';
+		$options['brandColor'] = strtolower(trim((string) $options['brandColor']));
+		if(!preg_match('/^#[0-9a-f]{6}$/', $options['brandColor'])) $options['brandColor'] = '';
 		if(!in_array($options['cssApproach'], ['agenttools-base', 'uikit', 'bootstrap'], true)) $options['cssApproach'] = 'agenttools-base';
 		if(!in_array($options['javascript'], ['vanilla', 'htmx'], true)) $options['javascript'] = 'vanilla';
 		foreach(['planRoundLimit', 'buildRoundLimit', 'refineRoundLimit', 'verifyRoundLimit'] as $key) $options[$key] = max(1, min(200, (int) $options[$key]));

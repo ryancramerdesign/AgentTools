@@ -141,7 +141,10 @@ class ProcessAgentToolsSiteBuilder extends ProcessAgentToolsHelper {
 				$result = $builder->start(trim((string) $input->post('description')), [
 					'agentId' => (string) $input->post('agentId'),
 					'preset' => (string) $input->post('preset'),
+					'siteName' => (string) $input->post('siteName'),
 					'designDirection' => (string) $input->post('designDirection'),
+					'colorScheme' => (string) $input->post('colorScheme'),
+					'brandColor' => (string) $input->post('brandColor'),
 					'cssApproach' => (string) $input->post('cssApproach'),
 					'javascript' => (string) $input->post('javascript'),
 				]);
@@ -152,7 +155,7 @@ class ProcessAgentToolsSiteBuilder extends ProcessAgentToolsHelper {
 				if($action === 'revise') {
 					$builder->revisePlan($id, trim((string) $input->post('revision')));
 				} else if($action === 'approve') {
-					if($this->planHasUpdates($builder->getPlan($id)) && !$input->post('confirmUpdates')) {
+					if($builder->planNeedsUpdateConfirmation($builder->getPlan($id)) && !$input->post('confirmUpdates')) {
 						throw new WireException($this->_('Please confirm that you understand this plan will update existing site resources.'));
 					}
 					$builder->approvePlan($id, (bool) $input->post('acceptOpenQuestions'));
@@ -211,7 +214,7 @@ class ProcessAgentToolsSiteBuilder extends ProcessAgentToolsHelper {
 		$sanitizer = $this->wire()->sanitizer;
 		$presets = [
 			'blog' => [$this->_('Blog'), $this->_('Build a polished publication with a homepage, article index, article pages, about page, and contact page.')],
-			'portfolio' => [$this->_('Portfolio'), $this->_('Build a restrained portfolio with a homepage, projects index, project pages, about page, and contact page.')],
+			'portfolio' => [$this->_('Portfolio'), $this->_('Build a distinctive portfolio with a homepage, projects index, project pages, about page, and contact page.')],
 			'business' => [$this->_('Small business'), $this->_('Build a clear business site with a homepage, services, about, testimonials, and contact page.')],
 			'documentation' => [$this->_('Documentation'), $this->_('Build a documentation site with an overview, organized sections, article pages, and useful navigation.')],
 			'events' => [$this->_('Events'), $this->_('Build an events site with upcoming events, event detail pages, venue information, and contact page.')],
@@ -240,6 +243,13 @@ class ProcessAgentToolsSiteBuilder extends ProcessAgentToolsHelper {
 		$f->val($description);
 		$form->add($f);
 
+		$f = $form->InputfieldText;
+		$f->attr('name', 'siteName');
+		$f->label = $this->_('Site or business name');
+		$f->description = $this->_('Optional. When blank, the plan will use an obvious placeholder suited to the site type.');
+		$f->columnWidth = 50;
+		$form->add($f);
+
 		$f = $form->InputfieldSelect;
 		$f->attr('name', 'agentId');
 		$f->label = $this->_('Agent / model');
@@ -257,9 +267,36 @@ class ProcessAgentToolsSiteBuilder extends ProcessAgentToolsHelper {
 			'editorial' => $this->_('Editorial'),
 			'minimal' => $this->_('Minimal'),
 			'bold-modern' => $this->_('Bold modern'),
-			'warm-organic' => $this->_('Warm organic'),
+			'friendly' => $this->_('Friendly'),
+			'classic' => $this->_('Classic'),
 		]);
 		$f->val('editorial');
+		$form->add($f);
+
+		$f = $form->InputfieldSelect;
+		$f->attr('name', 'colorScheme');
+		$f->label = $this->_('Color scheme');
+		$f->columnWidth = 50;
+		$f->addOptions([
+			'auto' => $this->_('Choose for me'),
+			'warm' => $this->_('Warm'),
+			'cool' => $this->_('Cool'),
+			'earthy' => $this->_('Earthy'),
+			'vibrant' => $this->_('Vibrant'),
+			'soft' => $this->_('Soft (pastels)'),
+			'monochrome' => $this->_('Monochrome'),
+		]);
+		$f->val('auto');
+		$form->add($f);
+
+		$f = $form->InputfieldText;
+		$f->attr('name', 'brandColor');
+		$f->label = $this->_('Brand color');
+		$f->description = $this->_('Optional. If provided, the palette will be built around this color.');
+		$f->attr('placeholder', '#2563eb');
+		$f->attr('pattern', '#[0-9A-Fa-f]{6}');
+		$f->attr('maxlength', 7);
+		$f->columnWidth = 50;
 		$form->add($f);
 
 		$f = $form->InputfieldSelect;
@@ -351,7 +388,7 @@ class ProcessAgentToolsSiteBuilder extends ProcessAgentToolsHelper {
 			$form->add($f);
 		}
 
-		if($this->planHasUpdates($plan)) {
+		if($this->at->siteBuilder()->planNeedsUpdateConfirmation($plan)) {
 			$f = $form->InputfieldCheckbox;
 			$f->attr('name', 'confirmUpdates');
 			$f->label = $this->_('Confirm existing-site changes');
@@ -395,22 +432,6 @@ class ProcessAgentToolsSiteBuilder extends ProcessAgentToolsHelper {
 		$raw->themeOffset = 1;
 		$form->add($raw);
 		return $form->render();
-	}
-
-	/**
-	 * Does the plan update any existing site resource?
-	 *
-	 * @param array<string,mixed> $plan
-	 * @return bool
-	 *
-	 */
-	protected function planHasUpdates(array $plan): bool {
-		foreach(['fields', 'templates', 'pages', 'files', 'modules'] as $type) {
-			foreach((array) ($plan[$type] ?? []) as $item) {
-				if(is_array($item) && ($item['disposition'] ?? '') === 'update') return true;
-			}
-		}
-		return false;
 	}
 
 	/**
@@ -552,12 +573,42 @@ class ProcessAgentToolsSiteBuilder extends ProcessAgentToolsHelper {
 			'</p>';
 		$form->add($f);
 
+		$buildResponse = trim((string) ($state['buildResponse'] ?? ''));
+		if($buildResponse !== '') {
+			$f = $form->InputfieldMarkup;
+			$f->label = $this->_('Builder report');
+			$f->icon = 'comment';
+			$f->themeOffset = 1;
+			$f->value = $this->renderAgentText($buildResponse);
+			$form->add($f);
+		}
+
+		$refinements = array_values((array) ($state['refinements'] ?? []));
+		if($refinements) {
+			$refinements = array_slice(array_reverse($refinements), 0, 10);
+			foreach($refinements as $index => $refinement) {
+				if(!is_array($refinement)) continue;
+				$number = (int) ($refinement['number'] ?? 0);
+				$f = $form->InputfieldMarkup;
+				$f->label = $index === 0 ? $this->_('Latest refinement') : sprintf($this->_('Refinement %d'), $number);
+				$f->icon = 'comments';
+				$f->themeOffset = 1;
+				if($index > 0) $f->collapsed = Inputfield::collapsedYes;
+				$f->value =
+					'<h4>' . $this->_('Request') . '</h4>' .
+					$this->renderAgentText((string) ($refinement['request'] ?? '')) .
+					'<h4>' . $this->_('Reply') . '</h4>' .
+					$this->renderAgentText((string) ($refinement['response'] ?? $this->_('No reply was recorded.')));
+				$form->add($f);
+			}
+		}
+
 		$f = $form->InputfieldTextarea;
 		$f->attr('name', 'refinement');
 		$f->label = $this->_('Refine this site');
 		$f->icon = 'magic';
 		$f->description = $this->_('Describe a small correction, content improvement, or sample-page addition. Refinement uses the approved site plan and runs verification again.');
-		$f->notes = $this->_('Major new features or schema changes should begin with a new site description.');
+		$f->notes = $this->_('Refinements adjust what is already built. To add a new section or feature, such as a blog, start a new plan instead; it builds on this site rather than replacing it.');
 		$f->attr('rows', 4);
 		$form->add($f);
 
@@ -599,10 +650,22 @@ class ProcessAgentToolsSiteBuilder extends ProcessAgentToolsHelper {
 		$new = $form->InputfieldButton;
 		$new->href = $this->url('site-builder/?new=1');
 		$new->icon = 'plus';
-		$new->val($this->_('Build another site'));
+		$new->val($this->_('Plan an addition'));
 		$new->setSecondary();
 		$form->add($new);
 		return $form->render();
+	}
+
+	/** Render stored agent or user prose as encoded paragraphs and line breaks only. */
+	protected function renderAgentText(string $text): string {
+		$text = trim(str_replace(["\r\n", "\r"], "\n", $text));
+		if($text === '') return '<p class="detail">' . $this->_('No reply was recorded.') . '</p>';
+		$paragraphs = preg_split('/\n{2,}/', $text) ?: [$text];
+		$out = '';
+		foreach($paragraphs as $paragraph) {
+			$out .= '<p>' . nl2br($this->wire()->sanitizer->entities(trim($paragraph)), false) . '</p>';
+		}
+		return $out;
 	}
 
 	/** @return InputfieldForm */
