@@ -848,8 +848,9 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	 */
 	protected function getSessionLockMaxAge(array $state, array $options): int {
 		$stored = (array) ($state['options'] ?? []);
-		$timeout = (int) ($options['timeout'] ?? $stored['timeout'] ?? $this->getRequestTimeout());
-		if($timeout < 1) $timeout = $this->getRequestTimeout();
+		$timeout = $this->getEffectiveRequestTimeout([
+			'timeout' => $options['timeout'] ?? $stored['timeout'] ?? 0,
+		]);
 		return $timeout + 60;
 	}
 
@@ -2294,7 +2295,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			$payload = array_merge($payload, array_diff_key($options['anthropic'], $reserved));
 		}
 
-		$timeout = isset($options['timeout']) ? (int) $options['timeout'] : $this->getRequestTimeout();
+		$timeout = $this->getEffectiveRequestTimeout($options);
 
 		$headers = [
 			'x-api-key: ' . $request->apiKey,
@@ -2431,7 +2432,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			}
 		}
 
-		$timeout = isset($options['timeout']) ? (int) $options['timeout'] : $this->getRequestTimeout();
+		$timeout = $this->getEffectiveRequestTimeout($options);
 
 		$headers = [
 			'Authorization: Bearer ' . $request->apiKey,
@@ -3732,6 +3733,21 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	protected function getRequestTimeout(): int {
 		$timeout = (int) $this->at->get('engineer_request_timeout');
 		return $timeout > 0 ? $timeout : self::defaultRequestTimeout;
+	}
+
+	/**
+	 * Get the effective provider request timeout for runtime options.
+	 *
+	 * Zero and negative values mean use the configured/default timeout rather
+	 * than cURL's special wait-forever behavior.
+	 *
+	 * @param array $options
+	 * @return int
+	 *
+	 */
+	public function getEffectiveRequestTimeout(array $options = []): int {
+		$timeout = (int) ($options['timeout'] ?? 0);
+		return $timeout > 0 ? $timeout : $this->getRequestTimeout();
 	}
 
 	/**

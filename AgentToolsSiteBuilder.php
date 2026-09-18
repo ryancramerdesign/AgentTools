@@ -750,6 +750,7 @@ class AgentToolsSiteBuilder extends AgentToolsHelper {
 
 	/** @return array<string,mixed> */
 	protected function getAskOptions(array $state, string $phase): array {
+		$engineer = $this->at->engineer();
 		$options = (array) $state['options'];
 		$agent = $this->at->getAgents()->getById((string) $options['agentId']);
 		if(!$agent) $agent = $this->at->getPrimaryAgent();
@@ -778,7 +779,7 @@ class AgentToolsSiteBuilder extends AgentToolsHelper {
 			'systemPrompt' => $systemPrompt,
 			'tools' => $tools,
 			'maxIterations' => (int) $options[$phase . 'RoundLimit'],
-			'timeout' => (int) $this->at->get('engineer_request_timeout'),
+			'timeout' => $engineer->getEffectiveRequestTimeout(),
 			'traceType' => 'site-builder-' . $phase,
 			'cacheInitialMessage' => $provider === AgentToolsEngineer::providerAnthropic,
 			'cacheRollingMessage' => $provider === AgentToolsEngineer::providerAnthropic,
@@ -1371,8 +1372,7 @@ PROMPT;
 	}
 
 	protected function getLockMaxAge(array $options = []): int {
-		$timeout = (int) ($options['timeout'] ?? $this->at->get('engineer_request_timeout'));
-		if($timeout < 30) $timeout = 120;
+		$timeout = $this->at->engineer()->getEffectiveRequestTimeout($options);
 		return $timeout + 90;
 	}
 

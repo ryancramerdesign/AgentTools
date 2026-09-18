@@ -614,6 +614,11 @@ PROMPT;
 
 	/** @param array $verification @param array $pages @param array $templates @param string[] $errors */
 	protected function validateVerification(array $verification, array $pages, array $templates, array &$errors): void {
+		$templatesWithPages = [];
+		foreach($pages as $page) {
+			$template = is_array($page) ? (string) ($page['template'] ?? '') : '';
+			if($template !== '') $templatesWithPages[$template] = true;
+		}
 		foreach((array) ($verification['routes'] ?? []) as $route) {
 			$key = is_array($route) ? (string) ($route['page'] ?? '') : '';
 			if($key === '' || !isset($pages[$key])) $errors[] = "Verification route references unknown page key $key.";
@@ -627,6 +632,7 @@ PROMPT;
 			if($template !== '') $covered[$template] = true;
 		}
 		foreach($templates as $name => $template) {
+			if(!isset($templatesWithPages[$name])) continue;
 			if(!isset($covered[$name])) $errors[] = "Template $name needs a representative admin page verification entry.";
 		}
 	}
@@ -744,6 +750,7 @@ PROMPT;
 			],
 			'FieldtypePage' => [
 				'inputfieldclass' => 'inputfield',
+				'labelfield' => 'labelFieldName',
 			],
 		];
 		$lower = strtolower($property);

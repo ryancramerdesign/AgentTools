@@ -428,11 +428,12 @@ class WireTest_AgentTools extends WireTest {
 			$repairFixture = $plans->normalize(['fields' => [
 				['name' => 'author', 'type' => 'FieldtypeText', 'settings' => ['maxLength' => 120]],
 				['name' => 'published_date', 'type' => 'FieldtypeDatetime', 'settings' => ['outputFormat' => 'Y-m-d']],
-				['name' => 'related_page', 'type' => 'FieldtypePage', 'settings' => ['inputfieldClass' => 'InputfieldAsmSelect']],
+				['name' => 'related_page', 'type' => 'FieldtypePage', 'settings' => ['inputfieldClass' => 'InputfieldAsmSelect', 'labelField' => 'title']],
 			]], $repairWarnings);
 			$this->check('Site Builder repairs case-only field setting names', 120, $repairFixture['fields'][0]['settings']['maxlength'] ?? 0);
 			$this->check('Site Builder repairs known Fieldtype setting aliases', 'Y-m-d', $repairFixture['fields'][1]['settings']['dateOutputFormat'] ?? '');
 			$this->check('Site Builder repairs Page inputfieldClass alias', 'InputfieldAsmSelect', $repairFixture['fields'][2]['settings']['inputfield'] ?? '');
+			$this->check('Site Builder repairs Page labelField alias', 'title', $repairFixture['fields'][2]['settings']['labelFieldName'] ?? '');
 			$this->check('Site Builder reports repaired case-only setting names', true, in_array('Renamed setting maxLength to maxlength on field author (FieldtypeText).', $repairWarnings, true));
 			$this->check('Site Builder reports repaired Fieldtype setting aliases', true, in_array('Renamed setting outputFormat to dateOutputFormat on field published_date (FieldtypeDatetime).', $repairWarnings, true));
 			$datetimeWarnings = [];
@@ -606,6 +607,17 @@ class WireTest_AgentTools extends WireTest {
 			$this->check('Site Builder accepts plan with derived verification', [], $builder->validatePlan($planWithoutVerification));
 			$this->check('Site Builder derives routes for every front-end page', ['home', 'fixture'], $routeKeys);
 			$this->check('Site Builder derives representative admin template checks', [$templateName], $adminTemplates);
+			$verificationErrors = [];
+			$verificationArgs = [
+				['adminPages' => [['template' => $templateName, 'page' => 'fixture']]],
+				$this->invokeProtected($plans, 'getPageMap', [$plan]),
+				array_merge($this->invokeProtected($plans, 'getTemplateMap', [$plan]), [
+					'basic-page' => ['name' => 'basic-page', 'disposition' => 'reuse'],
+				]),
+				&$verificationErrors,
+			];
+			$this->invokeProtected($plans, 'validateVerification', $verificationArgs);
+			$this->check('Site Builder does not require admin verification for unused templates', [], $verificationErrors);
 			$derivedOnly = $plans->normalize([
 				'templates' => [
 					['name' => 'front', 'dataOnly' => false],
@@ -711,6 +723,8 @@ class WireTest_AgentTools extends WireTest {
 			$this->check('Site Builder start reports zero rounds', 0, $started['round']);
 			$planningState = $builder->getState($sessionId);
 			$planningOptions = $this->invokeProtected($builder, 'getAskOptions', [$planningState, AgentToolsSiteBuilder::phasePlan]);
+			$this->check('Site Builder resolves a positive provider timeout', true, (int) ($planningOptions['timeout'] ?? 0) > 0);
+			$this->check('Site Builder lock outlives provider timeout', true, $this->invokeProtected($builder, 'getLockMaxAge', [[]]) > (int) $planningOptions['timeout']);
 			if($planningOptions['provider'] === AgentToolsEngineer::providerAnthropic) {
 				$this->check('Site Builder raises Anthropic planning output limit', AgentToolsSiteBuilder::planMaxTokens, $planningOptions['anthropic']['max_tokens'] ?? 0);
 				if(strpos(strtolower((string) $planningOptions['model']), 'claude-sonnet-5') === 0) {
@@ -1556,6 +1570,8 @@ class WireTest_AgentTools extends WireTest {
 	 */
 	protected function testEngineerStepMode(AgentTools $at) {
 		$engineer = $at->engineer();
+		$this->check('Engineer timeout zero uses configured default', $engineer->getEffectiveRequestTimeout(), $engineer->getEffectiveRequestTimeout(['timeout' => 0]));
+		$this->check('Engineer accepts positive runtime timeout', 17, $engineer->getEffectiveRequestTimeout(['timeout' => 17]));
 		$responses = [
 			[
 				'stop_reason' => 'tool_use',

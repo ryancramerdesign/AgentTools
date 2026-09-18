@@ -685,6 +685,7 @@ class ProcessAgentToolsSiteBuilder extends ProcessAgentToolsHelper {
 	protected function renderTokenUsageSummary(array $state): string {
 		$s = $this->wire()->sanitizer;
 		$agent = $this->at->getAgents()->getById((string) ($state['options']['agentId'] ?? ''));
+		$this->at->engineer();
 		$isAnthropic = $agent && $agent->provider === AgentToolsEngineer::providerAnthropic;
 		$phases = (array) ($state['phaseTokenUsage'] ?? []);
 		$phases['total'] = (array) ($state['tokenUsage'] ?? []);
