@@ -16,11 +16,17 @@
 		var buttons = document.querySelectorAll('.at-site-builder-preset');
 		buttons.forEach(function(button) {
 			button.addEventListener('click', function() {
+				var wasActive = button.getAttribute('aria-pressed') === 'true';
 				buttons.forEach(function(item) {
 					item.classList.remove('uk-button-primary');
 					item.classList.add('uk-button-default');
 					item.setAttribute('aria-pressed', 'false');
 				});
+				presetValue.value = '';
+				if(wasActive) {
+					description.focus();
+					return;
+				}
 				button.classList.remove('uk-button-default');
 				button.classList.add('uk-button-primary');
 				button.setAttribute('aria-pressed', 'true');

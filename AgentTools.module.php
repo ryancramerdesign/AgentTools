@@ -1109,6 +1109,7 @@ class AgentTools extends WireData implements Module, ConfigurableModule {
 		]);
 		$this->wire($agent);
 		$provider = strtolower(trim((string) ($settings['provider'] ?? '')));
+		$this->engineer();
 		if(in_array($provider, [AgentToolsEngineer::providerAnthropic, AgentToolsEngineer::providerOpenAI], true)) {
 			$agent->provider = $provider;
 		}

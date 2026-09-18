@@ -221,7 +221,7 @@ class ProcessAgentToolsSiteBuilder extends ProcessAgentToolsHelper {
 		];
 
 		$f = $form->InputfieldMarkup;
-		$f->label = $this->_('Start with an idea');
+		$f->label = $this->_('Start with an idea (optional)');
 		$f->icon = 'magic';
 		$buttons = '';
 		foreach($presets as $name => [$label, $text]) {
