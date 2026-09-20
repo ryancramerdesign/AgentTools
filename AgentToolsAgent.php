@@ -11,6 +11,7 @@
  * @property string $endpointUrl
  * @property string $label
  * @property string $description
+ * @property string $requestOptions JSON object merged into provider request payloads
  *
  *
  */
@@ -25,6 +26,7 @@ class AgentToolsAgent extends WireData {
 		'apiKey' => '' ,
 		'endpointUrl' => '',
 		'description' => '',
+		'requestOptions' => '',
 	];
 
 	/**
@@ -76,7 +78,7 @@ class AgentToolsAgent extends WireData {
 	 *
 	 * @param string $line String in format:
 	 *  - "model | api-key | endpoint-url | label" or
-	 *  - "provider | model | api-key | endpoint-url | label | description | id | agentName"
+	 *  - "provider | model | api-key | endpoint-url | label | description | id | agentName | requestOptions"
 	 * @return bool
 	 *
 	 */
@@ -98,6 +100,7 @@ class AgentToolsAgent extends WireData {
 		if(count($parts)) $this->description = array_shift($parts);
 		if(count($parts)) $this->id = array_shift($parts);
 		if(count($parts)) $this->agentName = array_shift($parts);
+		if(count($parts)) $this->requestOptions = implode('|', $parts);
 		// Auto-detect Anthropic-compatible endpoints when provider was not explicitly specified
 		if(!$explicitProvider && $this->endpointUrl) {
 			$path = (string) parse_url($this->endpointUrl, PHP_URL_PATH);
@@ -109,9 +112,46 @@ class AgentToolsAgent extends WireData {
 	public function getString() {
 		return trim(
 			"$this->model | $this->apiKey | $this->endpointUrl | $this->label | " .
-			"$this->description | $this->id | $this->agentName",
+			"$this->description | $this->id | $this->agentName | $this->requestOptions",
 			'| '
 		);
+	}
+
+	/**
+	 * Decode provider request parameters configured for this agent.
+	 *
+	 * @return array<string,mixed>
+	 * @throws WireException When the configured value is not a JSON object
+	 *
+	 */
+	public function getRequestOptions(): array {
+		$value = trim((string) $this->requestOptions);
+		if($value === '') return [];
+		$options = json_decode($value, true);
+		if(!is_array($options) || $value[0] !== '{') {
+			throw new WireException($this->_('Extra request parameters must be a JSON object.'));
+		}
+		return $options;
+	}
+
+	/**
+	 * Merge this agent's provider defaults beneath request-specific options.
+	 *
+	 * @param array<string,mixed> $options
+	 * @param string $provider
+	 * @return array<string,mixed>
+	 *
+	 */
+	public function mergeRequestOptions(array $options, string $provider = ''): array {
+		$requestOptions = $this->getRequestOptions();
+		if(!$requestOptions) return $options;
+		if($provider === '') $provider = (string) $this->provider;
+		$providerKey = $provider === 'anthropic' ? 'anthropic' : 'openai';
+		$options[$providerKey] = array_replace_recursive(
+			$requestOptions,
+			(array) ($options[$providerKey] ?? [])
+		);
+		return $options;
 	}
 
 	public function __toString() {
@@ -181,6 +221,7 @@ class AgentToolsAgent extends WireData {
 	 */
 	public function sendProviderRequest(AgentToolsRequest $request): array {
 		$at = $this->wire('at'); /** @var AgentTools $at */
+		$request->options = $this->mergeRequestOptions($request->options, (string) $request->provider);
 		return $at->engineer->sendProviderRequest($request);
 	}
 
@@ -209,7 +250,7 @@ class AgentToolsAgent extends WireData {
 	}
 
 	public function getHash() {
-		return md5("$this->model|$this->apiKey|$this->endpointUrl|$this->label|$this->description|$this->agentName");
+		return md5("$this->model|$this->apiKey|$this->endpointUrl|$this->label|$this->description|$this->agentName|$this->requestOptions");
 	}
 
 	/**

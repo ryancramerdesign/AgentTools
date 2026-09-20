@@ -43,6 +43,7 @@ class WireTest_AgentTools extends WireTest {
 		$this->testOpenAIResponsesToolShapes($at);
 		$this->testOpenCodeSessionHeaders($at);
 		$this->testPrimaryAgentConfiguration($at);
+		$this->testAgentRequestOptions();
 		$this->testEngineerStepMode($at);
 		$this->testSiteBuilder($at);
 		$this->testSiteBuilderUpdateConfirmation($at);
@@ -50,6 +51,37 @@ class WireTest_AgentTools extends WireTest {
 		$this->testStatusData($at);
 		$this->testScheduledTaskIntervals($at);
 		$this->testTraceJsonEncoding($at);
+	}
+
+	/**
+	 * Test per-agent provider request defaults and serialization.
+	 */
+	protected function testAgentRequestOptions() {
+		$agent = new AgentToolsAgent([
+			'provider' => AgentToolsEngineer::providerOpenAI,
+			'model' => 'test-reasoning-model',
+			'requestOptions' => '{"reasoning_effort":"low","thinking":{"type":"disabled"}}',
+		]);
+		$this->wire($agent);
+		$options = $agent->mergeRequestOptions([
+			'openai' => ['reasoning_effort' => 'high'],
+		], AgentToolsEngineer::providerOpenAI);
+		$this->check('Agent request parameters provide nested defaults', 'disabled', $options['openai']['thinking']['type'] ?? '');
+		$this->check('Request-specific parameters override agent defaults', 'high', $options['openai']['reasoning_effort'] ?? '');
+
+		$restored = new AgentToolsAgent($agent->getString());
+		$this->wire($restored);
+		$this->check('Agent request parameters survive configuration serialization', $agent->getRequestOptions(), $restored->getRequestOptions());
+
+		$invalid = new AgentToolsAgent(['requestOptions' => '["not-an-object"]']);
+		$this->wire($invalid);
+		$rejected = false;
+		try {
+			$invalid->getRequestOptions();
+		} catch(WireException $e) {
+			$rejected = true;
+		}
+		$this->check('Agent request parameters reject JSON lists', true, $rejected);
 	}
 
 	/**
@@ -150,10 +182,12 @@ class WireTest_AgentTools extends WireTest {
 		$transport = new class($at) extends AgentToolsEngineer {
 			public $lastUrl = '';
 			public $lastHeaders = [];
+			public $hasProgressCallback = false;
 
 			protected function curlPost(string $url, array $payload, array $headers, int $timeout = 120): array {
 				$this->lastUrl = $url;
 				$this->lastHeaders = $headers;
+				$this->hasProgressCallback = is_callable($this->providerProgressCallback);
 				return [];
 			}
 		};
@@ -204,6 +238,9 @@ class WireTest_AgentTools extends WireTest {
 		$this->check('OpenCode generated session header has expected format', true, (bool) preg_match('/^x-opencode-session: ses_[a-f0-9]{32}$/', (string) $firstHeader));
 		$transport->sendProviderRequest($request);
 		$this->check('OpenCode one-off request reuses generated session ID', $firstHeader, end($transport->lastHeaders));
+		$request->options = ['onProgress' => static function(): void {}];
+		$transport->sendProviderRequest($request);
+		$this->check('Provider transport receives runtime progress callback', true, $transport->hasProgressCallback);
 	}
 
 	/**
@@ -1572,6 +1609,13 @@ class WireTest_AgentTools extends WireTest {
 		$engineer = $at->engineer();
 		$this->check('Engineer timeout zero uses configured default', $engineer->getEffectiveRequestTimeout(), $engineer->getEffectiveRequestTimeout(['timeout' => 0]));
 		$this->check('Engineer accepts positive runtime timeout', 17, $engineer->getEffectiveRequestTimeout(['timeout' => 17]));
+		$progress = static function(): void {};
+		$providerOptions = $this->invokeProtected($engineer, 'getProviderRequestOptions', [[
+			'onProgress' => $progress,
+			'notAProviderOption' => true,
+		]]);
+		$this->check('Engineer forwards runtime provider progress callback', $progress, $providerOptions['onProgress'] ?? null);
+		$this->check('Engineer still omits unrelated runtime provider options', false, isset($providerOptions['notAProviderOption']));
 		$responses = [
 			[
 				'stop_reason' => 'tool_use',

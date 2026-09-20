@@ -1,5 +1,26 @@
 # Changelog
 
+## Version 37
+
+### Site Builder
+
+- Added streamed browser heartbeats during provider requests so slow reasoning
+  models can continue through idle FastCGI and proxy timeouts.
+- Made request timeout and stale-lock handling use the same effective timeout,
+  preventing duplicate planning requests when a model takes several minutes.
+- Improved plan validation for reused templates without planned pages and
+  recognized the FieldtypePage `labelField` setting alias.
+
+### Agents
+
+- Added optional per-agent provider request parameters as validated JSON, with
+  request-specific options taking precedence and structural request fields
+  protected from overrides.
+- Displayed each configured model ID alongside its agent label on the Agents
+  screen, making mislabeled or changed models easier to spot.
+
+---
+
 ## Version 36
 
 ### Site Builder

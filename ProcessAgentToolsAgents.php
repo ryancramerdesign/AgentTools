@@ -30,6 +30,7 @@ class ProcessAgentToolsAgents extends ProcessAgentToolsHelper {
 			'endpointUrl' => 'Endpoint URL',
 			'agentName' => 'Agent’s name',
 			'description' => 'Description',
+			'requestOptions' => 'Extra request parameters (JSON)',
 		];
 
 		$engineerKeys = [
@@ -69,6 +70,9 @@ class ProcessAgentToolsAgents extends ProcessAgentToolsHelper {
 
 			$agent = $agents->eq($n-1);
 			$agentLabel = $agent ? $agent->get('label|model') : '';
+			if($agent && $agent->model && $agentLabel !== $agent->model) {
+				$agentLabel .= ' (' . $agent->model . ')';
+			}
 
 			$fs = $form->InputfieldFieldset;
 			$fs->label = $agentLabel ? $agentLabel : "Agent $n";
@@ -87,7 +91,7 @@ class ProcessAgentToolsAgents extends ProcessAgentToolsHelper {
 			$form->add($fs);
 
 			foreach($labels as $name => $label) {
-				$f = $form->InputfieldText;
+				$f = $name === 'requestOptions' ? $form->InputfieldTextarea : $form->InputfieldText;
 				$f->attr('name', "$name$n");
 				$f->attr('data-name', $name); // for clone action
 				$f->label = $label;
@@ -95,6 +99,11 @@ class ProcessAgentToolsAgents extends ProcessAgentToolsHelper {
 				if($agent) $f->val($agent->get($name));
 				if($name === 'apiKey') $f->attr('type', 'password');
 				if($name === 'description') $f->columnWidth = 75;
+				if($name === 'requestOptions') {
+					$f->description = $this->_('Optional JSON object merged into this agent’s provider request payload, such as {"reasoning_effort":"low"}. Request-specific options take precedence.');
+					$f->attr('rows', 3);
+					$f->columnWidth = 100;
+				}
 				$fs->add($f);
 
 				if(isset($headerActions[$name])) {
@@ -146,6 +155,17 @@ class ProcessAgentToolsAgents extends ProcessAgentToolsHelper {
 
 		$input = $this->wire()->input;
 		$form->processInput($input->post);
+		for($n = 1; $n <= $maxAgents; $n++) {
+			$value = trim((string) $form->getValueByName("requestOptions$n"));
+			if($value === '') continue;
+			$options = json_decode($value, true);
+			if(!is_array($options) || $value[0] !== '{') {
+				$form->getChildByName("requestOptions$n")->error($this->_('Extra request parameters must be a JSON object.'));
+			} else {
+				$form->getChildByName("requestOptions$n")->val(json_encode($options, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
+			}
+		}
+		if(count($form->getErrors())) return $form->render();
 		$agents = new AgentToolsAgents();
 		$this->wire($agents);
 

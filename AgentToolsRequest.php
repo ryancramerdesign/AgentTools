@@ -34,7 +34,7 @@
  * @property string $systemPrompt System prompt, or empty string for none
  * @property array $messages Array of message objects: [['role' => 'user'|'assistant', 'content' => '...'], ...]
  * @property array $tools Tool definitions in provider format
- * @property array $options Request options: timeout (int), anthropic (array), openai (array)
+ * @property array $options Request options: timeout (int), anthropic (array), openai (array), onProgress (callable)
  */
 class AgentToolsRequest extends WireData {
 

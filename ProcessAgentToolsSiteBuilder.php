@@ -69,6 +69,10 @@ class ProcessAgentToolsSiteBuilder extends ProcessAgentToolsHelper {
 	public function executeSiteBuilderStep(): string {
 		$this->wire()->config->ajax = true;
 		header('Content-Type: application/json; charset=utf-8');
+		header('Cache-Control: no-store, no-cache, must-revalidate');
+		header('X-Accel-Buffering: no');
+		@ini_set('zlib.output_compression', '0');
+		if(function_exists('apache_setenv')) @apache_setenv('no-gzip', '1');
 		$bufferLevel = ob_get_level();
 		ob_start();
 		$completed = false;
@@ -79,15 +83,25 @@ class ProcessAgentToolsSiteBuilder extends ProcessAgentToolsHelper {
 			$error = error_get_last();
 			if(!$error || !in_array((int) $error['type'], [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR], true)) return;
 			while(ob_get_level() > $bufferLevel) ob_end_clean();
-			http_response_code(500);
-			header('Content-Type: application/json; charset=utf-8');
+			if(!headers_sent()) {
+				http_response_code(500);
+				header('Content-Type: application/json; charset=utf-8');
+			}
 			echo '{"ok":false,"error":"The Site Builder step was interrupted by a server error."}';
 		});
 		$data = ['ok' => false, 'error' => $this->_('Unable to run the Site Builder step.')];
 		try {
 			$this->wire()->session->CSRF()->validate();
 			$id = trim((string) $this->wire()->input->post('id'));
-			$result = $this->at->siteBuilder()->step($id);
+			$lastHeartbeat = 0.0;
+			$result = $this->at->siteBuilder()->step($id, [
+				'onProgress' => function() use(&$lastHeartbeat): void {
+					$now = microtime(true);
+					if($lastHeartbeat > 0 && $now - $lastHeartbeat < 10) return;
+					$lastHeartbeat = $now;
+					$this->sendStepHeartbeat();
+				},
+			]);
 			$state = $this->at->siteBuilder()->getState($id);
 			if(!$state) throw new WireException($this->_('Site Builder session not found or inaccessible.'));
 			$data = [
@@ -104,6 +118,20 @@ class ProcessAgentToolsSiteBuilder extends ProcessAgentToolsHelper {
 		$memoryReserve = '';
 		while(ob_get_level() > $bufferLevel) ob_end_clean();
 		return $json === false ? '{"ok":false,"error":"Unable to encode Site Builder response."}' : $json;
+	}
+
+	/**
+	 * Stream harmless JSON whitespace while a provider request is active.
+	 *
+	 * This keeps idle FastCGI and proxy connections alive without changing the
+	 * final response format consumed by the browser.
+	 *
+	 */
+	protected function sendStepHeartbeat(): void {
+		echo "\n" . str_repeat(' ', 4096);
+		$levels = ob_get_level();
+		for($n = $levels; $n > 0; $n--) @ob_flush();
+		flush();
 	}
 
 	/**

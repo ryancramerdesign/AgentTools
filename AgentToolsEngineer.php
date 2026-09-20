@@ -18,6 +18,9 @@
  */
 class AgentToolsEngineer extends AgentToolsHelper {
 
+	/** @var callable|null Runtime callback invoked while a provider request is active */
+	protected $providerProgressCallback = null;
+
 	const providerAnthropic = 'anthropic';
 	const providerOpenAI = 'openai';
 
@@ -144,6 +147,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	 *  - `maxInterruptions` (int): Consecutive interruption limit in resume mode (default: 3)
 	 *  - `cacheInitialMessage` (bool): Add an Anthropic cache breakpoint to the first user message
 	 *  - `cacheRollingMessage` (bool): Move an Anthropic cache breakpoint to the newest message each round
+	 *  - `onProgress` (callable): Runtime callback invoked while the provider transfer is active
 	 * @return array [ 'response' => string, 'migration' => string|null, 'error' => string|null, 'history' => array ]
 	 *
 	 */
@@ -331,6 +335,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 			if(empty($options['agentId'])) $options['agentId'] = $agent->id;
 			if(empty($options['agentLabel'])) $options['agentLabel'] = $agent->get('label|model');
 			if(empty($options['agentName'])) $options['agentName'] = $agent->agentName;
+			$options = $agent->mergeRequestOptions($options, $provider);
 		}
 		$maxIterations = $this->getMaxIterations($options);
 		$history = is_array($options['history'] ?? null) ? $options['history'] : [];
@@ -753,7 +758,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	 */
 	protected function getProviderRequestOptions(array $options): array {
 		$result = [];
-		foreach(['timeout', 'anthropic', 'openai', 'cacheInitialMessage', 'cacheRollingMessage'] as $key) {
+		foreach(['timeout', 'anthropic', 'openai', 'cacheInitialMessage', 'cacheRollingMessage', 'onProgress'] as $key) {
 			if(array_key_exists($key, $options)) $result[$key] = $options[$key];
 		}
 		return $result;
@@ -2208,15 +2213,23 @@ class AgentToolsEngineer extends AgentToolsHelper {
 	 */
 	public function ___sendProviderRequest(AgentToolsRequest $request): array {
 		if($request->sessionId === '') $request->sessionId = $this->newProviderSessionId();
-		if($request->provider === self::providerAnthropic) {
-			if(!$request->model) $request->model = self::defaultAnthropicModel;
-			return $this->sendAnthropicRequest($request);
-		} else {
-			if(!$request->model) $request->model = self::defaultOpenAIModel;
-			if(!$request->endpoint) {
-				$request->endpoint = 'https://api.openai.com/v1/chat/completions';
+		$previousProgressCallback = $this->providerProgressCallback;
+		$this->providerProgressCallback = is_callable($request->options['onProgress'] ?? null)
+			? $request->options['onProgress']
+			: null;
+		try {
+			if($request->provider === self::providerAnthropic) {
+				if(!$request->model) $request->model = self::defaultAnthropicModel;
+				return $this->sendAnthropicRequest($request);
+			} else {
+				if(!$request->model) $request->model = self::defaultOpenAIModel;
+				if(!$request->endpoint) {
+					$request->endpoint = 'https://api.openai.com/v1/chat/completions';
+				}
+				return $this->sendOpenAIRequest($request);
 			}
-			return $this->sendOpenAIRequest($request);
+		} finally {
+			$this->providerProgressCallback = $previousProgressCallback;
 		}
 	}
 
@@ -2291,7 +2304,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 
 		// Merge caller-supplied Anthropic options, protecting core structural keys
 		if(!empty($options['anthropic'])) {
-			$reserved = array_flip(['model', 'messages', 'system', 'tools']);
+			$reserved = array_flip(['model', 'messages', 'system', 'tools', 'stream']);
 			$payload = array_merge($payload, array_diff_key($options['anthropic'], $reserved));
 		}
 
@@ -2415,7 +2428,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 
 			// Merge caller-supplied OpenAI options, protecting core structural keys
 			if(!empty($options['openai'])) {
-				$reserved = array_flip(['model', 'input', 'instructions', 'tools']);
+				$reserved = array_flip(['model', 'input', 'instructions', 'tools', 'stream']);
 				$payload = array_merge($payload, array_diff_key($options['openai'], $reserved));
 			}
 		} else {
@@ -2427,7 +2440,7 @@ class AgentToolsEngineer extends AgentToolsHelper {
 
 			// Merge caller-supplied OpenAI options, protecting core structural keys
 			if(!empty($options['openai'])) {
-				$reserved = array_flip(['model', 'messages', 'tools']);
+				$reserved = array_flip(['model', 'messages', 'tools', 'stream']);
 				$payload = array_merge($payload, array_diff_key($options['openai'], $reserved));
 			}
 		}
@@ -3678,13 +3691,25 @@ class AgentToolsEngineer extends AgentToolsHelper {
 
 		while(true) {
 			$ch = curl_init($url);
-			curl_setopt_array($ch, [
+			$curlOptions = [
 				CURLOPT_POST => true,
 				CURLOPT_POSTFIELDS => json_encode($payload),
 				CURLOPT_HTTPHEADER => $headers,
 				CURLOPT_RETURNTRANSFER => true,
 				CURLOPT_TIMEOUT => $timeout,
-			]);
+			];
+			if(is_callable($this->providerProgressCallback)) {
+				$progress = $this->providerProgressCallback;
+				$progressOption = defined('CURLOPT_XFERINFOFUNCTION')
+					? constant('CURLOPT_XFERINFOFUNCTION')
+					: CURLOPT_PROGRESSFUNCTION;
+				$curlOptions[CURLOPT_NOPROGRESS] = false;
+				$curlOptions[$progressOption] = static function($handle, float $downloadTotal, float $downloaded, float $uploadTotal, float $uploaded) use($progress): int {
+					$progress($downloaded, $downloadTotal, $uploaded, $uploadTotal);
+					return 0;
+				};
+			}
+			curl_setopt_array($ch, $curlOptions);
 			$response = curl_exec($ch);
 			$httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
 			$curlError = curl_error($ch);
