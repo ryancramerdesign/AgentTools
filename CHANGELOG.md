@@ -1,5 +1,21 @@
 # Changelog
 
+## Version 38
+
+### Site Builder
+
+- Fixed **Allow more work and resume** so it always extends beyond current
+  phase usage, including builds above the former 200-round or 2-million-token
+  ceilings.
+- Improved extension sizing for token-intensive models by removing the fixed
+  500,000-token increment ceiling.
+- Made progress counters and work-limit messages report phase-specific rounds,
+  token usage, and configured limits.
+- Corrected the Site Builder test for multiline `site/AGENTS.md` guidance
+  embedded in the JSON planning snapshot.
+
+---
+
 ## Version 37
 
 ### Site Builder

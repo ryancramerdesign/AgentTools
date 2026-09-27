@@ -346,19 +346,40 @@ class AgentToolsSiteBuilder extends AgentToolsHelper {
 		return $this->updateLocked($id, function(AgentToolsSiteBuilderSession $session, array &$state) use($rounds, $tokens): void {
 			$phase = (string) ($state['phase'] ?? '');
 			if(!in_array($phase, [self::phasePlan, self::phaseBuild, self::phaseRefine, self::phaseVerify], true)) throw new WireException($this->_('This phase cannot be extended.'));
-			$key = $phase . 'RoundLimit';
-			$tokenKey = $phase . 'TokenLimit';
-			$state['options'][$key] = min(200, (int) $state['options'][$key] + max(1, $rounds));
-			$state['options'][$tokenKey] = min(2000000, max(
-				$this->getDefaultTokenLimit($phase),
-				(int) $state['options'][$tokenKey] + max(1000, $tokens)
-			));
+			$this->extendPhaseBudget($state, $phase, $rounds, $tokens);
 			$this->resetTerminalEngineerSession($state);
 			$state['consecutiveToolFailures'] = 0;
 			$state['status'] = 'ready';
 			$state['error'] = '';
 			$this->log($session, $state, sprintf($this->_('Allowed more work for the %s phase.'), $phase));
 		});
+	}
+
+	/**
+	 * Extend one phase beyond both its current limit and current usage.
+	 *
+	 * @param array<string,mixed> $state
+	 * @param string $phase
+	 * @param int $rounds
+	 * @param int $tokens
+	 *
+	 */
+	protected function extendPhaseBudget(array &$state, string $phase, int $rounds, int $tokens): void {
+		$rounds = max(1, $rounds);
+		$tokens = max(1000, $tokens);
+		$roundKey = $phase . 'RoundLimit';
+		$tokenKey = $phase . 'TokenLimit';
+		$usedRounds = (int) ($state['phaseRounds'][$phase] ?? 0);
+		$usedTokens = (int) ($state['phaseTokenUsage'][$phase]['total'] ?? 0);
+		$state['options'][$roundKey] = max(
+			(int) ($state['options'][$roundKey] ?? 0) + $rounds,
+			$usedRounds + $rounds
+		);
+		$state['options'][$tokenKey] = max(
+			$this->getDefaultTokenLimit($phase),
+			(int) ($state['options'][$tokenKey] ?? 0) + $tokens,
+			$usedTokens + $tokens
+		);
 	}
 
 	/**
@@ -1230,7 +1251,14 @@ PROMPT;
 		$tokens = (int) ($state['phaseTokenUsage'][$phase]['total'] ?? 0);
 		if($rounds < $roundLimit && ($tokenLimit < 1 || $tokens < $tokenLimit)) return false;
 		$state['status'] = 'paused';
-		$state['error'] = sprintf($this->_('The %s phase reached its configured work limit. Allow more work to continue.'), $phase);
+		$state['error'] = sprintf(
+			$this->_('The %1$s phase reached its configured work limit: %2$s of %3$s rounds and %4$s of %5$s phase tokens used. Allow more work to continue.'),
+			$phase,
+			number_format($rounds),
+			number_format($roundLimit),
+			number_format($tokens),
+			number_format($tokenLimit)
+		);
 		return true;
 	}
 

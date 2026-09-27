@@ -321,7 +321,8 @@ class WireTest_AgentTools extends WireTest {
 				'revisionRequest' => '',
 			]]);
 			$this->check('Site Builder planning request includes current-site snapshot', true, strpos($planRequest, 'CURRENT SITE SNAPSHOT:') !== false);
-			$this->check('Site Builder planning request includes AGENTS profile guidance', true, strpos($planRequest, $profileNotes) !== false);
+			$encodedProfileNotes = json_encode($profileNotes, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
+			$this->check('Site Builder planning request includes AGENTS profile guidance', true, strpos($planRequest, $encodedProfileNotes) !== false);
 			$this->check('Site Builder planning request includes color scheme', true, strpos($planRequest, 'Color scheme: earthy') !== false);
 			$this->check('Site Builder planning request includes normalized brand color', true, strpos($planRequest, 'Brand color: #2a6f4e') !== false);
 			$this->check('Site Builder planning request includes exact site name', true, strpos($planRequest, '"Cedar Works"') !== false);
@@ -504,6 +505,15 @@ class WireTest_AgentTools extends WireTest {
 			$this->check('Site Builder default build token limit is generous', AgentToolsSiteBuilder::defaultBuildTokenLimit, $builderDefaults['buildTokenLimit']);
 			$this->check('Site Builder refinement has a separate token limit', AgentToolsSiteBuilder::defaultRefineTokenLimit, $builderDefaults['refineTokenLimit']);
 			$this->check('Site Builder default verification token limit is generous', AgentToolsSiteBuilder::defaultVerifyTokenLimit, $builderDefaults['verifyTokenLimit']);
+			$extendedState = [
+				'options' => ['buildRoundLimit' => 200, 'buildTokenLimit' => 2000000],
+				'phaseRounds' => ['build' => 205],
+				'phaseTokenUsage' => ['build' => ['total' => 2057572]],
+			];
+			$extensionArgs = [&$extendedState, AgentToolsSiteBuilder::phaseBuild, 10, 500000];
+			$this->invokeProtected($builder, 'extendPhaseBudget', $extensionArgs);
+			$this->check('Site Builder extension exceeds above-cap round usage', true, $extendedState['options']['buildRoundLimit'] > $extendedState['phaseRounds']['build']);
+			$this->check('Site Builder extension exceeds above-cap token usage', true, $extendedState['options']['buildTokenLimit'] > $extendedState['phaseTokenUsage']['build']['total']);
 			$planningPrompt = $plans->getSystemPrompt();
 			$this->check('Site Builder planner warns about native field names', true, strpos($planningPrompt, 'New field names must not use native Page properties') !== false);
 			$this->check('Site Builder planner uses ProcessWire Datetime HTML types', true, strpos($planningPrompt, 'date, time, or datetime (not datetime-local)') !== false);
@@ -522,6 +532,7 @@ class WireTest_AgentTools extends WireTest {
 			$budgetArgs = [&$budgetState, AgentToolsSiteBuilder::phasePlan];
 			$this->check('Site Builder enforces planning budget', true, $this->invokeProtected($builder, 'isBudgetReached', $budgetArgs));
 			$this->check('Site Builder planning budget pauses the session', 'paused', $budgetState['status']);
+			$this->check('Site Builder work-limit message reports phase usage', true, strpos($budgetState['error'], '1 of 1 rounds') !== false && strpos($budgetState['error'], '0 of 1,000 phase tokens') !== false);
 			$this->check('Site Builder accepts deterministic fixture plan', [], $builder->validatePlan($plan));
 			$missingFileTemplatePlan = $plan;
 			$missingFileTemplatePlan['files'][] = [

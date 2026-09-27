@@ -227,7 +227,7 @@ class ProcessAgentToolsSiteBuilder extends ProcessAgentToolsHelper {
 		if($usedRounds < 1 || $usedTokens < 1) return 100000;
 		$estimated = (int) ceil(($usedTokens / $usedRounds) * max(1, $rounds));
 		$rounded = (int) (ceil($estimated / 50000) * 50000);
-		return max(100000, min(500000, $rounded));
+		return max(100000, $rounded);
 	}
 
 	/**
@@ -512,7 +512,7 @@ class ProcessAgentToolsSiteBuilder extends ProcessAgentToolsHelper {
 			'data-text-empty-log' => $this->_('No progress has been recorded yet.'),
 			'data-label-phase' => $this->_('Phase'),
 			'data-label-round' => $this->_('Round'),
-			'data-label-tokens' => $this->_('tokens'),
+			'data-label-tokens' => $this->_('phase tokens'),
 			'data-measure-modal' => $this->_('modal'),
 			'data-measure-card' => $this->_('card'),
 			'data-measure-sidebar' => $this->_('sidebar'),
@@ -823,13 +823,17 @@ class ProcessAgentToolsSiteBuilder extends ProcessAgentToolsHelper {
 
 	/** @return string */
 	protected function renderStateLine(array $state): string {
-		$phase = ucfirst((string) ($state['phase'] ?? ''));
+		$phaseName = (string) ($state['phase'] ?? '');
+		$phase = ucfirst($phaseName);
 		$status = (string) ($state['status'] ?? '');
 		$type = $status === 'done' ? 'success' : (in_array($status, ['error', 'paused'], true) ? 'warning' : '');
-		$tokens = (int) ($state['tokenUsage']['total'] ?? 0);
+		$phaseScoped = array_key_exists($phaseName, (array) ($state['phaseRounds'] ?? []));
+		$round = $phaseScoped ? (int) $state['phaseRounds'][$phaseName] : (int) ($state['round'] ?? 0);
+		$tokens = $phaseScoped ? (int) ($state['phaseTokenUsage'][$phaseName]['total'] ?? 0) : (int) ($state['tokenUsage']['total'] ?? 0);
+		$tokenLabel = $phaseScoped ? $this->_('phase tokens') : $this->_('tokens');
 		return '<p class="at-site-builder-state"><strong>' . $this->wire()->sanitizer->entities($this->_('Phase')) . ':</strong> ' .
 			$this->wire()->sanitizer->entities($phase) . ' &nbsp; ' . $this->ukLabel(ucfirst($status), $type) .
-			' <span class="detail">' . sprintf($this->_('Round %1$d · %2$s tokens'), (int) ($state['round'] ?? 0), number_format($tokens)) . '</span></p>';
+			' <span class="detail">' . sprintf($this->_('Round %1$d · %2$s %3$s'), $round, number_format($tokens), $tokenLabel) . '</span></p>';
 	}
 
 	/** @param array<int,array<string,mixed>> $log @return string */
@@ -848,13 +852,14 @@ class ProcessAgentToolsSiteBuilder extends ProcessAgentToolsHelper {
 
 	/** @return array<string,mixed> */
 	protected function stateSummary(array $state): array {
+		$phase = (string) ($state['phase'] ?? '');
 		return [
 			'id' => (string) ($state['id'] ?? ''),
-			'phase' => (string) ($state['phase'] ?? ''),
+			'phase' => $phase,
 			'status' => (string) ($state['status'] ?? ''),
-			'round' => (int) ($state['round'] ?? 0),
+			'round' => (int) ($state['phaseRounds'][$phase] ?? 0),
 			'error' => (string) ($state['error'] ?? ''),
-			'tokenUsage' => (array) ($state['tokenUsage'] ?? []),
+			'tokenUsage' => (array) ($state['phaseTokenUsage'][$phase] ?? []),
 		];
 	}
 
