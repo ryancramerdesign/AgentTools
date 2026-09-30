@@ -400,7 +400,10 @@ class WireTest_AgentTools extends WireTest {
 				],
 				'allowedParents' => ['home'],
 				'allowedChildren' => [],
-				'settings' => [],
+				'settings' => [
+					'noPrependTemplateFile' => 1,
+					'noAppendTemplateFile' => 1,
+				],
 			]],
 			'pages' => [
 				[
