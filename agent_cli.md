@@ -315,6 +315,11 @@ echo "- $name has been applied\n";
 The `migrations->getName()` method is available via the `$at` API variable
 (`wire('at')->migrations->getName(__FILE__)`).
 
+Each migration executes in its own scope with the ProcessWire API variables.
+Local variables such as `$file` cannot overwrite the runner's bookkeeping or
+leak into another migration. The runner's `$this` is not available; use the API
+variables or `wire()` to access ProcessWire services.
+
 ### Dependency check
 
 If a migration depends on a previous one having been applied, check for it

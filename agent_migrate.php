@@ -303,7 +303,7 @@ try {
 
 		ob_start();
 		try {
-			include($file);
+			$at->migrations->includeFile($file);
 			$output = ob_get_clean();
 			if(strlen(trim($output))) echo $output;
 

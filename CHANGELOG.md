@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Fixed migration scope isolation in CLI and admin runners so local variables
+  such as `$file` cannot corrupt applied-migration tracking, counters, or locks
+  (issue #18).
+
+---
+
 ## Version 38
 
 ### Site Builder

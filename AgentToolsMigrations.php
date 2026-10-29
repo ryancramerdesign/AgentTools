@@ -52,6 +52,25 @@ class AgentToolsMigrations extends AgentToolsHelper {
 	}
 
 	/**
+	 * Execute a migration in an isolated scope containing the ProcessWire API variables.
+	 *
+	 * Each invocation has its own locals, so migration variables cannot overwrite
+	 * runner state or leak into later migrations. The runner's $this is not exposed.
+	 * Output and exceptions are left for the calling runner to handle.
+	 *
+	 * @param string $file Full path to the migration file
+	 * @return mixed Value returned by the included file
+	 * @throws \Throwable When the migration throws an exception or error
+	 */
+	public function includeFile(string $file) {
+		$include = static function(string $__migrationFile, array $__fuel) {
+			extract($__fuel, EXTR_SKIP);
+			return include($__migrationFile);
+		};
+		return $include($file, $this->wire()->fuel->getArray());
+	}
+
+	/**
 	 * Execute migration lint CLI action.
 	 *
 	 * @return bool

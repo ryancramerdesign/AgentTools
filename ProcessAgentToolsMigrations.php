@@ -392,8 +392,6 @@ class ProcessAgentToolsMigrations extends ProcessAgentToolsHelper {
 	 *
 	 */
 	protected function runMigrationFiles(array $migrationFiles, string $backUrl): string {
-		extract($this->wire()->fuel->getArray()); // note: this overwrites $files, if used
-
 		$results = [];
 		$passCount = 0;
 		$failFile = null;
@@ -412,7 +410,7 @@ class ProcessAgentToolsMigrations extends ProcessAgentToolsHelper {
 			foreach($migrationFiles as $file) {
 				ob_start();
 				try {
-					include($file);
+					$this->at->migrations->includeFile($file);
 					$fileOutput = ob_get_clean();
 					$this->at->migrations->addApplied($file);
 					$passCount++;

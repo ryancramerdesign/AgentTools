@@ -37,6 +37,7 @@ class WireTest_AgentTools extends WireTest {
 		$this->testReadFileRanges($at);
 		$this->testReadFileSymlinks($at);
 		$this->testMigrationLint($at);
+		$this->testMigrationScope($at);
 		$this->testSaveMigrationReportedPath($at);
 		$this->testSchemaTemplateFields($at);
 		$this->testMcpMessageShapes($at);
@@ -1414,6 +1415,129 @@ class WireTest_AgentTools extends WireTest {
 		$this->check('Migration lint catches bad filename', true, in_array('Filename should match YYYYMMDDhhmmss_description.php.', $result['errors'], true));
 		$this->check('Migration lint catches missing namespace', true, in_array('File should begin with "<?php namespace ProcessWire;".', $result['errors'], true));
 		$this->check('Migration lint warns about missing getName()', true, in_array('Missing standard $name assignment with wire(\'at\')->migrations->getName(__FILE__).', $result['warnings'], true));
+	}
+
+	/**
+	 * Test migration scope isolation and filename bookkeeping in both runners.
+	 *
+	 * @param AgentTools $at
+	 */
+	protected function testMigrationScope(AgentTools $at) {
+		$migrations = $at->migrations();
+		$content = <<<'PHP'
+<?php namespace ProcessWire;
+$snapshot = [
+	'api' => $pages === wire('pages') && $config === wire('config') && $files === wire('files') && $at === wire('at') && $wire === wire(),
+	'this' => isset($this),
+	'runnerLocals' => isset($passCount) || isset($results) || isset($runnable) || isset($backUrl),
+	'previousLocals' => isset($scopeLeak),
+];
+$file = $config->paths->root . 'tmp/photo.jpg';
+$passCount = -100;
+$failFile = 'wrong-failure.jpg';
+$migrationFiles = [];
+$results = [];
+$lockFp = null;
+$scopeLeak = true;
+echo "isolated-migration\n";
+return $snapshot;
+PHP;
+		$dir = $this->makeTempDir();
+		$file = $dir . 'scope.php';
+		$this->writeTempFile($file, $content);
+		for($n = 0; $n < 2; $n++) {
+			ob_start();
+			try {
+				$result = $migrations->includeFile($file);
+			} finally {
+				$output = ob_get_clean();
+			}
+			$this->check("Migration include $n receives API variables only", ['api' => true, 'this' => false, 'runnerLocals' => false, 'previousLocals' => false], $result);
+			$this->check("Migration include $n preserves output", "isolated-migration\n", $output);
+		}
+
+		// Use in-memory bookkeeping and sitemap stubs while exercising the real runners.
+		$at->sitemap();
+		$property = new \ReflectionProperty($at, 'helpers');
+		$property->setAccessible(true);
+		$originalHelpers = $property->getValue($at);
+		$testMigrations = new class($at) extends AgentToolsMigrations {
+			public $applied = [];
+
+			public function getApplied() {
+				return $this->applied;
+			}
+
+			public function addApplied($file) {
+				$this->applied[] = basename($file);
+			}
+		};
+		$this->wire($testMigrations);
+		$sitemap = new class($at) extends AgentToolsSitemap {
+			public function generate($depth = self::defaultDepth) {
+				return true;
+			}
+
+			public function generateSchema() {
+				return true;
+			}
+		};
+		$this->wire($sitemap);
+		$name = date('YmdHis') . '_selftest_scope_' . bin2hex(random_bytes(4));
+		$first = $at->getFilesPath('migrations') . $name . '_first.php';
+		$second = $at->getFilesPath('migrations') . $name . '_second.php';
+		$failure = $at->getFilesPath('migrations') . $name . '_failure.php';
+		$argv = $_SERVER['argv'];
+		$bufferLevel = ob_get_level();
+		try {
+			$this->writeTempFile($first, $content);
+			$this->writeTempFile($second, $content);
+			$this->writeTempFile($failure, '<?php namespace ProcessWire; $file = "wrong-failure.jpg"; echo "before-failure\n"; throw new WireException("Migration scope fixture failed.");');
+			$helpers = $originalHelpers;
+			$helpers['migrations'] = $testMigrations;
+			$helpers['sitemap'] = $sitemap;
+			$property->setValue($at, $helpers);
+			$_SERVER['argv'] = ['index.php', '--at-migrations-apply', '--file=' . basename($first)];
+			ob_start();
+			$success = $testMigrations->cliExecute('apply');
+			$output = ob_get_clean();
+			$this->check('CLI migration records its original filename after local reassignment', [basename($first)], $testMigrations->getApplied());
+			$this->check('CLI migration keeps runner counters and output intact', true, $success && strpos($output, "isolated-migration\n") !== false && strpos($output, 'Applied: 1 migration(s). All up to date.') !== false);
+			ob_start();
+			$success = $testMigrations->cliExecute('apply');
+			$output = ob_get_clean();
+			$this->check('CLI migration does not run again after reassignment', true, $success && strpos($output, 'already been applied') !== false && strpos($output, 'isolated-migration') === false && count($testMigrations->getApplied()) === 1);
+			$_SERVER['argv'][2] = '--file=' . basename($failure);
+			ob_start();
+			$success = $testMigrations->cliExecute('apply');
+			$output = ob_get_clean();
+			$this->check('CLI migration failure keeps the original filename', true, !$success && strpos($output, 'Stopped at: ' . basename($failure)) !== false && strpos($output, 'before-failure') !== false && strpos($output, 'Migration scope fixture failed.') !== false);
+			$this->check('CLI migration failure is not recorded as applied', [basename($first)], $testMigrations->getApplied());
+
+			require_once(__DIR__ . '/ProcessAgentTools.module.php');
+			require_once(__DIR__ . '/ProcessAgentToolsHelper.php');
+			require_once(__DIR__ . '/ProcessAgentToolsMigrations.php');
+			$process = $this->wire(new ProcessAgentTools());
+			$admin = new ProcessAgentToolsMigrations($process, $at);
+			$testMigrations->applied = [];
+			$output = $this->invokeProtected($admin, 'runMigrationFiles', [[$first, $second, $failure], './']);
+			$this->check('Admin migration batch records original filenames after reassignment', [basename($first), basename($second)], $testMigrations->getApplied());
+			$this->check('Admin migration batch retains all output and filenames', true, substr_count($output, 'isolated-migration') === 2 && strpos($output, basename($first)) !== false && strpos($output, basename($second)) !== false);
+			$this->check('Admin migration failure keeps filename and exception output', true, strpos($output, basename($failure)) !== false && strpos($output, 'before-failure') !== false && strpos($output, 'Migration scope fixture failed.') !== false);
+			$lock = $testMigrations->lockApply();
+			$this->check('Migration runners release their lock after local reassignment', true, is_resource($lock));
+			$testMigrations->unlockApply($lock);
+		} finally {
+			$_SERVER['argv'] = $argv;
+			$helpers = $property->getValue($at);
+			$helpers['migrations'] = $originalHelpers['migrations'];
+			$helpers['sitemap'] = $originalHelpers['sitemap'];
+			$property->setValue($at, $helpers);
+			while(ob_get_level() > $bufferLevel) ob_end_clean();
+			foreach([$first, $second, $failure] as $fixture) {
+				if(is_file($fixture)) unlink($fixture);
+			}
+		}
 	}
 
 	/**
