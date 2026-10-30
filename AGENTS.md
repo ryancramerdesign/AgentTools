@@ -143,11 +143,37 @@ requests as background jobs when system cron is configured. Cron should run
 `php index.php --at-cron` from the ProcessWire root directory. Each run processes
 one pending job and updates an AgentTools heartbeat file.
 
+Application-defined types can be queued with `$at->jobs()->addJob()` using a
+`type` name and an `input` array. The application must register a matching
+`AgentToolsJobs::runCustomJob` after hook in `site/init.php` or an autoload module.
+The hook returns optional `response`, `result`, and `error` keys; exceptions or
+nonempty errors mark the job failed. Leave the return value unchanged for other
+types. Callbacks are registered in application code, not stored in queue JSON.
+See README.md, "Application-defined background jobs", for a complete example.
+
 Agents may help create or review the cron command, but should not silently install
 or modify a user's crontab without explicit permission. If background mode is
 unavailable in the admin, check whether `php index.php --at-cron` runs
 successfully from the ProcessWire root and report the result.
 
+
+## Direct agent requests
+
+For a single model request without Engineer tools, use an `AgentToolsAgent`:
+```php
+$agent = $at->getPrimaryAgent();
+$response = $agent->askResponse($question, $systemPrompt);
+```
+`askResponse()` returns an `AgentToolsResponse` PHP object with `text`, `error`,
+`stopReason`, `truncated`, and normalized `usage` token counts. Check that `error`
+is an empty string before treating the answer as complete. Output-limit errors
+retain partial text and set `truncated` to true. This method does not request
+JSON output from the model.
+
+`$agent->ask()` continues returning plain text; use `$agent->getLastError()` to
+check its latest error. Both methods accept `['throw' => true]` as the third
+argument to throw on errors or incomplete output. These methods differ from
+`$at->engineer()->ask()`, which runs the Engineer tool loop and returns an array.
 
 ## Engineer (admin UI and CLI)
 

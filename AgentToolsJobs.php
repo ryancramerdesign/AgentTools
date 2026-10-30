@@ -5,6 +5,8 @@
  *
  * File-backed queue service for background AgentTools work.
  *
+ * @method array|null runCustomJob(array $job) Handle an application-defined job type through hooks
+ *
  */
 class AgentToolsJobs extends AgentToolsHelper {
 
@@ -93,7 +95,11 @@ class AgentToolsJobs extends AgentToolsHelper {
 	/**
 	 * Add a job to the pending queue
 	 *
-	 * @param array $job
+	 * Built-in types are engineer, task, and page-engineer. Other types are dispatched
+	 * to runCustomJob() hooks. Queue data must be JSON-serializable; callbacks belong
+	 * in application hook code, not in the queued payload.
+	 *
+	 * @param array $job Job data, including type and optional input array
 	 * @return array Normalized job data
 	 * @throws WireException
 	 *
@@ -126,6 +132,8 @@ class AgentToolsJobs extends AgentToolsHelper {
 			'siteUrl' => '',
 			'taskName' => '',
 			'taskInput' => [],
+			'input' => [],
+			'result' => null,
 			'prompt' => '',
 			'dryRun' => false,
 			'response' => '',
@@ -142,6 +150,7 @@ class AgentToolsJobs extends AgentToolsHelper {
 		$job['started'] = 0;
 		$job['finished'] = 0;
 		$job['attempts'] = (int) $job['attempts'];
+		if(!is_array($job['input'])) throw new WireException('AgentTools job input must be an array.');
 
 		$file = $this->getJobFile($id, self::statusPending);
 		if(is_file($file)) throw new WireException("AgentTools job already exists: $id");
@@ -278,7 +287,19 @@ class AgentToolsJobs extends AgentToolsHelper {
 			} else if($type === 'page-engineer') {
 				$job = $this->runPageEngineerJob($job);
 			} else {
-				throw new WireException("Unsupported AgentTools job type: $type");
+				$result = $this->runCustomJob($job);
+				if($result === null) throw new WireException("Unsupported AgentTools job type: $type");
+				if(!is_array($result)) throw new WireException('Custom job handler must return an array or null.');
+				foreach(['response', 'error'] as $key) {
+					if(isset($result[$key]) && !is_string($result[$key])) {
+						throw new WireException("Custom job handler $key must be a string.");
+					}
+				}
+				// Validate before assigning, so invalid results can still be saved as failed jobs.
+				json_encode($result['result'] ?? null, JSON_THROW_ON_ERROR | JSON_INVALID_UTF8_SUBSTITUTE);
+				$job['response'] = $result['response'] ?? '';
+				$job['result'] = $result['result'] ?? null;
+				if(!empty($result['error'])) throw new WireException($result['error']);
 			}
 			$job['finished'] = time();
 			$job['status'] = self::statusDone;
@@ -293,6 +314,28 @@ class AgentToolsJobs extends AgentToolsHelper {
 			$this->finishJob($job, self::statusFailed);
 			return [ 'success' => false, 'job' => $job ];
 		}
+	}
+
+	/**
+	 * Handle an application-defined job type.
+	 *
+	 * Register an after hook in site/init.php or an autoload module so it is also
+	 * available to cron. Inspect $job['type'] and leave the return value unchanged
+	 * for types the hook does not handle, or when another hook already handled it.
+	 *
+	 * Return an array containing optional response (string), result (JSON-compatible
+	 * data), and error (string) keys. An empty array means success with no output.
+	 * Throw an exception or return a nonempty error to mark the job failed. Queue
+	 * identity, lifecycle fields, and notification settings are managed separately.
+	 *
+	 * No user switch is performed; hooks run as application code in the cron context.
+	 *
+	 * @param array $job Claimed job, including type, input, and submitter metadata
+	 * @return array|null Result from a matching hook, or null when unhandled
+	 * @throws \Throwable When the handler fails
+	 */
+	public function ___runCustomJob(array $job): ?array {
+		return null;
 	}
 
 	/**

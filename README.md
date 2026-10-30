@@ -330,6 +330,67 @@ that cron needs to be configured. Background jobs are stored under
 Completed and failed background jobs can be reviewed from **Setup > Agent Tools >
 Jobs**, which provides a fallback if an email notification is not delivered.
 
+### Application-defined background jobs
+
+Application code can queue its own job types using `$at->jobs()->addJob()`. Store
+a type name and JSON-compatible input data in the queue, and register the PHP
+handler with an `AgentToolsJobs::runCustomJob` after hook. Register the hook in
+`site/init.php` or an autoload module so it is available in CLI requests too.
+
+For example, a handler in `site/init.php` can summarize a page with an agent:
+
+```php
+$wire->addHookAfter('AgentToolsJobs::runCustomJob', function(HookEvent $event) {
+  $job = $event->arguments(0);
+  if($job['type'] !== 'page-summary' || $event->return !== null) return;
+
+  $page = $event->wire()->pages->get((int) ($job['input']['pageId'] ?? 0));
+  if(!$page->id) throw new WireException('Page not found.');
+
+  $agent = $event->wire()->at->getPrimaryAgent();
+  if(!$agent) throw new WireException('No agent configured.');
+  $response = $agent->askResponse(
+    'Summarize this page: ' . $page->body,
+    'Write a concise summary.',
+    ['throw' => true]
+  );
+
+  $event->return = [
+    'response' => $response->text,
+    'result' => ['pageId' => $page->id, 'usage' => $response->usage],
+  ];
+});
+```
+
+Application code can then queue work for the next cron run:
+
+```php
+$job = $at->jobs()->addJob([
+  'type' => 'page-summary',
+  'input' => ['pageId' => 123],
+  'userId' => $user->id,
+  'userName' => $user->name,
+  'notifyEmail' => $user->email, // Optional; omit for no email.
+  'agentToolsUrl' => $pages->get('template=admin, process=ProcessAgentTools')->httpUrl,
+]);
+
+// Retrieve status and results later:
+$job = $at->jobs()->getJob($job['id']);
+```
+
+The hook returns an array with optional `response` (text for the admin and email),
+`result` (JSON-compatible application data), and `error` (an error message) keys.
+Returning an empty array means success without output. Throwing an exception or
+returning a nonempty `error` marks the job failed; supplied partial results are
+retained. The queue manages IDs, status, timing, and notifications itself.
+
+Leave the hook return value unchanged for other job types and when another hook
+has already supplied a result. A job with no matching handler is marked failed.
+Built-in `engineer`, `task`, and `page-engineer` jobs use their existing handlers.
+Callbacks and executable PHP are not loaded from queued data. Submitter metadata
+does not switch the current user; application hooks execute in the cron context
+and should apply any permissions required by their workflow.
+
 ## Troubleshooting
 
 ### Engineer timeouts or HTTP 500/504 errors
@@ -644,7 +705,43 @@ $request = 'Summarize this content: ' . $body;
 $systemPrompt = 'You are a concise copywriter.'; 
 $answer = $agent->ask($request, $systemPrompt);
 ```
-If an error occurs, the error message is returned in the `$answer`. 
+If an error occurs, the error message is returned in the `$answer`. Use
+`$agent->getLastError()` to distinguish errors from answers. It returns an empty
+string on success and is reset for every `ask()` or `askResponse()` call.
+
+For reliable error checking and completion details, use `askResponse()`. It
+returns an `AgentToolsResponse` PHP object rather than a string:
+```php
+$response = $agent->askResponse($request, $systemPrompt);
+if($response->error !== '') {
+  // Handle the error before treating text as a complete answer.
+  $log->save('ai-errors', $response->error);
+} else {
+  echo $response->text;
+}
+```
+The response has these properties:
+
+| Property | Meaning |
+|----------|---------|
+| `text` | Answer text, including any partial answer |
+| `error` | Error message, or an empty string on success |
+| `stopReason` | Provider stop reason, or the Responses API status/reason |
+| `truncated` | Whether generation reached its output token limit |
+| `usage` | Token counts: `input`, `output`, `total`, `cacheRead`, `cacheWrite` |
+
+If generation reaches its output token limit, `askResponse()` sets `truncated`
+and `error` while retaining partial text and usage. `ask()` continues returning
+that partial text for compatibility; `getLastError()` also reports the limit.
+Cached input is included in OpenAI input counts; Anthropic reports cached input
+separately, so its `total` includes `cacheRead` and `cacheWrite` as well.
+
+Both methods accept `['throw' => true]` as their third argument to throw an
+exception on request failure or incomplete output instead of returning normally:
+```php
+$response = $agent->askResponse($request, $systemPrompt, ['throw' => true]);
+```
+These methods do not change the model's output format or request JSON output.
 
 For most use cases, the `ask()` method above is appropriate. But there is also a 
 `sendRequest()` method for advanced callers that need control over the full messages array 

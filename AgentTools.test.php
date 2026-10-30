@@ -45,6 +45,8 @@ class WireTest_AgentTools extends WireTest {
 		$this->testOpenCodeSessionHeaders($at);
 		$this->testPrimaryAgentConfiguration($at);
 		$this->testAgentRequestOptions();
+		$this->testAgentResponses();
+		$this->testCustomJobs($at);
 		$this->testEngineerStepMode($at);
 		$this->testSiteBuilder($at);
 		$this->testSiteBuilderUpdateConfirmation($at);
@@ -83,6 +85,252 @@ class WireTest_AgentTools extends WireTest {
 			$rejected = true;
 		}
 		$this->check('Agent request parameters reject JSON lists', true, $rejected);
+	}
+
+	/**
+	 * Test structured answers and legacy text output without calling a provider.
+	 */
+	protected function testAgentResponses() {
+		$agent = new class extends AgentToolsAgent {
+			public $testResponse = [];
+			public $testException = null;
+			public $testArguments = [];
+
+			public function sendRequest(string $systemPrompt, array $messages, array $tools = [], array $options = []): array {
+				$this->testArguments = [$systemPrompt, $messages, $tools, $options];
+				if($this->testException) throw $this->testException;
+				return $this->testResponse;
+			}
+		};
+		$this->wire($agent);
+		$cases = [
+			'Anthropic' => [
+				'provider' => 'anthropic',
+				'response' => [
+					'content' => [['type' => 'text', 'text' => 'Answer']],
+					'stop_reason' => 'end_turn',
+					'usage' => ['input_tokens' => 10, 'output_tokens' => 4, 'cache_read_input_tokens' => 3, 'cache_creation_input_tokens' => 2],
+				],
+				'reason' => 'end_turn', 'truncatedReason' => 'max_tokens',
+				'usage' => ['input' => 10, 'output' => 4, 'total' => 19, 'cacheRead' => 3, 'cacheWrite' => 2],
+			],
+			'OpenAI Chat' => [
+				'provider' => 'openai',
+				'response' => [
+					'choices' => [['message' => ['content' => 'Answer'], 'finish_reason' => 'stop']],
+					'usage' => ['prompt_tokens' => 10, 'completion_tokens' => 4, 'total_tokens' => 14, 'prompt_tokens_details' => ['cached_tokens' => 3]],
+				],
+				'reason' => 'stop', 'truncatedReason' => 'length',
+				'usage' => ['input' => 10, 'output' => 4, 'total' => 14, 'cacheRead' => 3, 'cacheWrite' => 0],
+			],
+			'OpenAI Responses' => [
+				'provider' => 'openai',
+				'response' => [
+					'output' => [['type' => 'message', 'content' => [['type' => 'output_text', 'text' => 'Answer']]]],
+					'status' => 'completed',
+					'usage' => ['input_tokens' => 10, 'output_tokens' => 4, 'total_tokens' => 14, 'input_tokens_details' => ['cached_tokens' => 3]],
+				],
+				'reason' => 'completed', 'truncatedReason' => 'max_output_tokens',
+				'usage' => ['input' => 10, 'output' => 4, 'total' => 14, 'cacheRead' => 3, 'cacheWrite' => 0],
+			],
+		];
+		foreach($cases as $label => $case) {
+			$agent->provider = $case['provider'];
+			$agent->testResponse = $case['response'];
+			$response = $agent->askResponse('Question', 'System instructions', ['timeout' => 17, 'throw' => true]);
+			$this->check("$label askResponse returns response object", true, $response instanceof AgentToolsResponse);
+			$this->check("$label askResponse returns answer text", 'Answer', $response->text);
+			$this->check("$label askResponse reports success", '', $response->error);
+			$this->check("$label askResponse preserves stop reason", $case['reason'], $response->stopReason);
+			$this->check("$label askResponse normalizes token usage", $case['usage'], $response->usage);
+			$this->check("$label askResponse does not mark complete answer truncated", false, $response->truncated);
+			$this->check("$label ask still returns plain text", 'Answer', $agent->ask('Question'));
+
+			if($label === 'Anthropic') {
+				$agent->testResponse['stop_reason'] = $case['truncatedReason'];
+			} else if($label === 'OpenAI Chat') {
+				$agent->testResponse['choices'][0]['finish_reason'] = $case['truncatedReason'];
+			} else {
+				$agent->testResponse['status'] = 'incomplete';
+				$agent->testResponse['incomplete_details'] = ['reason' => $case['truncatedReason']];
+			}
+			$partial = $agent->askResponse('Question');
+			$this->check("$label askResponse marks output limit", true, $partial->truncated && $partial->error !== '');
+			$this->check("$label askResponse preserves partial text and usage", true, $partial->text === 'Answer' && $partial->usage === $case['usage']);
+			$this->check("$label ask retains partial output for compatibility", 'Answer', $agent->ask('Question'));
+			$this->check("$label getLastError exposes output limit", $partial->error, $agent->getLastError());
+			$thrown = false;
+			try {
+				$agent->askResponse('Question', '', ['throw' => true]);
+			} catch(WireException $e) {
+				$thrown = $e->getMessage() === $partial->error;
+			}
+			$this->check("$label askResponse can throw on output limit", true, $thrown);
+		}
+		$this->check('Earlier response remains independent of later errors', '', $response->error);
+
+		$agent->provider = 'openai';
+		$agent->testResponse = ['status' => 'incomplete', 'incomplete_details' => ['reason' => 'max_output_tokens'], 'output' => []];
+		$this->check('ask preserves empty text when reasoning exhausts output limit', '', $agent->ask('Question'));
+		$agent->testResponse = ['status' => 'failed', 'error' => ['message' => 'Provider failed.'], 'output' => []];
+		$this->check('askResponse reports provider failure payload', 'Provider failed.', $agent->askResponse('Question')->error);
+		$agent->testResponse = ['status' => 'incomplete', 'incomplete_details' => ['reason' => 'content_filter'], 'output' => []];
+		$filtered = $agent->askResponse('Question');
+		$this->check('askResponse distinguishes filtering from output limits', true, $filtered->error !== '' && !$filtered->truncated);
+
+		$failure = new WireException('Simulated connection failure.');
+		$agent->testException = $failure;
+		$failed = $agent->askResponse('Question');
+		$this->check('askResponse separates request failure from answer text', true, $failed->text === '' && $failed->error === $failure->getMessage());
+		$this->check('askResponse failure has empty completion metadata', true, $failed->stopReason === '' && !$failed->truncated && $failed->usage['total'] === 0);
+		$this->check('ask retains legacy error string', $failure->getMessage(), $agent->ask('Question'));
+		$this->check('getLastError reports legacy ask failure', $failure->getMessage(), $agent->getLastError());
+		foreach(['ask', 'askResponse'] as $method) {
+			$thrown = null;
+			try {
+				$agent->$method('Question', '', ['throw' => true]);
+			} catch(\Throwable $e) {
+				$thrown = $e;
+			}
+			$this->check("$method throw option preserves original exception", true, $thrown === $failure);
+			$this->check("$method throw option still records last error", $failure->getMessage(), $agent->getLastError());
+		}
+		$agent->testException = null;
+		$agent->testResponse = $cases['OpenAI Chat']['response'];
+		$agent->askResponse('Question', 'System instructions', ['timeout' => 17, 'throw' => true]);
+		$this->check('askResponse forwards request arguments without throw option', ['System instructions', [['role' => 'user', 'content' => 'Question']], [], ['timeout' => 17]], $agent->testArguments);
+		$this->check('Successful askResponse clears previous error', '', $agent->getLastError());
+		$this->check('Previous failed response retains its error', $failure->getMessage(), $failed->error);
+		$agent->testException = $failure;
+		$agent->ask('Question');
+		$agent->testException = null;
+		$agent->ask('Question');
+		$this->check('Successful ask clears previous error', '', $agent->getLastError());
+	}
+
+	/**
+	 * Test application job hooks through an isolated file-backed queue.
+	 *
+	 * @param AgentTools $at
+	 */
+	protected function testCustomJobs(AgentTools $at) {
+		$at->jobs(); // Load the helper before extending it.
+		$path = $at->getFilesPath('test-custom-jobs-' . bin2hex(random_bytes(4)));
+		$jobs = new class($at, $path) extends AgentToolsJobs {
+			protected $testJobsPath;
+
+			public function __construct(AgentTools $at, string $path) {
+				parent::__construct($at);
+				$this->testJobsPath = $path;
+			}
+
+			protected function getJobsPath(): string {
+				return $this->testJobsPath;
+			}
+
+			protected function getStatusPath(string $status, bool $create = true): string {
+				$path = parent::getStatusPath($status, false);
+				if($create && !is_dir($path)) $this->wire()->files->mkdir($path, true);
+				return $path;
+			}
+		};
+		$this->wire($jobs);
+		$handlerCalls = 0;
+		$hookId = $this->wire()->addHookAfter('AgentToolsJobs::runCustomJob', function(HookEvent $event) use($jobs, &$handlerCalls) {
+			if($event->object !== $jobs || $event->return !== null) return;
+			$handlerCalls++;
+			$job = $event->arguments(0);
+			switch($job['type']) {
+				case 'fixture-report':
+					$event->return = [
+						'response' => 'Report for page ' . $job['input']['pageId'],
+						'result' => ['pageId' => $job['input']['pageId'], 'reviewed' => true],
+						'id' => 'not-the-job-id', 'status' => 'pending',
+					];
+					break;
+				case 'fixture-empty':
+					$event->return = [];
+					break;
+				case 'fixture-error':
+					$event->return = ['response' => 'Partial report', 'result' => ['processed' => 2], 'error' => 'Report incomplete.'];
+					break;
+				case 'fixture-throws':
+					throw new WireException('Handler failed.');
+				case 'fixture-invalid':
+					$event->return = 'Invalid return';
+					break;
+				case 'fixture-invalid-text':
+					$event->return = ['response' => ['Not text']];
+					break;
+				case 'fixture-invalid-result':
+					$event->return = ['result' => NAN];
+					break;
+			}
+		});
+		$lock = null;
+		try {
+			$lock = $this->invokeProtected($jobs, 'lockCron');
+			$this->check('Custom job queue obtains cron lock', true, is_resource($lock));
+			$contender = $this->invokeProtected($jobs, 'lockCron');
+			$this->check('Custom job queue rejects overlapping worker lock', false, $contender);
+			if(is_resource($contender)) $this->invokeProtected($jobs, 'unlockCron', [$contender]);
+
+			$queued = $jobs->addJob(['type' => 'fixture-report', 'input' => ['pageId' => 123, 'years' => [2026, 2027]]]);
+			$this->check('Custom job queues JSON input', $queued['input'], $jobs->getJob($queued['id'])['input']);
+			$this->check('Custom job begins pending', AgentToolsJobs::statusPending, $jobs->getJob($queued['id'])['status']);
+			$file = $this->invokeProtected($jobs, 'getNextPendingJobFile');
+			$claimed = $this->invokeProtected($jobs, 'claimJob', [$file]);
+			$this->check('Custom job is claimed before handler runs', AgentToolsJobs::statusRunning, $jobs->getJob($queued['id'])['status']);
+			$this->check('Custom job claim removes pending file', false, is_file($file));
+			$run = $this->invokeProtected($jobs, 'runJob', [$claimed]);
+			$finished = $jobs->getJob($queued['id']);
+			$this->check('Custom job matching hook completes successfully', true, $run['success']);
+			$this->check('Custom job stores response for admin and email', 'Report for page 123', $finished['response']);
+			$this->check('Custom job stores structured result', ['pageId' => 123, 'reviewed' => true], $finished['result']);
+			$this->check('Custom job keeps queue-controlled identity and status', true, $finished['id'] === $queued['id'] && $finished['status'] === AgentToolsJobs::statusDone);
+			$this->check('Custom job records attempt and timing', true, $finished['attempts'] === 1 && $finished['started'] > 0 && $finished['finished'] >= $finished['started']);
+			$this->check('Custom job leaves no running file after completion', [], $jobs->getJobs(AgentToolsJobs::statusRunning));
+			$this->check('Custom job without notify address does not send email', false, isset($finished['emailStatus']));
+
+			$cases = [
+				'fixture-empty' => true,
+				'fixture-error' => false,
+				'fixture-throws' => false,
+				'fixture-unhandled' => false,
+				'fixture-invalid' => false,
+				'fixture-invalid-text' => false,
+				'fixture-invalid-result' => false,
+			];
+			foreach($cases as $type => $success) {
+				$queued = $jobs->addJob(['type' => $type]);
+				$file = $this->invokeProtected($jobs, 'getNextPendingJobFile');
+				$claimed = $this->invokeProtected($jobs, 'claimJob', [$file]);
+				$run = $this->invokeProtected($jobs, 'runJob', [$claimed]);
+				$finished = $jobs->getJob($queued['id']);
+				$this->check("Custom job $type returns expected success", $success, $run['success']);
+				$this->check("Custom job $type persists final status", $success ? AgentToolsJobs::statusDone : AgentToolsJobs::statusFailed, $finished['status']);
+				if(!$success) $this->check("Custom job $type persists an error", true, $finished['error'] !== '');
+				if($type === 'fixture-error') {
+					$this->check('Custom job failure retains partial result', ['processed' => 2], $finished['result']);
+					$this->check('Custom job failure retains handler error', 'Report incomplete.', $finished['error']);
+				}
+				if($type === 'fixture-unhandled') {
+					$this->check('Custom job missing handler is reported explicitly', 'Unsupported AgentTools job type: fixture-unhandled', $finished['error']);
+				}
+			}
+			$this->check('Custom job hooks were invoked through ProcessWire', 8, $handlerCalls);
+			$rejected = false;
+			try {
+				$jobs->addJob(['type' => 'fixture-report', 'input' => 'Not an array']);
+			} catch(WireException $e) {
+				$rejected = true;
+			}
+			$this->check('Custom job rejects invalid input before queueing', true, $rejected && !$jobs->getJobs(AgentToolsJobs::statusPending));
+		} finally {
+			$this->wire()->removeHook($hookId);
+			$this->invokeProtected($jobs, 'unlockCron', [$lock]);
+			$this->wire()->files->rmdir($path, true);
+		}
 	}
 
 	/**

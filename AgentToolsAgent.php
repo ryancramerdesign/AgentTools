@@ -17,6 +17,9 @@
  */
 class AgentToolsAgent extends WireData {
 
+	/** @var string Error from the latest ask() or askResponse() call */
+	protected $lastError = '';
+
 	protected $defaults = [
 		'provider' => 'openai',
 		'id' => '',
@@ -163,6 +166,7 @@ class AgentToolsAgent extends WireData {
 	 *
 	 * This is the primary public API for sending a request to the agent. It handles
 	 * message formatting and returns a plain text response.
+	 * Use askResponse() when you need errors and completion metadata separately.
 	 *
 	 * ~~~~~
 	 * $agent = $at->getPrimaryAgent();
@@ -180,19 +184,60 @@ class AgentToolsAgent extends WireData {
 	 *
 	 * @param string $question The question or request to send
 	 * @param string $systemPrompt Optional instructions for the AI (leave blank for none)
-	 * @param array $options Optional request options — see sendRequest() for supported keys
+	 * @param array $options Request options; set throw=true to throw on failure or truncation
 	 * @return string Text response from the AI, or error message string if the request failed
+	 * @throws \Throwable When throw=true and the request fails or is incomplete
 	 *
 	 */
 	public function ask(string $question, string $systemPrompt = '', array $options = []): string {
-		$at = $this->wire('at'); /** @var AgentTools $at */
-		$messages = [['role' => 'user', 'content' => $question]];
+		$response = $this->askResponse($question, $systemPrompt, $options);
+		// Preserve partial text for existing callers, including an empty truncated answer.
+		return $response->truncated || $response->text !== '' ? $response->text : $response->error;
+	}
+
+	/**
+	 * Ask a question and return text, errors, stop reason, and token usage together.
+	 *
+	 * Check error before using text as a complete answer. Output-limit errors retain
+	 * partial text and set truncated=true. This method does not request JSON output.
+	 *
+	 * @param string $question The question or request to send
+	 * @param string $systemPrompt Optional instructions for the AI
+	 * @param array $options Request options; set throw=true to throw on failure or truncation
+	 * @return AgentToolsResponse
+	 * @throws \Throwable When throw=true and the request fails or is incomplete
+	 */
+	public function askResponse(string $question, string $systemPrompt = '', array $options = []): AgentToolsResponse {
+		$this->lastError = '';
+		$throw = !empty($options['throw']);
+		unset($options['throw']);
+		$result = new AgentToolsResponse();
+		$this->wire($result);
 		try {
+			$at = $this->wire('at'); /** @var AgentTools $at */
+			$messages = [['role' => 'user', 'content' => $question]];
 			$response = $this->sendRequest($systemPrompt, $messages, [], $options);
-			return $at->engineer->extractText($this->provider, $response);
+			$result = new AgentToolsResponse($response, $this->provider, $at->engineer()->extractText($this->provider, $response));
+			$this->wire($result);
+			$this->lastError = $result->error;
+			if($throw && $result->error !== '') throw new WireException($result->error);
 		} catch(\Throwable $e) {
-			return $e->getMessage();
+			$this->lastError = $e->getMessage();
+			$result->error = $this->lastError;
+			if($throw) throw $e;
 		}
+		return $result;
+	}
+
+	/**
+	 * Get the latest ask() or askResponse() error, including output-limit errors.
+	 *
+	 * Cleared at the start of each ask() or askResponse() call.
+	 *
+	 * @return string Empty when the latest call succeeded
+	 */
+	public function getLastError(): string {
+		return $this->lastError;
 	}
 
 	/**

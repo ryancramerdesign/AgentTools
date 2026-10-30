@@ -1,6 +1,22 @@
 # Changelog
 
-## Unreleased
+## Version 39
+
+### Agents
+
+- Added `AgentToolsAgent::askResponse()` returning an `AgentToolsResponse` object
+  with answer text, errors, provider stop reasons, normalized token usage, and
+  output-limit detection while preserving partial answers.
+- Added `getLastError()` and an optional `throw` request option for `ask()` and
+  `askResponse()`, preserving the default text return behavior of `ask()`.
+
+### Background Jobs
+
+- Added application-defined background job types through the hookable
+  `AgentToolsJobs::runCustomJob()` method, with JSON input, structured results,
+  and the existing queue lifecycle, admin viewer, and email notifications.
+
+### Migrations
 
 - Fixed migration scope isolation in CLI and admin runners so local variables
   such as `$file` cannot corrupt applied-migration tracking, counters, or locks
