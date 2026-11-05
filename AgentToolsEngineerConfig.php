@@ -84,6 +84,7 @@ class AgentToolsEngineerConfig extends Wire {
 		$f = $modules->get('InputfieldText');
 		$f->attr('name', 'engineer_api_key');
 		$f->attr('type', 'password');
+		$f->attr('autocomplete', 'new-password'); // prevent browser from autofilling login password
 		$f->label = $this->_('API Key');
 		$f->val($this->at->get('engineer_api_key') ?: '');
 		$f->columnWidth = 50;
@@ -300,6 +301,7 @@ class AgentToolsEngineerConfig extends Wire {
 		/** @var InputfieldEmail $f */
 		$f = $modules->get('InputfieldEmail');
 		$f->attr('name', 'engineer_suspicious_email');
+		$f->attr('autocomplete', 'off'); // prevent browser from autofilling login name
 		$f->label = $this->_('Notification email address');
 		$f->description = $this->_('When a suspicious prompt is detected, a notification is sent here.');
 		$f->val($this->at->get('engineer_suspicious_email') ?: '');

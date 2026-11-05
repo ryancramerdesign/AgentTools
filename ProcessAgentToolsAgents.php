@@ -97,7 +97,10 @@ class ProcessAgentToolsAgents extends ProcessAgentToolsHelper {
 				$f->label = $label;
 				$f->columnWidth = 25;
 				if($agent) $f->val($agent->get($name));
-				if($name === 'apiKey') $f->attr('type', 'password');
+				if($name === 'apiKey') {
+					$f->attr('type', 'password');
+					$f->attr('autocomplete', 'new-password'); // prevent browser from autofilling login password
+				}
 				if($name === 'description') $f->columnWidth = 75;
 				if($name === 'requestOptions') {
 					$f->description = $this->_('Optional JSON object merged into this agent’s provider request payload, such as {"reasoning_effort":"low"}. Request-specific options take precedence.');

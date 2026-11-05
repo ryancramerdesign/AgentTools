@@ -1,5 +1,14 @@
 # Changelog
 
+## Version 40
+
+- Added autocomplete hints to API-key inputs in module configuration and the
+  Agents screen to discourage autofill with saved login passwords.
+- Disabled autocomplete on the suspicious-prompt notification email field to
+  discourage autofill with saved login usernames.
+
+---
+
 ## Version 39
 
 ### Agents
