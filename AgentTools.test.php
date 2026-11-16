@@ -22,11 +22,15 @@ class WireTest_AgentTools extends WireTest {
 	 */
 	protected $tmpDirs = [];
 
+	/** @var bool|null Output-formatting state to restore after rendering fixture pages */
+	protected $originalOutputFormatting = null;
+
 	/**
 	 * Run tests.
 	 *
 	 */
 	public function execute() {
+		$this->originalOutputFormatting = (bool) $this->wire()->pages->outputFormatting;
 		$at = $this->wire()->modules->get('AgentTools');
 		$this->check('AgentTools module is installed', true, $at instanceof AgentTools);
 
@@ -1396,15 +1400,22 @@ class WireTest_AgentTools extends WireTest {
 	protected function testSiteBuilderAdditiveTemplateUpdate(AgentTools $at) {
 		$builder = $at->siteBuilder();
 		$suffix = substr(sha1((string) microtime(true) . random_int(1, PHP_INT_MAX)), 0, 8);
+		$fieldName = 'at_builder_update_' . $suffix;
 		$templateName = 'at-builder-update-' . $suffix;
 		$pageName = $templateName;
 		$sessionId = '';
+		$field = null;
 		$template = null;
 		$page = null;
 		try {
+			$field = $this->wire(new Field());
+			$field->name = $fieldName;
+			$field->type = $this->wire()->modules->get('FieldtypeText');
+			$field->label = 'Omitted field fixture';
+			$field->save();
 			$template = $this->wire()->templates->add($templateName);
 			$template->fieldgroup->add($this->wire()->fields->get('title'));
-			$template->fieldgroup->add($this->wire()->fields->get('body'));
+			$template->fieldgroup->add($field);
 			$template->fieldgroup->save();
 			$template->save();
 			$page = $this->wire(new Page());
@@ -1412,7 +1423,7 @@ class WireTest_AgentTools extends WireTest {
 			$page->parent = 1;
 			$page->name = $pageName;
 			$page->title = 'Additive template fixture';
-			$page->body = '<p>Preserve this value.</p>';
+			$page->set($fieldName, 'Preserve this value.');
 			$page->addStatus(Page::statusUnpublished);
 			$page->save();
 
@@ -1427,7 +1438,7 @@ class WireTest_AgentTools extends WireTest {
 				]],
 				'templates' => [[
 					'name' => $templateName, 'disposition' => 'update', 'label' => 'Additive fixture',
-					'summary' => 'Keep body when only title is planned.', 'dataOnly' => true,
+					'summary' => 'Keep the omitted field when only title is planned.', 'dataOnly' => true,
 					'singleton' => false,
 					'fields' => [['name' => 'title', 'required' => true, 'columnWidth' => 100, 'settings' => []]],
 					'allowedParents' => ['home'], 'allowedChildren' => [], 'settings' => [],
@@ -1455,14 +1466,15 @@ class WireTest_AgentTools extends WireTest {
 			$result = $builder->executeBuildTool($sessionId, 'create_templates', ['names' => [$templateName]]);
 			$this->check('Site Builder updates approved existing template', 'updated', $result['templates'][$templateName]);
 			$template = $this->wire()->templates->get($templateName);
-			$this->check('Site Builder additive update preserves omitted body field', true, $template->fieldgroup->hasField('body'));
-			$page = $this->wire()->pages->get((int) $page->id);
-			$this->check('Site Builder additive update preserves omitted field data', '<p>Preserve this value.</p>', (string) $page->body);
+			$this->check('Site Builder additive update preserves omitted field', true, $template->fieldgroup->hasField($fieldName));
+			$page = $this->wire()->pages->getFresh((int) $page->id);
+			$this->check('Site Builder additive update preserves omitted field data', 'Preserve this value.', (string) $page->getUnformatted($fieldName));
 			$builder->startOver($sessionId);
 		} finally {
 			if($page && $page->id) $this->wire()->pages->delete($page, true);
 			$template = $this->wire()->templates->get($templateName);
 			if($template && $template->id && !$template->getNumPages()) $this->wire()->templates->delete($template);
+			if($field && $field->id && !$field->numFieldgroups()) $this->wire()->fields->delete($field);
 			if($sessionId !== '') $this->wire()->files->rmdir($at->getFilesPath('builds') . $sessionId, true);
 		}
 	}
@@ -1472,6 +1484,9 @@ class WireTest_AgentTools extends WireTest {
 	 *
 	 */
 	public function finish() {
+		if($this->originalOutputFormatting !== null) {
+			$this->wire()->pages->setOutputFormatting($this->originalOutputFormatting);
+		}
 		foreach(array_reverse($this->tmpFiles) as $file) {
 			if(is_file($file)) unlink($file);
 		}
